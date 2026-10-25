@@ -1,0 +1,10 @@
+[package]
+name = "stellar-domain"
+description = "Entités et règles métier du simulateur (aucune dépendance d'infrastructure)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true

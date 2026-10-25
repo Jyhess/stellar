@@ -1,0 +1,21 @@
+[package]
+name = "stellar-app"
+description = "Interface graphique du simulateur Stellar (wgpu + egui)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stellar"
+path = "src/main.rs"
+
+[dependencies]
+stellar-domain.workspace = true
+stellar-application.workspace = true
+stellar-engine-cpu.workspace = true
+stellar-persistence.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+eframe.workspace = true
+rfd.workspace = true
+chrono.workspace = true

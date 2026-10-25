@@ -1,0 +1,13 @@
+[package]
+name = "stellar-application"
+description = "Cas d'usage : création, pilotage, sauvegarde et chargement des simulations."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+stellar-domain.workspace = true
+serde.workspace = true
+rand.workspace = true
+rand_pcg.workspace = true
+thiserror.workspace = true
