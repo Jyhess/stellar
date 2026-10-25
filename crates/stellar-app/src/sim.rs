@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, Key, Pos2, RichText, Stroke};
 use eframe::egui_wgpu;
 use glam::DVec3;
-use stellar_application::trace::MAX_TAIL;
+use stellar_application::trace::{relative_to, MAX_TAIL};
 use stellar_application::{Phase, SimulationHandle, SimulatorService, Snapshot, ViewState};
 use stellar_domain::physics::body_radius;
 use stellar_domain::{ranking, BodyId};
@@ -85,6 +85,10 @@ pub struct SimScreen {
     save_job: Option<Receiver<Result<PathBuf, String>>>,
 
     traces_active: bool,
+    /// Traces affichées dans le référentiel du corps sélectionné.
+    trace_relative: bool,
+    /// Référence transmise au thread de calcul.
+    sent_reference: Option<BodyId>,
     /// Affiche seulement la queue récente des traces.
     trace_tail_only: bool,
     trace_tail_len: usize,
@@ -128,6 +132,8 @@ impl SimScreen {
             toast: None,
             save_job: None,
             traces_active: false,
+            trace_relative: false,
+            sent_reference: None,
             trace_tail_only: false,
             trace_tail_len: 600,
         }
@@ -234,7 +240,33 @@ impl SimScreen {
         // Les corps du classement affiché à cet instant.
         self.handle.start_traces(self.snapshot.top.iter().map(|(id, _)| *id).collect());
         self.traces_active = true;
+        self.sent_reference = None; // la référence sera retransmise
+        self.sync_trace_reference();
         self.notify("Traces activées sur les 10 corps les plus massifs.");
+    }
+
+    /// Transmet au thread de calcul le corps de référence des traces
+    /// (le corps sélectionné, en mode relatif).
+    fn sync_trace_reference(&mut self) {
+        let wanted = if self.traces_active && self.trace_relative { self.selected } else { None };
+        if wanted == self.sent_reference {
+            return;
+        }
+        // Si la sélection a seulement suivi une fusion, la piste suit d'elle-même.
+        let continuation = self
+            .sent_reference
+            .is_some_and(|sent| wanted.is_some() && self.handle.resolve(sent) == wanted);
+        if !continuation && self.traces_active {
+            self.handle.set_trace_reference(wanted);
+        }
+        self.sent_reference = wanted;
+    }
+
+    fn toggle_trace_relative(&mut self) {
+        self.trace_relative = !self.trace_relative;
+        if self.trace_relative && self.selected.is_none() {
+            self.notify("Référentiel relatif : sélectionnez un corps pour voir les orbites autour de lui.");
+        }
     }
 
     /// Oriente la visée vers le centre de gravité (vol libre).
@@ -337,6 +369,9 @@ impl SimScreen {
         }
         if pressed(Key::T) {
             self.toggle_traces();
+        }
+        if pressed(Key::R) {
+            self.toggle_trace_relative();
         }
         if pressed(Key::C) {
             self.aim_at_barycenter();
@@ -589,12 +624,24 @@ impl SimScreen {
         // Traces.
         if self.traces_active {
             // Copie rapide sous verrou, puis dessin hors verrou.
-            let lines: Vec<Vec<DVec3>> = match self.handle.traces().as_ref() {
-                Some(set) => set
-                    .traces
-                    .iter()
-                    .map(|t| if self.trace_tail_only { t.recent(self.trace_tail_len) } else { t.full() })
-                    .collect(),
+            let lines: Vec<Vec<Option<DVec3>>> = match self.handle.traces().as_ref() {
+                Some(set) => {
+                    let reference = if self.trace_relative {
+                        self.selected.and_then(|id| set.reference_samples(id))
+                    } else {
+                        None
+                    };
+                    set.traces
+                        .iter()
+                        .map(|t| {
+                            let pts = if self.trace_tail_only { t.recent(self.trace_tail_len) } else { t.full() };
+                            match &reference {
+                                Some(r) => relative_to(&pts, r),
+                                None => pts.into_iter().map(|(_, p)| Some(p)).collect(),
+                            }
+                        })
+                        .collect()
+                }
                 None => Vec::new(),
             };
             for (k, pts) in lines.iter().enumerate() {
@@ -603,7 +650,7 @@ impl SimScreen {
                     continue;
                 }
                 let screen: Vec<Option<Pos2>> =
-                    pts.iter().map(|p| self.camera.project(*p, aspect).map(to_screen)).collect();
+                    pts.iter().map(|p| p.and_then(|p| self.camera.project(p, aspect)).map(to_screen)).collect();
                 if self.trace_tail_only {
                     // Dégradé : opaque au présent, transparent vers le passé.
                     let n = screen.len() as f32;
@@ -838,6 +885,18 @@ impl SimScreen {
             ui.radio_value(&mut self.trace_tail_only, false, "Historique");
             ui.radio_value(&mut self.trace_tail_only, true, "Queue");
         });
+        ui.horizontal(|ui| {
+            ui.label("Référentiel (R)");
+            let mut rel = self.trace_relative;
+            ui.radio_value(&mut rel, false, "Absolu");
+            ui.radio_value(&mut rel, true, "Corps sélectionné");
+            if rel != self.trace_relative {
+                self.toggle_trace_relative();
+            }
+        });
+        if self.trace_relative && self.selected.is_none() {
+            ui.label(RichText::new("Sélectionnez un corps : les traces s'affichent alors relativement à lui.").weak());
+        }
         if self.trace_tail_only {
             ui.add(
                 egui::Slider::new(&mut self.trace_tail_len, 10..=MAX_TAIL)
@@ -907,6 +966,7 @@ impl SimScreen {
                         ("C", "viser le centre de gravité"),
                         ("V", "vue d'ensemble (90 % de la masse)"),
                         ("T", "tracer les 10 plus massifs / effacer"),
+                        ("R", "traces : référentiel absolu / corps sélectionné"),
                         ("Espace / P", "pause / pas à pas"),
                         ("Tab", "libérer / capturer la souris"),
                         ("Clic droit", "reprendre la visée (souris libre)"),
@@ -936,6 +996,7 @@ impl SimScreen {
         let mut action = self.handle_shortcuts(ctx);
 
         self.hud(ctx);
+        self.sync_trace_reference();
         if let a @ (SimAction::BackHome | SimAction::Quit) = self.menu(ctx) {
             action = a;
         }

@@ -2,11 +2,17 @@
 //! thread de simulation à partir de leur activation.
 //!
 //! Les traces sont une aide visuelle propre à la session : elles ne sont pas
-//! sauvegardées. Chaque trace garde deux mémoires :
+//! sauvegardées. Chaque trace garde deux mémoires d'échantillons (pas, position) :
 //! - l'**historique complet**, borné à [`MAX_HISTORY`] points par décimation
 //!   (un point sur deux est éliminé et le pas d'échantillonnage double) ;
 //! - une **queue** récente à pleine résolution (un point par pas), d'au plus
 //!   [`MAX_TAIL`] points.
+//!
+//! Les traces peuvent être affichées **relativement à un corps de
+//! référence** (voir [`relative_to`]) : chaque point devient
+//! p(t) − r(t) + r(maintenant), ce qui fait apparaître les orbites autour de ce
+//! corps. La trajectoire de la référence provient de sa propre trace si elle
+//! est tracée, sinon d'une piste dédiée enregistrée depuis sa sélection.
 
 use std::collections::VecDeque;
 
@@ -15,16 +21,19 @@ use stellar_domain::{BodyId, Vec3};
 pub const MAX_HISTORY: usize = 4096;
 pub const MAX_TAIL: usize = 5000;
 
+/// Échantillon : (numéro de pas, position).
+pub type Sample = (u64, Vec3);
+
 #[derive(Debug, Clone)]
 pub struct Trace {
     /// Corps tracé à l'activation.
     pub origin: BodyId,
     /// Corps actuellement suivi (après fusions) ; `None` s'il a été éliminé.
     pub current: Option<BodyId>,
-    history: Vec<Vec3>,
+    history: Vec<Sample>,
     stride: u32,
     counter: u32,
-    tail: VecDeque<Vec3>,
+    tail: VecDeque<Sample>,
 }
 
 impl Trace {
@@ -39,15 +48,18 @@ impl Trace {
         }
     }
 
-    fn push(&mut self, p: Vec3) {
-        self.tail.push_back(p);
+    fn push(&mut self, s: Sample) {
+        if self.tail.back().is_some_and(|b| b.0 == s.0) {
+            return; // un seul point par pas
+        }
+        self.tail.push_back(s);
         if self.tail.len() > MAX_TAIL {
             self.tail.pop_front();
         }
         self.counter += 1;
         if self.counter >= self.stride {
             self.counter = 0;
-            self.history.push(p);
+            self.history.push(s);
             if self.history.len() > MAX_HISTORY {
                 // Décimation : on garde un point sur deux (dont le premier).
                 let mut k = 0;
@@ -61,10 +73,10 @@ impl Trace {
     }
 
     /// Historique complet (décimé), prolongé jusqu'à la dernière position.
-    pub fn full(&self) -> Vec<Vec3> {
+    pub fn full(&self) -> Vec<Sample> {
         let mut v = self.history.clone();
         if let Some(&last) = self.tail.back() {
-            if v.last() != Some(&last) {
+            if v.last().map(|s| s.0) != Some(last.0) {
                 v.push(last);
             }
         }
@@ -72,26 +84,76 @@ impl Trace {
     }
 
     /// Les `n` derniers points, à pleine résolution (un par pas).
-    pub fn recent(&self, n: usize) -> Vec<Vec3> {
+    pub fn recent(&self, n: usize) -> Vec<Sample> {
         let skip = self.tail.len().saturating_sub(n);
         self.tail.iter().skip(skip).copied().collect()
     }
+
+    /// Tous les échantillons connus, triés par pas : l'historique décimé
+    /// pour le passé lointain, la queue à pleine résolution ensuite.
+    pub fn samples(&self) -> Vec<Sample> {
+        let first_tail = self.tail.front().map_or(u64::MAX, |s| s.0);
+        let mut v: Vec<Sample> = self.history.iter().copied().filter(|s| s.0 < first_tail).collect();
+        v.extend(self.tail.iter().copied());
+        v
+    }
+
+    /// Dernière position enregistrée.
+    pub fn last(&self) -> Option<Sample> {
+        self.tail.back().copied()
+    }
 }
 
-/// Ensemble des traces actives.
+/// Ensemble des traces actives, plus une éventuelle piste de référence.
 #[derive(Debug, Clone, Default)]
 pub struct TraceSet {
     pub traces: Vec<Trace>,
+    /// Piste du corps de référence, quand il ne fait pas partie des traces.
+    pub reference: Option<Trace>,
 }
 
 impl TraceSet {
     pub fn new(ids: impl IntoIterator<Item = BodyId>) -> Self {
-        Self { traces: ids.into_iter().map(Trace::new).collect() }
+        Self { traces: ids.into_iter().map(Trace::new).collect(), reference: None }
     }
 
-    /// Identifiants actuellement suivis (une entrée par trace encore active).
+    /// Corps dont les positions sont à enregistrer à chaque pas : traces
+    /// actives, puis référence éventuelle.
     pub fn current_ids(&self) -> Vec<BodyId> {
-        self.traces.iter().filter_map(|t| t.current).collect()
+        self.traces
+            .iter()
+            .chain(self.reference.iter())
+            .filter_map(|t| t.current)
+            .collect()
+    }
+
+    /// Choisit le corps de référence. Si ce corps est déjà tracé (et n'a pas
+    /// fusionné dans un autre), sa trace sert de référence ; sinon une piste
+    /// dédiée démarre maintenant.
+    pub fn set_reference(&mut self, id: Option<BodyId>) {
+        match id {
+            Some(id) if self.own_trace(id).is_none() => {
+                if self.reference.as_ref().and_then(|r| r.current) != Some(id) {
+                    self.reference = Some(Trace::new(id));
+                }
+            }
+            _ => self.reference = None,
+        }
+    }
+
+    fn own_trace(&self, id: BodyId) -> Option<&Trace> {
+        self.traces.iter().find(|t| t.origin == id && t.current == Some(id))
+    }
+
+    /// Trajectoire connue du corps `id`, pour l'affichage relatif.
+    pub fn reference_samples(&self, id: BodyId) -> Option<Vec<Sample>> {
+        if let Some(t) = self.own_trace(id) {
+            return Some(t.samples());
+        }
+        self.reference
+            .as_ref()
+            .filter(|r| r.current == Some(id))
+            .map(Trace::samples)
     }
 
     /// Met à jour les corps suivis après un pas : `merges` liste les couples
@@ -100,7 +162,7 @@ impl TraceSet {
         if merges.is_empty() && removed.is_empty() {
             return;
         }
-        for t in &mut self.traces {
+        for t in self.traces.iter_mut().chain(self.reference.iter_mut()) {
             if let Some(c) = t.current {
                 if removed.contains(&c) {
                     t.current = None;
@@ -111,19 +173,44 @@ impl TraceSet {
         }
     }
 
-    /// Ajoute un point à chaque trace active. `positions` est aligné sur
+    /// Ajoute un point au pas `step`. `positions` est aligné sur
     /// [`Self::current_ids`].
-    pub fn push(&mut self, positions: &[Option<Vec3>]) {
+    pub fn push(&mut self, step: u64, positions: &[Option<Vec3>]) {
         let mut k = 0;
-        for t in &mut self.traces {
+        for t in self.traces.iter_mut().chain(self.reference.iter_mut()) {
             if t.current.is_some() {
                 if let Some(Some(p)) = positions.get(k) {
-                    t.push(*p);
+                    t.push((step, *p));
                 }
                 k += 1;
             }
         }
     }
+}
+
+/// Position interpolée de la référence au pas `step`, si `step` est couvert.
+fn interpolate(reference: &[Sample], step: u64) -> Option<Vec3> {
+    let i = reference.partition_point(|s| s.0 < step);
+    let after = reference.get(i)?;
+    if after.0 == step {
+        return Some(after.1);
+    }
+    let before = reference.get(i.checked_sub(1)?)?;
+    let t = (step - before.0) as f64 / (after.0 - before.0) as f64;
+    Some(before.1.lerp(after.1, t))
+}
+
+/// Exprime une trace dans le référentiel d'un corps : p(t) − r(t) + r(maintenant).
+/// Les points antérieurs à la trajectoire connue de la référence donnent `None`
+/// (le tracé est interrompu).
+pub fn relative_to(points: &[Sample], reference: &[Sample]) -> Vec<Option<Vec3>> {
+    let Some(&(_, now)) = reference.last() else {
+        return vec![None; points.len()];
+    };
+    points
+        .iter()
+        .map(|&(step, p)| interpolate(reference, step).map(|r| p - r + now))
+        .collect()
 }
 
 #[cfg(test)]
@@ -133,29 +220,77 @@ mod tests {
     #[test]
     fn follows_merges_and_removals() {
         let mut t = TraceSet::new([1, 2]);
-        t.push(&[Some(Vec3::ZERO), Some(Vec3::X)]);
+        t.push(0, &[Some(Vec3::ZERO), Some(Vec3::X)]);
         t.apply_fates(&[(2, 3)], &[1]);
         assert_eq!(t.traces[0].current, None);
         assert_eq!(t.traces[1].current, Some(3));
         assert_eq!(t.current_ids(), vec![3]);
-        t.push(&[Some(Vec3::Y)]);
-        assert_eq!(t.traces[1].full(), vec![Vec3::X, Vec3::Y]);
-        assert_eq!(t.traces[0].full(), vec![Vec3::ZERO]);
+        t.push(1, &[Some(Vec3::Y)]);
+        assert_eq!(t.traces[1].full(), vec![(0, Vec3::X), (1, Vec3::Y)]);
+        assert_eq!(t.traces[0].full(), vec![(0, Vec3::ZERO)]);
     }
 
     #[test]
     fn history_is_bounded_and_tail_is_exact() {
         let mut t = TraceSet::new([7]);
-        for s in 0..20_000 {
-            t.push(&[Some(Vec3::new(s as f64, 0.0, 0.0))]);
+        for s in 0..20_000u64 {
+            t.push(s, &[Some(Vec3::new(s as f64, 0.0, 0.0))]);
         }
         let tr = &t.traces[0];
         let full = tr.full();
         assert!(full.len() <= MAX_HISTORY + 1);
-        assert_eq!(full.first().unwrap().x, 0.0);
-        assert_eq!(full.last().unwrap().x, 19_999.0);
+        assert_eq!(full.first().unwrap().0, 0);
+        assert_eq!(full.last().unwrap().0, 19_999);
         let recent = tr.recent(10);
         assert_eq!(recent.len(), 10);
-        assert_eq!(recent[0].x, 19_990.0);
+        assert_eq!(recent[0].0, 19_990);
+        let samples = tr.samples();
+        assert!(samples.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+
+    #[test]
+    fn circular_orbit_becomes_a_circle_around_the_reference() {
+        // Une étoile en translation uniforme, une planète en orbite autour.
+        let star = |k: u64| Vec3::new(k as f64, 0.0, 0.0);
+        let planet = |k: u64| {
+            let a = k as f64 * 0.1;
+            star(k) + Vec3::new(a.cos(), a.sin(), 0.0)
+        };
+        let mut t = TraceSet::new([1, 2]);
+        for k in 0..100 {
+            t.push(k, &[Some(star(k)), Some(planet(k))]);
+        }
+        let reference = t.reference_samples(1).unwrap();
+        let rel = relative_to(&t.traces[1].full(), &reference);
+        let now = star(99);
+        for p in rel {
+            let d = (p.unwrap() - now).length();
+            assert!((d - 1.0).abs() < 1e-9, "distance {d}");
+        }
+        // La référence elle-même se réduit à un point.
+        let own = relative_to(&t.traces[0].full(), &reference);
+        assert!(own.iter().all(|p| (p.unwrap() - now).length() < 1e-9));
+    }
+
+    #[test]
+    fn dedicated_reference_track_starts_at_selection() {
+        let mut t = TraceSet::new([1]);
+        t.push(0, &[Some(Vec3::ZERO)]);
+        t.set_reference(Some(9));
+        assert_eq!(t.current_ids(), vec![1, 9]);
+        t.push(1, &[Some(Vec3::X), Some(Vec3::Y)]);
+        let reference = t.reference_samples(9).unwrap();
+        let rel = relative_to(&t.traces[0].full(), &reference);
+        assert_eq!(rel, vec![None, Some(Vec3::X)]);
+        // Une référence déjà tracée n'ouvre pas de piste dédiée.
+        t.set_reference(Some(1));
+        assert!(t.reference.is_none());
+    }
+
+    #[test]
+    fn interpolation_between_decimated_samples() {
+        let r = vec![(0, Vec3::ZERO), (4, Vec3::new(4.0, 0.0, 0.0))];
+        assert_eq!(interpolate(&r, 1), Some(Vec3::new(1.0, 0.0, 0.0)));
+        assert_eq!(interpolate(&r, 5), None);
     }
 }

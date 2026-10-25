@@ -75,6 +75,7 @@ enum Command {
     SetMaxRate(Option<f64>),
     StartTraces(Vec<BodyId>),
     StopTraces,
+    SetTraceReference(Option<BodyId>),
     Shutdown,
 }
 
@@ -129,6 +130,7 @@ impl SimulationHandle {
             .spawn(move || {
                 let state = source();
                 let saved_energy = state.initial_energy;
+                let step = state.step;
                 let engine = factory.create(state, params);
                 let initial_energy =
                     saved_energy.or_else(|| Some(engine.diagnostics().total_energy()));
@@ -142,6 +144,7 @@ impl SimulationHandle {
                     steps_per_second: 0.0,
                     last_step_ms: 0.0,
                     last_publish: None,
+                    step,
                 }
                 .run();
             })
@@ -185,6 +188,11 @@ impl SimulationHandle {
     /// pas, à partir de maintenant). Remplace les traces existantes.
     pub fn start_traces(&self, ids: Vec<BodyId>) {
         let _ = self.tx.send(Command::StartTraces(ids));
+    }
+
+    /// Corps de référence pour l'affichage relatif des traces.
+    pub fn set_trace_reference(&self, id: Option<BodyId>) {
+        let _ = self.tx.send(Command::SetTraceReference(id));
     }
 
     /// Arrête et efface les traces.
@@ -241,6 +249,8 @@ struct Worker {
     steps_per_second: f64,
     last_step_ms: f64,
     last_publish: Option<Instant>,
+    /// Numéro du pas courant (pour dater les points des traces).
+    step: u64,
 }
 
 impl Worker {
@@ -275,9 +285,18 @@ impl Worker {
                     Command::StartTraces(ids) => {
                         let mut set = TraceSet::new(ids);
                         let pos = self.engine.positions_of(&set.current_ids());
-                        set.push(&pos);
+                        set.push(self.step, &pos);
                         *self.shared.traces.lock().expect("verrou empoisonné") = Some(set);
                         self.shared.tracing.store(true, Ordering::Release);
+                    }
+                    Command::SetTraceReference(id) => {
+                        let mut guard = self.shared.traces.lock().expect("verrou empoisonné");
+                        if let Some(set) = guard.as_mut() {
+                            set.set_reference(id);
+                            let ids = set.current_ids();
+                            let pos = self.engine.positions_of(&ids);
+                            set.push(self.step, &pos);
+                        }
                     }
                     Command::StopTraces => {
                         self.shared.tracing.store(false, Ordering::Release);
@@ -311,6 +330,7 @@ impl Worker {
     fn step(&mut self) {
         let t0 = Instant::now();
         let report = self.engine.step();
+        self.step += 1;
         let dt = t0.elapsed().as_secs_f64();
         self.last_step_ms = dt * 1e3;
         let inst = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -326,7 +346,7 @@ impl Worker {
                 let ids = set.current_ids();
                 if !ids.is_empty() {
                     let pos = self.engine.positions_of(&ids);
-                    set.push(&pos);
+                    set.push(self.step, &pos);
                 }
             }
         }

@@ -64,6 +64,7 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 | PgDn / PgUp | corps suivant / précédent dans l'ordre des masses |
 | C | viser le centre de gravité (vol libre) |
 | T | mode trace : trajectoires des 10 corps les plus massifs affichés à cet instant / effacer |
+| R | traces : référentiel absolu / relatif au corps sélectionné |
 | V | vue d'ensemble : recul jusqu'à voir 90 % de la masse, dans la direction de visée actuelle |
 | Espace | pause / reprise |
 | P | pas à pas |
@@ -76,6 +77,8 @@ Quand un corps est suivi, la caméra l'accompagne et tourne autour de lui. Si ce
 
 - l'**historique** complet depuis l'activation (décimé au-delà de 4 096 points) ;
 - une **queue** des N derniers pas, de 10 à 5 000, qui s'estompe vers le passé.
+
+En **référentiel relatif** (touche R), chaque point devient p(t) − r(t) + r(maintenant), où r est la trajectoire du corps sélectionné. La référence reste ainsi fixe à l'écran et les orbites autour d'elle apparaissent. Sa trajectoire vient de sa propre trace si elle fait partie des corps tracés, sinon d'une piste enregistrée depuis sa sélection. Dans ce second cas, la partie plus ancienne des traces n'est pas affichée.
 
 Les traces ne sont pas sauvegardées.
 
