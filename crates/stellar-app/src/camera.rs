@@ -15,7 +15,10 @@ pub const MAX_FOV: f64 = 120.0 * std::f64::consts::PI / 180.0;
 pub enum Mode {
     Free,
     /// Orbite autour du corps `target`, à la distance `distance`.
-    Orbit { target: BodyId, distance: f64 },
+    Orbit {
+        target: BodyId,
+        distance: f64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +54,10 @@ impl Camera {
             pitch: v.pitch.clamp(-MAX_PITCH, MAX_PITCH),
             fov_y: v.fov_y.clamp(MIN_FOV, MAX_FOV),
             mode: match v.followed {
-                Some(target) => Mode::Orbit { target, distance: v.orbit_distance },
+                Some(target) => Mode::Orbit {
+                    target,
+                    distance: v.orbit_distance,
+                },
                 None => Mode::Free,
             },
             speed,
@@ -146,7 +152,10 @@ impl Camera {
             return None;
         }
         let t = (0.5 * self.fov_y).tan();
-        Some((v.dot(self.right()) / (z * t * aspect), v.dot(self.up()) / (z * t)))
+        Some((
+            v.dot(self.right()) / (z * t * aspect),
+            v.dot(self.up()) / (z * t),
+        ))
     }
 }
 
@@ -174,7 +183,10 @@ mod tests {
     #[test]
     fn orbit_keeps_distance() {
         let mut c = Camera::looking_at(DVec3::new(0.0, -5.0, 0.0), DVec3::ZERO, 1.0);
-        c.mode = Mode::Orbit { target: 1, distance: 5.0 };
+        c.mode = Mode::Orbit {
+            target: 1,
+            distance: 5.0,
+        };
         c.rotate(0.7, 0.3);
         c.place_in_orbit(DVec3::new(1.0, 1.0, 1.0));
         assert!(((c.position - DVec3::ONE).length() - 5.0).abs() < 1e-9);

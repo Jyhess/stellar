@@ -54,7 +54,10 @@ pub fn visible_top_k(bodies: &BodySet, camera: &Camera, aspect: f64, k: usize) -
             }
         }
     }
-    ranking::top_k(&ids, &masses, k).into_iter().map(|(id, _)| id).collect()
+    ranking::top_k(&ids, &masses, k)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect()
 }
 
 #[cfg(test)]

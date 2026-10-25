@@ -14,6 +14,10 @@
 //!
 //! L'en-tête permet de lister les sauvegardes sans tout décompresser.
 
+pub mod recording;
+
+pub use recording::FileRecordingRepository;
+
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -57,10 +61,20 @@ impl FileRepository {
 fn sanitize(name: &str) -> String {
     let s: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let s = s.trim_matches('_').to_owned();
-    if s.is_empty() { "simulation".to_owned() } else { s }
+    if s.is_empty() {
+        "simulation".to_owned()
+    } else {
+        s
+    }
 }
 
 fn io(e: std::io::Error) -> RepositoryError {
@@ -80,9 +94,12 @@ fn now_unix() -> i64 {
 
 fn read_header(r: &mut impl Read) -> Result<SaveSummary, RepositoryError> {
     let mut magic = [0u8; 8];
-    r.read_exact(&mut magic).map_err(|_| fmt("fichier tronqué"))?;
+    r.read_exact(&mut magic)
+        .map_err(|_| fmt("fichier tronqué"))?;
     if &magic != MAGIC {
-        return Err(fmt("signature absente : ce n'est pas une sauvegarde Stellar"));
+        return Err(fmt(
+            "signature absente : ce n'est pas une sauvegarde Stellar",
+        ));
     }
     let mut word = [0u8; 4];
     r.read_exact(&mut word).map_err(io)?;
@@ -125,7 +142,8 @@ impl SimulationRepository for FileRepository {
             let mut w = BufWriter::new(File::create(&tmp).map_err(io)?);
             w.write_all(MAGIC).map_err(io)?;
             w.write_all(&VERSION.to_le_bytes()).map_err(io)?;
-            w.write_all(&(header.len() as u32).to_le_bytes()).map_err(io)?;
+            w.write_all(&(header.len() as u32).to_le_bytes())
+                .map_err(io)?;
             w.write_all(&header).map_err(io)?;
             let mut enc = zstd::stream::Encoder::new(w, ZSTD_LEVEL).map_err(io)?;
             bincode::serialize_into(&mut enc, data).map_err(fmt)?;
@@ -159,14 +177,20 @@ impl SimulationRepository for FileRepository {
             if path.extension().and_then(|e| e.to_str()) != Some(EXTENSION) {
                 continue;
             }
-            let Ok(file) = File::open(&path) else { continue };
+            let Ok(file) = File::open(&path) else {
+                continue;
+            };
             // Les fichiers illisibles sont ignorés plutôt que de bloquer la liste.
             if let Ok(mut s) = read_header(&mut BufReader::new(file)) {
                 s.path = path;
                 out.push(s);
             }
         }
-        out.sort_by(|a, b| b.saved_at_unix.cmp(&a.saved_at_unix).then(a.name.cmp(&b.name)));
+        out.sort_by(|a, b| {
+            b.saved_at_unix
+                .cmp(&a.saved_at_unix)
+                .then(a.name.cmp(&b.name))
+        });
         Ok(out)
     }
 }
@@ -187,11 +211,21 @@ mod tests {
         let mut b = BodySet::default();
         for i in 0..1_000u64 {
             let f = i as f64;
-            b.push(i, Vec3::new(f, -f, 0.5 * f), Vec3::new(0.1, 0.2, f), 1.0 + f);
+            b.push(
+                i,
+                Vec3::new(f, -f, 0.5 * f),
+                Vec3::new(0.1, 0.2, f),
+                1.0 + f,
+            );
         }
         SaveData {
             config: SimulationConfig::default(),
-            state: SimulationState { bodies: b, step: 42, time: 1.5, initial_energy: Some(-3.0) },
+            state: SimulationState {
+                bodies: b,
+                step: 42,
+                time: 1.5,
+                initial_energy: Some(-3.0),
+            },
             view: Some(ViewState {
                 position: [1.0, 2.0, 3.0],
                 yaw: 0.5,

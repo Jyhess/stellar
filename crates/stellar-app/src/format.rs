@@ -6,7 +6,7 @@ pub fn count(n: u64) -> String {
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, ch) in s.chars().enumerate() {
         if i > 0 && (s.len() - i) % 3 == 0 {
-            out.push('\u{202F}');
+            out.push('\u{00A0}');
         }
         out.push(ch);
     }
@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn thousands() {
-        assert_eq!(count(1_234_567), "1\u{202F}234\u{202F}567");
+        assert_eq!(count(1_234_567), "1\u{00A0}234\u{00A0}567");
         assert_eq!(count(999), "999");
     }
 }

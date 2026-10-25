@@ -11,3 +11,4 @@ serde.workspace = true
 rand.workspace = true
 rand_pcg.workspace = true
 thiserror.workspace = true
+rayon.workspace = true

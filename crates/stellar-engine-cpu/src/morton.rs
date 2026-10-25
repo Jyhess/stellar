@@ -47,7 +47,10 @@ impl Cube {
                 |a, b| (a.0.min(b.0), a.1.max(b.1)),
             );
         if !lo.is_finite() || !hi.is_finite() {
-            return Self { min: DVec3::ZERO, side: 1.0 };
+            return Self {
+                min: DVec3::ZERO,
+                side: 1.0,
+            };
         }
         let side = (hi - lo).max_element().max(1e-9) * (1.0 + 1e-9) + 1e-12;
         Self { min: lo, side }

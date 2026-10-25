@@ -22,7 +22,10 @@ fn params() -> PhysicsParams {
 }
 
 fn state(bodies: BodySet) -> SimulationState {
-    SimulationState { bodies, ..Default::default() }
+    SimulationState {
+        bodies,
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -72,7 +75,12 @@ fn two_body_orbit_conserves_energy() {
     // chaque corps tourne à r = 1 autour du barycentre ; force G·1·1/4 = v²/1 ⇒ v = 0,5.
     let mut b = BodySet::default();
     b.push(0, DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 0.5, 0.0), 1.0);
-    b.push(1, DVec3::new(-1.0, 0.0, 0.0), DVec3::new(0.0, -0.5, 0.0), 1.0);
+    b.push(
+        1,
+        DVec3::new(-1.0, 0.0, 0.0),
+        DVec3::new(0.0, -0.5, 0.0),
+        1.0,
+    );
     let mut p = params();
     p.dt = 1e-2;
     let mut e = CpuEngine::new(state(b), p);
@@ -90,8 +98,18 @@ fn two_body_orbit_conserves_energy() {
 #[test]
 fn head_on_collision_merges_and_conserves_momentum() {
     let mut b = BodySet::default();
-    b.push(10, DVec3::new(-1.0, 0.0, 0.0), DVec3::new(2.0, 0.0, 0.0), 1.0);
-    b.push(20, DVec3::new(1.0, 0.0, 0.0), DVec3::new(-1.0, 0.3, 0.0), 2.0);
+    b.push(
+        10,
+        DVec3::new(-1.0, 0.0, 0.0),
+        DVec3::new(2.0, 0.0, 0.0),
+        1.0,
+    );
+    b.push(
+        20,
+        DVec3::new(1.0, 0.0, 0.0),
+        DVec3::new(-1.0, 0.3, 0.0),
+        2.0,
+    );
     let p_before = b.momentum();
     let mut p = params();
     p.g = 0.0;
@@ -114,8 +132,18 @@ fn head_on_collision_merges_and_conserves_momentum() {
 fn fast_bodies_crossing_within_one_step_merge() {
     // Sans balayage, ces corps se « traverseraient » sans jamais se recouvrir.
     let mut b = BodySet::default();
-    b.push(1, DVec3::new(-5.0, 0.0, 0.0), DVec3::new(100.0, 0.0, 0.0), 1.0);
-    b.push(2, DVec3::new(5.0, 0.05, 0.0), DVec3::new(-100.0, 0.0, 0.0), 1.0);
+    b.push(
+        1,
+        DVec3::new(-5.0, 0.0, 0.0),
+        DVec3::new(100.0, 0.0, 0.0),
+        1.0,
+    );
+    b.push(
+        2,
+        DVec3::new(5.0, 0.05, 0.0),
+        DVec3::new(-100.0, 0.0, 0.0),
+        1.0,
+    );
     let mut p = params();
     p.g = 0.0;
     p.dt = 0.1;
@@ -150,12 +178,22 @@ fn cleanup_removes_only_unbound_distant_bodies() {
     // Un amas central lié…
     for i in 0..50 {
         let a = i as f64 * 0.7;
-        b.push(i, DVec3::new(a.cos(), a.sin(), (a * 0.3).sin()) * 0.5, DVec3::ZERO, 1.0);
+        b.push(
+            i,
+            DVec3::new(a.cos(), a.sin(), (a * 0.3).sin()) * 0.5,
+            DVec3::ZERO,
+            1.0,
+        );
     }
     // … un corps lointain mais lié (au repos) …
     b.push(100, DVec3::new(30.0, 0.0, 0.0), DVec3::ZERO, 1.0);
     // … et un corps lointain non lié (très rapide).
-    b.push(200, DVec3::new(0.0, 30.0, 0.0), DVec3::new(0.0, 50.0, 0.0), 1.0);
+    b.push(
+        200,
+        DVec3::new(0.0, 30.0, 0.0),
+        DVec3::new(0.0, 50.0, 0.0),
+        1.0,
+    );
     let mut p = params();
     p.softening = 0.01;
     p.cleanup_period = 1;
@@ -192,7 +230,11 @@ fn collapse_conserves_mass_through_merges() {
     // Barnes-Hut n'est pas exactement antisymétrique : tolérance relative à
     // l'échelle M·v_caractéristique.
     let scale = 2_000.0 * ic.characteristic_speed(1.0);
-    assert!(s.bodies.momentum().length() < 1e-3 * scale, "P = {}", s.bodies.momentum().length());
+    assert!(
+        s.bodies.momentum().length() < 1e-3 * scale,
+        "P = {}",
+        s.bodies.momentum().length()
+    );
     // Identifiants uniques.
     let mut ids = s.bodies.ids.clone();
     ids.sort_unstable();

@@ -17,8 +17,7 @@ pub mod state;
 
 pub use body::{BodyId, BodySet};
 pub use config::{
-    DensityProfile, Distribution, InitialConditions, PhysicsParams, SimulationConfig,
-    VelocityMode,
+    DensityProfile, Distribution, InitialConditions, PhysicsParams, SimulationConfig, VelocityMode,
 };
 pub use engine::{Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, StepReport};
 pub use state::SimulationState;

@@ -19,3 +19,4 @@ bytemuck.workspace = true
 eframe.workspace = true
 rfd.workspace = true
 chrono.workspace = true
+rayon.workspace = true

@@ -4,8 +4,7 @@
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64Mcg;
 use stellar_domain::{
-    BodySet, DensityProfile, Distribution, InitialConditions, SimulationState, Vec3,
-    VelocityMode,
+    BodySet, DensityProfile, Distribution, InitialConditions, SimulationState, Vec3, VelocityMode,
 };
 
 /// Construit l'état initial : particules de masse 1, barycentre à l'origine,
@@ -170,12 +169,21 @@ mod tests {
     use super::*;
 
     fn ic(distribution: Distribution, velocity: VelocityMode) -> InitialConditions {
-        InitialConditions { count: 5_000, radius: 50.0, seed: 7, distribution, velocity }
+        InitialConditions {
+            count: 5_000,
+            radius: 50.0,
+            seed: 7,
+            distribution,
+            velocity,
+        }
     }
 
     #[test]
     fn deterministic_with_seed() {
-        let c = ic(Distribution::Sphere, VelocityMode::Random { min: 0.0, max: 2.0 });
+        let c = ic(
+            Distribution::Sphere,
+            VelocityMode::Random { min: 0.0, max: 2.0 },
+        );
         assert_eq!(generate_bodies(&c, 1.0), generate_bodies(&c, 1.0));
         let mut c2 = c;
         c2.seed = 8;
@@ -204,7 +212,10 @@ mod tests {
             VelocityMode::Rest,
         );
         let b = generate_bodies(&c, 1.0);
-        assert!(b.positions.iter().all(|p| p.z.abs() <= 0.5 * 0.02 * 50.0 * 1.1));
+        assert!(b
+            .positions
+            .iter()
+            .all(|p| p.z.abs() <= 0.5 * 0.02 * 50.0 * 1.1));
     }
 
     #[test]
@@ -223,7 +234,10 @@ mod tests {
     #[test]
     fn orbital_speed_matches_kepler_in_disk() {
         let c = ic(
-            Distribution::Disk { thickness: 0.0, profile: DensityProfile::Uniform },
+            Distribution::Disk {
+                thickness: 0.0,
+                profile: DensityProfile::Uniform,
+            },
             VelocityMode::CircularOrbital { spread: 0.0 },
         );
         let b = generate_bodies(&c, 2.0);
@@ -237,6 +251,9 @@ mod tests {
             .unwrap();
         let expected = (2.0 * (c.count as f64 - 1.0) / r).sqrt();
         let got = b.velocities[i].length();
-        assert!((got - expected).abs() / expected < 0.05, "{got} vs {expected}");
+        assert!(
+            (got - expected).abs() / expected < 0.05,
+            "{got} vs {expected}"
+        );
     }
 }

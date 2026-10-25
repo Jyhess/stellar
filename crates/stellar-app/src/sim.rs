@@ -8,8 +8,10 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, Key, Pos2, RichText, Stroke};
 use eframe::egui_wgpu;
 use glam::DVec3;
+use rayon::prelude::*;
+use stellar_application::recording::is_dust;
 use stellar_application::trace::{relative_to, MAX_TAIL};
-use stellar_application::{Phase, SimulationHandle, SimulatorService, Snapshot, ViewState};
+use stellar_application::{Phase, SimulatorService, Snapshot, ViewState};
 use stellar_domain::physics::body_radius;
 use stellar_domain::{ranking, BodyId};
 
@@ -17,11 +19,22 @@ use crate::camera::{Camera, Mode, MAX_FOV, MIN_FOV};
 use crate::format;
 use crate::picking::{pick, visible_top_k};
 use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, Uniforms};
+use crate::source::Source;
 
 /// Luminosité initiale : le mélange additif sature quand les corps se
 /// superposent, d'où une atténuation avec leur nombre (1 pour un million).
 fn default_brightness(count: usize) -> f32 {
     (1e6 / count.max(1) as f64).powf(0.75).clamp(0.05, 1.5) as f32
+}
+
+fn format_bytes(b: u64) -> String {
+    let b = b as f64;
+    if b >= 1e9 {
+        format!("{:.2} Go", b / 1e9)
+    } else {
+        format!("{:.0} Mo", b / 1e6)
+    }
+    .replace('.', ",")
 }
 
 pub enum SimAction {
@@ -62,7 +75,7 @@ struct SnapshotCache {
 }
 
 pub struct SimScreen {
-    handle: SimulationHandle,
+    source: Source,
     service: SimulatorService,
     camera: Camera,
     captured: bool,
@@ -100,22 +113,39 @@ pub struct SimScreen {
     /// Affiche seulement la queue récente des traces.
     trace_tail_only: bool,
     trace_tail_len: usize,
+
+    /// Enregistrement : un instantané tous les N pas.
+    record_interval: u32,
+    record_budget_enabled: bool,
+    record_budget: u64,
 }
 
 impl SimScreen {
-    pub fn new(handle: SimulationHandle, service: SimulatorService, view: Option<ViewState>) -> Self {
-        let r = handle.config().physics.reference_radius.max(1e-9);
+    pub fn new(source: Source, service: SimulatorService, view: Option<ViewState>) -> Self {
+        let r = source.config().physics.reference_radius.max(1e-9);
         let speed = 0.3 * r;
         let camera = match &view {
             Some(v) => Camera::from_view(v, speed),
             None => Camera::looking_at(DVec3::new(0.0, -2.6 * r, 0.9 * r), DVec3::ZERO, speed),
         };
         let selected = camera.followed();
-        let snapshot = handle.latest();
+        let snapshot = source.latest();
         let paused = !snapshot.running;
-        let handle_count = handle.config().initial.count.max(snapshot.state.bodies.len());
+        let handle_count = match source.replay() {
+            Some(r) => r
+                .player
+                .info()
+                .frames
+                .first()
+                .map_or(1, |f| f.count as usize),
+            None => source
+                .config()
+                .initial
+                .count
+                .max(snapshot.state.bodies.len()),
+        };
         Self {
-            handle,
+            source,
             service,
             camera,
             captured: true,
@@ -125,7 +155,11 @@ impl SimScreen {
             paused,
             seen_sequence: u64::MAX,
             snapshot,
-            cache: SnapshotCache { barycenter: DVec3::ZERO, selected_index: None, selected_rank: None },
+            cache: SnapshotCache {
+                barycenter: DVec3::ZERO,
+                selected_index: None,
+                selected_rank: None,
+            },
             anchor: DVec3::ZERO,
             batch: None,
             generation: 0,
@@ -145,15 +179,18 @@ impl SimScreen {
             sent_reference: None,
             trace_tail_only: false,
             trace_tail_len: 600,
+            record_interval: 10,
+            record_budget_enabled: true,
+            record_budget: 1_000_000,
         }
     }
 
     fn reference_radius(&self) -> f64 {
-        self.handle.config().physics.reference_radius.max(1e-9)
+        self.source.config().physics.reference_radius.max(1e-9)
     }
 
     fn base_radius(&self) -> f64 {
-        self.handle.config().physics.base_radius
+        self.source.config().physics.base_radius
     }
 
     fn notify(&mut self, msg: impl Into<String>) {
@@ -165,19 +202,19 @@ impl SimScreen {
     // ------------------------------------------------------------------
 
     fn poll_snapshot(&mut self) {
-        let seq = self.handle.sequence();
+        let seq = self.source.sequence();
         if seq == self.seen_sequence {
             return;
         }
         self.seen_sequence = seq;
-        self.snapshot = self.handle.latest();
+        self.snapshot = self.source.latest();
         let bodies = &self.snapshot.state.bodies;
         self.cache.barycenter = bodies.center_of_mass().unwrap_or(DVec3::ZERO);
 
         // Suivi de la sélection à travers fusions et éjections.
         if let Some(id) = self.selected {
             if self.snapshot.phase == Phase::Ready {
-                match self.handle.resolve(id) {
+                match self.source.resolve(id) {
                     Some(new_id) => {
                         if new_id != id {
                             self.selected = Some(new_id);
@@ -201,11 +238,17 @@ impl SimScreen {
     fn refresh_selection_cache(&mut self) {
         let bodies = &self.snapshot.state.bodies;
         self.cache.selected_index = self.selected.and_then(|id| bodies.index_of(id));
-        self.cache.selected_rank = self
-            .cache
-            .selected_index
-            .map(|i| ranking::rank_of(&bodies.ids, &bodies.masses, (bodies.masses[i], bodies.ids[i])));
-        if self.selected.is_some() && self.cache.selected_index.is_none() && self.snapshot.phase == Phase::Ready {
+        self.cache.selected_rank = self.cache.selected_index.map(|i| {
+            ranking::rank_of(
+                &bodies.ids,
+                &bodies.masses,
+                (bodies.masses[i], bodies.ids[i]),
+            )
+        });
+        if self.selected.is_some()
+            && self.cache.selected_index.is_none()
+            && self.snapshot.phase == Phase::Ready
+        {
             self.selected = None;
             self.camera.mode = Mode::Free;
         }
@@ -229,7 +272,10 @@ impl SimScreen {
         // Seule exception : ne jamais se retrouver à l'intérieur du corps.
         let distance = distance.max(1.5 * r).max(1e-9);
         self.selected = Some(id);
-        self.camera.mode = Mode::Orbit { target: id, distance };
+        self.camera.mode = Mode::Orbit {
+            target: id,
+            distance,
+        };
         self.refresh_selection_cache();
         self.camera.place_in_orbit(p);
     }
@@ -238,7 +284,7 @@ impl SimScreen {
     fn toggle_traces(&mut self) {
         if self.traces_active {
             self.traces_active = false;
-            self.handle.stop_traces();
+            self.source.stop_traces();
             self.notify("Traces effacées.");
             return;
         }
@@ -247,32 +293,43 @@ impl SimScreen {
             return;
         }
         // Les 10 corps les plus massifs parmi ceux visibles à l'écran.
-        let ids = visible_top_k(&self.snapshot.state.bodies, &self.camera, self.last_aspect, TRACE_COUNT);
+        let ids = visible_top_k(
+            &self.snapshot.state.bodies,
+            &self.camera,
+            self.last_aspect,
+            TRACE_COUNT,
+        );
         if ids.is_empty() {
             self.notify("Aucun corps visible à l'écran : rien à tracer.");
             return;
         }
         let n = ids.len();
-        self.handle.start_traces(ids);
+        self.source.start_traces(ids);
         self.traces_active = true;
         self.sent_reference = None; // la référence sera retransmise
         self.sync_trace_reference();
-        self.notify(format!("Traces activées sur les {n} corps visibles les plus massifs."));
+        self.notify(format!(
+            "Traces activées sur les {n} corps visibles les plus massifs."
+        ));
     }
 
     /// Transmet au thread de calcul le corps de référence des traces
     /// (le corps sélectionné, en mode relatif).
     fn sync_trace_reference(&mut self) {
-        let wanted = if self.traces_active && self.trace_relative { self.selected } else { None };
+        let wanted = if self.traces_active && self.trace_relative {
+            self.selected
+        } else {
+            None
+        };
         if wanted == self.sent_reference {
             return;
         }
         // Si la sélection a seulement suivi une fusion, la piste suit d'elle-même.
         let continuation = self
             .sent_reference
-            .is_some_and(|sent| wanted.is_some() && self.handle.resolve(sent) == wanted);
+            .is_some_and(|sent| wanted.is_some() && self.source.resolve(sent) == wanted);
         if !continuation && self.traces_active {
-            self.handle.set_trace_reference(wanted);
+            self.source.set_trace_reference(wanted);
         }
         self.sent_reference = wanted;
     }
@@ -280,7 +337,9 @@ impl SimScreen {
     fn toggle_trace_relative(&mut self) {
         self.trace_relative = !self.trace_relative;
         if self.trace_relative && self.selected.is_none() {
-            self.notify("Référentiel relatif : sélectionnez un corps pour voir les orbites autour de lui.");
+            self.notify(
+                "Référentiel relatif : sélectionnez un corps pour voir les orbites autour de lui.",
+            );
         }
     }
 
@@ -290,7 +349,8 @@ impl SimScreen {
             return;
         }
         self.camera.mode = Mode::Free;
-        self.camera.look_towards(self.cache.barycenter - self.camera.position);
+        self.camera
+            .look_towards(self.cache.barycenter - self.camera.position);
     }
 
     /// Recule la caméra, dans sa direction de visée actuelle, jusqu'à voir la
@@ -308,10 +368,13 @@ impl SimScreen {
         let d = OVERVIEW_MARGIN * r90 / half.sin();
         self.camera.mode = Mode::Free;
         self.camera.position = c - self.camera.forward() * d;
-        self.notify(format!("Vue d'ensemble : 90 % de la masse dans un rayon de {}", format::real(r90)));
+        self.notify(format!(
+            "Vue d'ensemble : 90 % de la masse dans un rayon de {}",
+            format::real(r90)
+        ));
     }
 
-        fn select_heaviest(&mut self) {
+    fn select_heaviest(&mut self) {
         let b = &self.snapshot.state.bodies;
         if let Some(i) = ranking::heaviest(&b.ids, &b.masses) {
             self.select_index(i);
@@ -324,10 +387,15 @@ impl SimScreen {
             return;
         };
         let b = &self.snapshot.state.bodies;
-        if let Some(i) = ranking::neighbour(&b.ids, &b.masses, (b.masses[cur], b.ids[cur]), lighter) {
+        if let Some(i) = ranking::neighbour(&b.ids, &b.masses, (b.masses[cur], b.ids[cur]), lighter)
+        {
             self.select_index(i);
         } else {
-            self.notify(if lighter { "C'est déjà le corps le plus léger." } else { "C'est déjà le corps le plus massif." });
+            self.notify(if lighter {
+                "C'est déjà le corps le plus léger."
+            } else {
+                "C'est déjà le corps le plus massif."
+            });
         }
     }
 
@@ -377,10 +445,28 @@ impl SimScreen {
             self.toggle_pause();
         }
         if pressed(Key::P) {
-            if !self.paused {
-                self.toggle_pause();
+            self.step_once();
+        }
+        if pressed(Key::F9) {
+            self.toggle_recording();
+        }
+        if let Some(r) = self.source.replay_mut() {
+            let clock = &mut r.player.clock;
+            if pressed(Key::ArrowRight) {
+                clock.step(1);
             }
-            self.handle.step_once();
+            if pressed(Key::ArrowLeft) {
+                clock.step(-1);
+            }
+            if pressed(Key::Backspace) {
+                clock.reverse = !clock.reverse;
+            }
+            if pressed(Key::ArrowUp) {
+                clock.speed = (clock.speed * 1.5).min(1000.0);
+            }
+            if pressed(Key::ArrowDown) {
+                clock.speed = (clock.speed / 1.5).max(0.05);
+            }
         }
         if pressed(Key::T) {
             self.toggle_traces();
@@ -416,11 +502,76 @@ impl SimScreen {
     }
 
     fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
-        if self.paused {
-            self.handle.pause();
-        } else {
-            self.handle.resume();
+        match &mut self.source {
+            Source::Live(h) => {
+                self.paused = !self.paused;
+                if self.paused {
+                    h.pause();
+                } else {
+                    h.resume();
+                }
+            }
+            Source::Replay(r) => {
+                let c = &mut r.player.clock;
+                if !c.playing {
+                    // Relancer depuis une extrémité repart dans le sens de lecture.
+                    if !c.reverse && c.position >= c.last() {
+                        c.seek(0.0);
+                    } else if c.reverse && c.position <= 0.0 {
+                        let last = c.last();
+                        c.seek(last);
+                    }
+                }
+                c.playing = !c.playing;
+            }
+        }
+    }
+
+    fn step_once(&mut self) {
+        match &mut self.source {
+            Source::Live(h) => {
+                if !self.paused {
+                    self.paused = true;
+                    h.pause();
+                }
+                h.step_once();
+            }
+            Source::Replay(r) => r.player.clock.step(1),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Enregistrement
+    // ------------------------------------------------------------------
+
+    fn toggle_recording(&mut self) {
+        let Source::Live(h) = &self.source else {
+            self.notify("Enregistrement indisponible pendant une relecture.");
+            return;
+        };
+        if h.recording_status()
+            .active
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            h.stop_recording();
+            self.notify("Enregistrement arrêté.");
+            return;
+        }
+        if self.snapshot.phase != Phase::Ready {
+            self.notify("La simulation n'est pas encore prête.");
+            return;
+        }
+        let name = format!("rec_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
+        let budget = self.record_budget_enabled.then_some(self.record_budget);
+        match self
+            .service
+            .start_recording(&name, h, self.record_interval, budget)
+        {
+            Ok(()) => self.notify(format!(
+                "Enregistrement démarré : un instantané tous les {} pas.",
+                self.record_interval
+            )),
+            Err(e) => self.notify(format!("Enregistrement impossible : {e}")),
         }
     }
 
@@ -441,14 +592,23 @@ impl SimScreen {
                     mouse += *d;
                 }
             }
-            (moves, mouse, i.smooth_scroll_delta.y as f64, i.modifiers.shift, i.modifiers.ctrl)
+            (
+                moves,
+                mouse,
+                i.smooth_scroll_delta.y as f64,
+                i.modifiers.shift,
+                i.modifiers.ctrl,
+            )
         });
 
         // Orientation (souris capturée uniquement). Le premier mouvement suivant
         // une (re)capture est ignoré : il peut contenir un saut parasite.
         let just_captured = self.capture_applied != Some(true);
         if self.captured && !just_captured && mouse != egui::Vec2::ZERO {
-            self.camera.rotate(-(mouse.x as f64) * MOUSE_SENSITIVITY, -(mouse.y as f64) * MOUSE_SENSITIVITY);
+            self.camera.rotate(
+                -(mouse.x as f64) * MOUSE_SENSITIVITY,
+                -(mouse.y as f64) * MOUSE_SENSITIVITY,
+            );
         }
 
         // Déplacement : toute touche ZQSD/AE rend la main en vol libre.
@@ -456,8 +616,15 @@ impl SimScreen {
             if matches!(self.camera.mode, Mode::Orbit { .. }) {
                 self.camera.mode = Mode::Free;
             }
-            let boost = if shift { 5.0 } else if ctrl { 0.2 } else { 1.0 };
-            self.camera.translate_local(moves.normalize() * self.camera.speed * boost * dt);
+            let boost = if shift {
+                5.0
+            } else if ctrl {
+                0.2
+            } else {
+                1.0
+            };
+            self.camera
+                .translate_local(moves.normalize() * self.camera.speed * boost * dt);
         }
 
         // Molette : zoom optique en vol libre, distance en orbite.
@@ -524,18 +691,24 @@ impl SimScreen {
         if self.save_job.is_some() {
             return;
         }
+        if self.source.live().is_none() {
+            self.notify("Sauvegarde indisponible pendant une relecture.");
+            return;
+        }
         if self.snapshot.phase != Phase::Ready {
             self.notify("La simulation n'est pas encore prête.");
             return;
         }
         let (tx, rx) = mpsc::channel();
         let service = self.service.clone();
-        let config = self.handle.config().clone();
+        let config = self.source.config().clone();
         let snapshot = Arc::clone(&self.snapshot);
         let view = self.camera.to_view();
         let name = format!("sim_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
         std::thread::spawn(move || {
-            let r = service.save(&name, &config, &snapshot, Some(view)).map_err(|e| e.to_string());
+            let r = service
+                .save(&name, &config, &snapshot, Some(view))
+                .map_err(|e| e.to_string());
             let _ = tx.send(r);
         });
         self.save_job = Some(rx);
@@ -575,20 +748,28 @@ impl SimScreen {
         let max_mass = self.snapshot.top.first().map(|t| t.1).unwrap_or(1.0);
         let r0 = self.base_radius();
         let anchor = self.anchor;
+        // Poids encodé dans le canal alpha (×16) : la poussière sous-échantillonnée
+        // d'un enregistrement brille d'autant plus qu'elle en représente davantage.
+        let dust_alpha = (self.source.dust_weight() * 16.0).round().clamp(1.0, 255.0) as u8;
         let instances: Vec<Instance> = bodies
             .positions
-            .iter()
-            .zip(&bodies.masses)
+            .par_iter()
+            .zip(bodies.masses.par_iter())
             .map(|(p, &m)| {
                 let rel = (*p - anchor).as_vec3();
+                let mut color = mass_color(m, max_mass);
+                color[3] = if is_dust(m) { dust_alpha } else { 16 };
                 Instance {
                     pos_radius: [rel.x, rel.y, rel.z, body_radius(m, r0) as f32],
-                    color: mass_color(m, max_mass),
+                    color,
                 }
             })
             .collect();
         self.generation += 1;
-        self.batch = Some(InstanceBatch { generation: self.generation, instances: Arc::new(instances) });
+        self.batch = Some(InstanceBatch {
+            generation: self.generation,
+            instances: Arc::new(instances),
+        });
     }
 
     fn paint_scene(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -608,7 +789,10 @@ impl SimScreen {
         };
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             rect,
-            PointsCallback { uniforms, batch: self.batch.clone() },
+            PointsCallback {
+                uniforms,
+                batch: self.batch.clone(),
+            },
         ));
         self.paint_overlay(ui, rect);
     }
@@ -630,16 +814,22 @@ impl SimScreen {
                 let c = to_screen(ndc);
                 let d = (b.positions[i] - self.camera.position).length().max(1e-12);
                 let r_world = body_radius(b.masses[i], self.base_radius());
-                let r_px = (r_world / (d * (0.5 * self.camera.fov_y).tan()) * 0.5 * rect.height() as f64) as f32;
+                let r_px = (r_world / (d * (0.5 * self.camera.fov_y).tan())
+                    * 0.5
+                    * rect.height() as f64) as f32;
                 let ring = r_px.max(6.0) + 6.0;
-                painter.circle_stroke(c, ring, Stroke::new(1.5_f32, Color32::from_rgb(120, 220, 255)));
+                painter.circle_stroke(
+                    c,
+                    ring,
+                    Stroke::new(1.5_f32, Color32::from_rgb(120, 220, 255)),
+                );
             }
         }
 
         // Traces.
         if self.traces_active {
             // Copie rapide sous verrou, puis dessin hors verrou.
-            let lines: Vec<Vec<Option<DVec3>>> = match self.handle.traces().as_ref() {
+            let lines: Vec<Vec<Option<DVec3>>> = self.source.with_traces(|set| match set {
                 Some(set) => {
                     let reference = if self.trace_relative {
                         self.selected.and_then(|id| set.reference_samples(id))
@@ -649,7 +839,11 @@ impl SimScreen {
                     set.traces
                         .iter()
                         .map(|t| {
-                            let pts = if self.trace_tail_only { t.recent(self.trace_tail_len) } else { t.full() };
+                            let pts = if self.trace_tail_only {
+                                t.recent(self.trace_tail_len)
+                            } else {
+                                t.full()
+                            };
                             match &reference {
                                 Some(r) => relative_to(&pts, r),
                                 None => pts.into_iter().map(|(_, p)| Some(p)).collect(),
@@ -658,21 +852,29 @@ impl SimScreen {
                         .collect()
                 }
                 None => Vec::new(),
-            };
+            });
             for (k, pts) in lines.iter().enumerate() {
                 let color = TRACE_PALETTE[k % TRACE_PALETTE.len()];
                 if pts.len() < 2 {
                     continue;
                 }
-                let screen: Vec<Option<Pos2>> =
-                    pts.iter().map(|p| p.and_then(|p| self.camera.project(p, aspect)).map(to_screen)).collect();
+                let screen: Vec<Option<Pos2>> = pts
+                    .iter()
+                    .map(|p| {
+                        p.and_then(|p| self.camera.project(p, aspect))
+                            .map(to_screen)
+                    })
+                    .collect();
                 if self.trace_tail_only {
                     // Dégradé : opaque au présent, transparent vers le passé.
                     let n = screen.len() as f32;
                     for (k, w) in screen.windows(2).enumerate() {
                         if let [Some(a), Some(b)] = w {
                             let alpha = (k as f32 + 1.0) / n;
-                            painter.line_segment([*a, *b], Stroke::new(1.5_f32, color.gamma_multiply(alpha)));
+                            painter.line_segment(
+                                [*a, *b],
+                                Stroke::new(1.5_f32, color.gamma_multiply(alpha)),
+                            );
                         }
                     }
                 } else {
@@ -683,7 +885,10 @@ impl SimScreen {
                             Some(q) => run.push(q),
                             None => {
                                 if run.len() >= 2 {
-                                    painter.add(egui::Shape::line(std::mem::take(&mut run), Stroke::new(1.5_f32, color)));
+                                    painter.add(egui::Shape::line(
+                                        std::mem::take(&mut run),
+                                        Stroke::new(1.5_f32, color),
+                                    ));
                                 }
                                 run.clear();
                             }
@@ -710,7 +915,7 @@ impl SimScreen {
                 egui::Align2::CENTER_CENTER,
                 format!(
                     "Génération de {} particules et premier calcul des forces…",
-                    format::count(self.handle.config().initial.count as u64)
+                    format::count(self.source.config().initial.count as u64)
                 ),
                 egui::FontId::proportional(22.0),
                 Color32::from_gray(220),
@@ -749,81 +954,24 @@ impl SimScreen {
 
     fn hud(&mut self, ctx: &egui::Context) {
         let snap = Arc::clone(&self.snapshot);
-        egui::Window::new("Simulation")
+        let title = if self.source.replay().is_some() {
+            "Relecture"
+        } else {
+            "Simulation"
+        };
+        egui::Window::new(title)
+            .id(egui::Id::new("panneau-simulation"))
             .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
             .resizable(false)
-            .default_width(260.0)
+            .default_width(280.0)
             .show(ctx, |ui| {
-                egui::Grid::new("stats").num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
-                    let row = |ui: &mut egui::Ui, k: &str, v: String| {
-                        ui.label(k);
-                        ui.label(RichText::new(v).monospace());
-                        ui.end_row();
-                    };
-                    let state = if snap.phase == Phase::Initialising {
-                        "initialisation"
-                    } else if self.paused {
-                        "en pause"
-                    } else {
-                        "en cours"
-                    };
-                    row(ui, "État", state.to_owned());
-                    row(ui, "Corps", format::count(snap.state.bodies.len() as u64));
-                    row(ui, "Pas", format::count(snap.state.step));
-                    row(ui, "Temps simulé", format::real(snap.state.time));
-                    row(ui, "Pas / s", format!("{:.2}", snap.steps_per_second).replace('.', ","));
-                    row(ui, "Durée d'un pas", format!("{:.1} ms", snap.last_step_ms).replace('.', ","));
-                    row(ui, "Images / s", format!("{:.0}", self.fps));
-                    row(ui, "Énergie totale", format::real(snap.diagnostics.total_energy()));
-                    if let Some(d) = snap.energy_drift() {
-                        row(ui, "ΔE / E₀", format::percent(d));
-                    }
-                });
-                ui.label(RichText::new("ΔE inclut les pertes par fusion et éjection.").small().weak());
+                if self.source.replay().is_some() {
+                    self.replay_panel(ui);
+                } else {
+                    self.live_panel(ui, &snap);
+                }
                 ui.separator();
-                ui.horizontal(|ui| {
-                    let label = if self.paused { "▶ Reprendre" } else { "⏸ Pause" };
-                    if ui.button(label).clicked() {
-                        self.toggle_pause();
-                    }
-                    if ui.button("Pas à pas").clicked() {
-                        if !self.paused {
-                            self.toggle_pause();
-                        }
-                        self.handle.step_once();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut changed = ui.checkbox(&mut self.limit_rate, "Limiter à").changed();
-                    changed |= ui
-                        .add_enabled(
-                            self.limit_rate,
-                            egui::DragValue::new(&mut self.max_rate).range(0.1..=10_000.0).speed(0.5).suffix(" pas/s"),
-                        )
-                        .changed();
-                    if changed {
-                        self.handle.set_max_rate(self.limit_rate.then_some(self.max_rate));
-                    }
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Luminosité");
-                    ui.add(egui::Slider::new(&mut self.brightness, 0.02..=3.0).logarithmic(true));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Poussières");
-                    ui.add(egui::Slider::new(&mut self.dust_floor, 0.0..=1.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Vitesse caméra");
-                    let sp = self.camera.speed * 0.02;
-                    ui.add(
-                        egui::DragValue::new(&mut self.camera.speed)
-                            .speed(sp)
-                            .range(1e-9..=1e12),
-                    );
-                    ui.label(RichText::new("(+/−, Maj, Ctrl)").weak());
-                });
+                self.view_settings(ui);
             });
 
         let mut clicked_id: Option<BodyId> = None;
@@ -837,21 +985,40 @@ impl SimScreen {
                     Some(i) => {
                         let b = &snap.state.bodies;
                         let m = b.masses[i];
-                        egui::Grid::new("sel").num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
-                            let row = |ui: &mut egui::Ui, k: &str, v: String| {
-                                ui.label(k);
-                                ui.label(RichText::new(v).monospace());
-                                ui.end_row();
-                            };
-                            row(ui, "Identifiant", b.ids[i].to_string());
-                            if let Some(r) = self.cache.selected_rank {
-                                row(ui, "Rang (masse)", format!("{} / {}", format::count(r as u64), format::count(b.len() as u64)));
-                            }
-                            row(ui, "Masse", format::real(m));
-                            row(ui, "Rayon", format::real(body_radius(m, self.base_radius())));
-                            row(ui, "Vitesse", format::real(b.velocities[i].length()));
-                            row(ui, "Dist. barycentre", format::real((b.positions[i] - self.cache.barycenter).length()));
-                        });
+                        egui::Grid::new("sel")
+                            .num_columns(2)
+                            .spacing([14.0, 3.0])
+                            .show(ui, |ui| {
+                                let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                                    ui.label(k);
+                                    ui.label(RichText::new(v).monospace());
+                                    ui.end_row();
+                                };
+                                row(ui, "Identifiant", b.ids[i].to_string());
+                                if let Some(r) = self.cache.selected_rank {
+                                    row(
+                                        ui,
+                                        "Rang (masse)",
+                                        format!(
+                                            "{} / {}",
+                                            format::count(r as u64),
+                                            format::count(b.len() as u64)
+                                        ),
+                                    );
+                                }
+                                row(ui, "Masse", format::real(m));
+                                row(
+                                    ui,
+                                    "Rayon",
+                                    format::real(body_radius(m, self.base_radius())),
+                                );
+                                row(ui, "Vitesse", format::real(b.velocities[i].length()));
+                                row(
+                                    ui,
+                                    "Dist. barycentre",
+                                    format::real((b.positions[i] - self.cache.barycenter).length()),
+                                );
+                            });
                         if ui.button("Cesser le suivi").clicked() {
                             self.selected = None;
                             self.camera.mode = Mode::Free;
@@ -859,24 +1026,29 @@ impl SimScreen {
                         }
                     }
                     None => {
-                        ui.label(RichText::new("Aucun — visez et cliquez, ou touche Origine.").weak());
+                        ui.label(
+                            RichText::new("Aucun — visez et cliquez, ou touche Origine.").weak(),
+                        );
                     }
                 }
                 ui.separator();
                 self.traces_panel(ui);
                 ui.separator();
                 ui.label(RichText::new("Les plus massifs").strong());
-                egui::Grid::new("top").num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
-                    for (rank, (id, m)) in snap.top.iter().enumerate() {
-                        ui.label(format!("{}.", rank + 1));
-                        let sel = self.selected == Some(*id);
-                        if ui.selectable_label(sel, format!("#{id}")).clicked() {
-                            clicked_id = Some(*id);
+                egui::Grid::new("top")
+                    .num_columns(3)
+                    .spacing([10.0, 2.0])
+                    .show(ui, |ui| {
+                        for (rank, (id, m)) in snap.top.iter().enumerate() {
+                            ui.label(format!("{}.", rank + 1));
+                            let sel = self.selected == Some(*id);
+                            if ui.selectable_label(sel, format!("#{id}")).clicked() {
+                                clicked_id = Some(*id);
+                            }
+                            ui.label(RichText::new(format::real(*m)).monospace());
+                            ui.end_row();
                         }
-                        ui.label(RichText::new(format::real(*m)).monospace());
-                        ui.end_row();
-                    }
-                });
+                    });
             });
         if let Some(id) = clicked_id {
             if let Some(i) = self.snapshot.state.bodies.index_of(id) {
@@ -888,7 +1060,11 @@ impl SimScreen {
     fn traces_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Traces (T)").strong());
-            let label = if self.traces_active { "Effacer" } else { "Tracer les 10 plus gros visibles" };
+            let label = if self.traces_active {
+                "Effacer"
+            } else {
+                "Tracer les 10 plus gros visibles"
+            };
             if ui.small_button(label).clicked() {
                 self.toggle_traces();
             }
@@ -910,7 +1086,12 @@ impl SimScreen {
             }
         });
         if self.trace_relative && self.selected.is_none() {
-            ui.label(RichText::new("Sélectionnez un corps : les traces s'affichent alors relativement à lui.").weak());
+            ui.label(
+                RichText::new(
+                    "Sélectionnez un corps : les traces s'affichent alors relativement à lui.",
+                )
+                .weak(),
+            );
         }
         if self.trace_tail_only {
             ui.add(
@@ -919,23 +1100,309 @@ impl SimScreen {
                     .text("pas"),
             );
         }
-        let rows: Vec<(BodyId, Option<BodyId>)> = match self.handle.traces().as_ref() {
+        let rows: Vec<(BodyId, Option<BodyId>)> = self.source.with_traces(|set| match set {
             Some(set) => set.traces.iter().map(|t| (t.origin, t.current)).collect(),
             None => Vec::new(),
-        };
-        egui::Grid::new("traces").num_columns(2).spacing([8.0, 1.0]).show(ui, |ui| {
-            for (k, (origin, current)) in rows.into_iter().enumerate() {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 10.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, 2.0, TRACE_PALETTE[k % TRACE_PALETTE.len()]);
-                let text = match current {
-                    Some(c) if c == origin => format!("#{c}"),
-                    Some(c) => format!("#{origin}, fusionné dans #{c}"),
-                    None => format!("#{origin} (éliminé)"),
+        });
+        egui::Grid::new("traces")
+            .num_columns(2)
+            .spacing([8.0, 1.0])
+            .show(ui, |ui| {
+                for (k, (origin, current)) in rows.into_iter().enumerate() {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(18.0, 10.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, 2.0, TRACE_PALETTE[k % TRACE_PALETTE.len()]);
+                    let text = match current {
+                        Some(c) if c == origin => format!("#{c}"),
+                        Some(c) => format!("#{origin}, fusionné dans #{c}"),
+                        None => format!("#{origin} (éliminé)"),
+                    };
+                    ui.label(RichText::new(text).monospace());
+                    ui.end_row();
+                }
+            });
+    }
+
+    fn live_panel(&mut self, ui: &mut egui::Ui, snap: &Snapshot) {
+        egui::Grid::new("stats")
+            .num_columns(2)
+            .spacing([14.0, 3.0])
+            .show(ui, |ui| {
+                let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                    ui.label(k);
+                    ui.label(RichText::new(v).monospace());
+                    ui.end_row();
                 };
-                ui.label(RichText::new(text).monospace());
-                ui.end_row();
+                let state = if snap.phase == Phase::Initialising {
+                    "initialisation"
+                } else if self.paused {
+                    "en pause"
+                } else {
+                    "en cours"
+                };
+                row(ui, "État", state.to_owned());
+                row(ui, "Corps", format::count(snap.state.bodies.len() as u64));
+                row(ui, "Pas", format::count(snap.state.step));
+                row(ui, "Temps simulé", format::real(snap.state.time));
+                row(
+                    ui,
+                    "Pas / s",
+                    format!("{:.2}", snap.steps_per_second).replace('.', ","),
+                );
+                row(
+                    ui,
+                    "Durée d'un pas",
+                    format!("{:.1} ms", snap.last_step_ms).replace('.', ","),
+                );
+                row(ui, "Images / s", format!("{:.0}", self.fps));
+                row(
+                    ui,
+                    "Énergie totale",
+                    format::real(snap.diagnostics.total_energy()),
+                );
+                if let Some(d) = snap.energy_drift() {
+                    row(ui, "ΔE / E₀", format::percent(d));
+                }
+            });
+        ui.label(
+            RichText::new("ΔE inclut les pertes par fusion et éjection.")
+                .small()
+                .weak(),
+        );
+        ui.separator();
+        ui.horizontal(|ui| {
+            let label = if self.paused {
+                "▶ Reprendre"
+            } else {
+                "⏸ Pause"
+            };
+            if ui.button(label).clicked() {
+                self.toggle_pause();
+            }
+            if ui.button("Pas à pas").clicked() {
+                self.step_once();
             }
         });
+        ui.horizontal(|ui| {
+            let mut changed = ui.checkbox(&mut self.limit_rate, "Limiter à").changed();
+            changed |= ui
+                .add_enabled(
+                    self.limit_rate,
+                    egui::DragValue::new(&mut self.max_rate)
+                        .range(0.1..=10_000.0)
+                        .speed(0.5)
+                        .suffix(" pas/s"),
+                )
+                .changed();
+            if changed {
+                if let Some(h) = self.source.live() {
+                    h.set_max_rate(self.limit_rate.then_some(self.max_rate));
+                }
+            }
+        });
+        ui.separator();
+        self.recording_panel(ui);
+    }
+
+    fn view_settings(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Luminosité");
+            ui.add(egui::Slider::new(&mut self.brightness, 0.02..=3.0).logarithmic(true));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Poussières");
+            ui.add(egui::Slider::new(&mut self.dust_floor, 0.0..=1.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Vitesse caméra");
+            let sp = self.camera.speed * 0.02;
+            ui.add(
+                egui::DragValue::new(&mut self.camera.speed)
+                    .speed(sp)
+                    .range(1e-9..=1e12),
+            );
+            ui.label(RichText::new("(+/−, Maj, Ctrl)").weak());
+        });
+    }
+
+    fn recording_panel(&mut self, ui: &mut egui::Ui) {
+        use std::sync::atomic::Ordering;
+        let Some(h) = self.source.live() else { return };
+        let st = h.recording_status();
+        let active = st.active.load(Ordering::Acquire);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Enregistrement (F9)").strong());
+            if active {
+                ui.colored_label(
+                    Color32::from_rgb(255, 80, 80),
+                    RichText::new("REC").strong(),
+                );
+            }
+        });
+        let toggle;
+        if active {
+            let frames = st.frames.load(Ordering::Relaxed);
+            let bytes = st.bytes.load(Ordering::Relaxed);
+            ui.label(format!(
+                "{} instantanés · {} · 1 tous les {} pas",
+                format::count(frames),
+                format_bytes(bytes),
+                st.interval.load(Ordering::Relaxed)
+            ));
+            toggle = ui.button("■ Arrêter").clicked();
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("Un instantané tous les");
+                ui.add(egui::DragValue::new(&mut self.record_interval).range(1..=100_000));
+                ui.label("pas");
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.record_budget_enabled, "Poussière limitée à");
+                ui.add_enabled(
+                    self.record_budget_enabled,
+                    egui::DragValue::new(&mut self.record_budget)
+                        .range(1_000..=100_000_000)
+                        .speed(10_000.0),
+                );
+            });
+            if let Some(e) = st.error.lock().ok().and_then(|g| g.clone()) {
+                ui.colored_label(Color32::LIGHT_RED, e);
+            } else if let Some(p) = st.last_path.lock().ok().and_then(|g| g.clone()) {
+                ui.label(
+                    RichText::new(format!("Dernier : {}", p.display()))
+                        .small()
+                        .weak(),
+                );
+            }
+            toggle = ui.button("Enregistrer").clicked();
+        }
+        if toggle {
+            self.toggle_recording();
+        }
+    }
+
+    fn replay_panel(&mut self, ui: &mut egui::Ui) {
+        let fps = self.fps;
+        let snap = Arc::clone(&self.snapshot);
+        let Some(r) = self.source.replay_mut() else {
+            return;
+        };
+        let n = r.player.frame_count();
+        let waiting = r.player.is_waiting();
+        let error = r.player.error();
+        let info_interval = r.player.info().header.interval;
+        let budget = r.player.info().header.dust_budget;
+        let weight = r.player.dust_weight();
+        let c = &mut r.player.clock;
+        egui::Grid::new("replay-stats")
+            .num_columns(2)
+            .spacing([14.0, 3.0])
+            .show(ui, |ui| {
+                let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                    ui.label(k);
+                    ui.label(RichText::new(v).monospace());
+                    ui.end_row();
+                };
+                let state = if waiting && c.playing {
+                    "chargement…"
+                } else if c.playing {
+                    if c.reverse {
+                        "lecture arrière"
+                    } else {
+                        "lecture"
+                    }
+                } else {
+                    "en pause"
+                };
+                row(ui, "État", state.to_owned());
+                row(
+                    ui,
+                    "Instantané",
+                    format!("{:.1} / {}", c.position + 1.0, n).replace('.', ","),
+                );
+                row(ui, "Pas", format::count(snap.state.step));
+                row(ui, "Temps simulé", format::real(snap.state.time));
+                row(
+                    ui,
+                    "Corps affichés",
+                    format::count(snap.state.bodies.len() as u64),
+                );
+                if weight > 1.0 {
+                    row(
+                        ui,
+                        "Poussière",
+                        format!("1 sur {:.1}", weight).replace('.', ","),
+                    );
+                }
+                row(ui, "Images / s", format!("{fps:.0}"));
+                row(ui, "Intervalle", format!("{info_interval} pas"));
+                if let Some(b) = budget {
+                    row(ui, "Budget poussière", format::count(b));
+                }
+            });
+        if let Some(e) = error {
+            ui.colored_label(Color32::LIGHT_RED, e);
+        }
+        let mut pos = c.position;
+        let last = c.last();
+        let slider = ui.add(
+            egui::Slider::new(&mut pos, 0.0..=last.max(1e-9))
+                .show_value(false)
+                .text("temps"),
+        );
+        if slider.changed() {
+            c.seek(pos);
+        }
+        let mut toggle = false;
+        ui.horizontal(|ui| {
+            if ui.button("⏮").on_hover_text("Début").clicked() {
+                c.seek(0.0);
+            }
+            if ui
+                .button("◀|")
+                .on_hover_text("Instantané précédent (←)")
+                .clicked()
+            {
+                c.step(-1);
+            }
+            let label = if c.playing { "⏸" } else { "▶" };
+            if ui
+                .button(label)
+                .on_hover_text("Lecture / pause (Espace)")
+                .clicked()
+            {
+                toggle = true;
+            }
+            if ui
+                .button("|▶")
+                .on_hover_text("Instantané suivant (→)")
+                .clicked()
+            {
+                c.step(1);
+            }
+            if ui.button("⏭").on_hover_text("Fin").clicked() {
+                c.seek(last);
+            }
+            ui.checkbox(&mut c.reverse, "Arrière")
+                .on_hover_text("Retour arrière (⌫)");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Vitesse");
+            ui.add(
+                egui::Slider::new(&mut c.speed, 0.05..=1000.0)
+                    .logarithmic(true)
+                    .suffix(" inst./s"),
+            );
+        });
+        ui.label(
+            RichText::new("↑ / ↓ : vitesse · ← / → : instantané · ⌫ : sens")
+                .small()
+                .weak(),
+        );
+        if toggle {
+            self.toggle_pause();
+        }
     }
 
     fn menu(&mut self, ctx: &egui::Context) -> SimAction {
@@ -966,33 +1433,41 @@ impl SimScreen {
                 });
                 ui.separator();
                 ui.label(RichText::new("Commandes").strong());
-                egui::Grid::new("keys").num_columns(2).spacing([16.0, 2.0]).show(ui, |ui| {
-                    for (k, v) in [
-                        ("Z / S", "avancer / reculer"),
-                        ("Q / D", "gauche / droite"),
-                        ("E / A", "monter / descendre"),
-                        ("Maj / Ctrl", "accélérer / ralentir le déplacement"),
-                        ("+ / −", "vitesse de déplacement"),
-                        ("Souris", "orientation (ou orbite autour du corps suivi)"),
-                        ("Molette", "zoom (ou distance au corps suivi)"),
-                        ("Clic gauche", "suivre le corps visé"),
-                        ("Origine", "corps le plus massif"),
-                        ("PgDn / PgUp", "corps suivant / précédent par masse"),
-                        ("C", "viser le centre de gravité"),
-                        ("V", "vue d'ensemble (90 % de la masse)"),
-                        ("T", "tracer les 10 plus massifs visibles / effacer"),
-                        ("R", "traces : référentiel absolu / corps sélectionné"),
-                        ("Espace / P", "pause / pas à pas"),
-                        ("Tab", "libérer / capturer la souris"),
-                        ("Clic droit", "reprendre la visée (souris libre)"),
-                        ("F5", "sauvegarder"),
-                        ("Échap", "ce menu"),
-                    ] {
-                        ui.label(RichText::new(k).monospace());
-                        ui.label(v);
-                        ui.end_row();
-                    }
-                });
+                egui::Grid::new("keys")
+                    .num_columns(2)
+                    .spacing([16.0, 2.0])
+                    .show(ui, |ui| {
+                        for (k, v) in [
+                            ("Z / S", "avancer / reculer"),
+                            ("Q / D", "gauche / droite"),
+                            ("E / A", "monter / descendre"),
+                            ("Maj / Ctrl", "accélérer / ralentir le déplacement"),
+                            ("+ / −", "vitesse de déplacement"),
+                            ("Souris", "orientation (ou orbite autour du corps suivi)"),
+                            ("Molette", "zoom (ou distance au corps suivi)"),
+                            ("Clic gauche", "suivre le corps visé"),
+                            ("Origine", "corps le plus massif"),
+                            ("PgDn / PgUp", "corps suivant / précédent par masse"),
+                            ("C", "viser le centre de gravité"),
+                            ("V", "vue d'ensemble (90 % de la masse)"),
+                            ("T", "tracer les 10 plus massifs visibles / effacer"),
+                            ("R", "traces : référentiel absolu / corps sélectionné"),
+                            ("Espace / P", "pause / pas à pas"),
+                            ("Tab", "libérer / capturer la souris"),
+                            ("Clic droit", "reprendre la visée (souris libre)"),
+                            ("F5", "sauvegarder"),
+                            ("F9", "démarrer / arrêter l'enregistrement"),
+                            ("Espace", "relecture : lecture / pause"),
+                            ("← / →", "relecture : instantané précédent / suivant"),
+                            ("↑ / ↓", "relecture : vitesse"),
+                            ("⌫", "relecture : sens de lecture"),
+                            ("Échap", "ce menu"),
+                        ] {
+                            ui.label(RichText::new(k).monospace());
+                            ui.label(v);
+                            ui.end_row();
+                        }
+                    });
             });
         action
     }
@@ -1000,12 +1475,20 @@ impl SimScreen {
     /// Image courante. Renvoie l'action demandée par l'utilisateur.
     pub fn show(&mut self, ctx: &egui::Context) -> SimAction {
         let now = Instant::now();
-        let dt = self.last_frame.map_or(1.0 / 60.0, |t| (now - t).as_secs_f64()).min(0.25);
+        let dt = self
+            .last_frame
+            .map_or(1.0 / 60.0, |t| (now - t).as_secs_f64())
+            .min(0.25);
         self.last_frame = Some(now);
         if dt > 0.0 {
-            self.fps = if self.fps == 0.0 { 1.0 / dt } else { 0.95 * self.fps + 0.05 / dt };
+            self.fps = if self.fps == 0.0 {
+                1.0 / dt
+            } else {
+                0.95 * self.fps + 0.05 / dt
+            };
         }
 
+        self.source.tick(dt);
         self.poll_snapshot();
         self.poll_save();
         let mut action = self.handle_shortcuts(ctx);
@@ -1033,6 +1516,6 @@ impl SimScreen {
     pub fn shutdown(self, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
         ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
-        self.handle.shutdown();
+        self.source.shutdown();
     }
 }

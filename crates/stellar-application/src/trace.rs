@@ -93,7 +93,12 @@ impl Trace {
     /// pour le passé lointain, la queue à pleine résolution ensuite.
     pub fn samples(&self) -> Vec<Sample> {
         let first_tail = self.tail.front().map_or(u64::MAX, |s| s.0);
-        let mut v: Vec<Sample> = self.history.iter().copied().filter(|s| s.0 < first_tail).collect();
+        let mut v: Vec<Sample> = self
+            .history
+            .iter()
+            .copied()
+            .filter(|s| s.0 < first_tail)
+            .collect();
         v.extend(self.tail.iter().copied());
         v
     }
@@ -114,7 +119,10 @@ pub struct TraceSet {
 
 impl TraceSet {
     pub fn new(ids: impl IntoIterator<Item = BodyId>) -> Self {
-        Self { traces: ids.into_iter().map(Trace::new).collect(), reference: None }
+        Self {
+            traces: ids.into_iter().map(Trace::new).collect(),
+            reference: None,
+        }
     }
 
     /// Corps dont les positions sont à enregistrer à chaque pas : traces
@@ -142,7 +150,9 @@ impl TraceSet {
     }
 
     fn own_trace(&self, id: BodyId) -> Option<&Trace> {
-        self.traces.iter().find(|t| t.origin == id && t.current == Some(id))
+        self.traces
+            .iter()
+            .find(|t| t.origin == id && t.current == Some(id))
     }
 
     /// Trajectoire connue du corps `id`, pour l'affichage relatif.
@@ -170,6 +180,14 @@ impl TraceSet {
                     t.current = Some(s);
                 }
             }
+        }
+    }
+
+    /// Met à jour les corps suivis à l'aide d'une fonction de résolution
+    /// (identifiant actuel après fusions, `None` si éliminé).
+    pub fn resolve_with(&mut self, resolve: impl Fn(BodyId) -> Option<BodyId>) {
+        for t in self.traces.iter_mut().chain(self.reference.iter_mut()) {
+            t.current = t.current.and_then(&resolve);
         }
     }
 

@@ -41,7 +41,8 @@ impl EngineFactory for CpuEngineFactory {
         EngineDescriptor {
             id: ENGINE_ID,
             label: "CPU — Barnes-Hut multithread",
-            description: "Octree de Barnes-Hut sur tous les cœurs (sauf un, réservé à l'affichage).",
+            description:
+                "Octree de Barnes-Hut sur tous les cœurs (sauf un, réservé à l'affichage).",
         }
     }
 
@@ -82,7 +83,12 @@ impl CpuEngine {
                 .build()
                 .expect("impossible de créer le pool de calcul"),
         );
-        let BodySet { ids, positions, velocities, masses } = state.bodies;
+        let BodySet {
+            ids,
+            positions,
+            velocities,
+            masses,
+        } = state.bodies;
         let n = ids.len();
         let mut engine = Self {
             params,
@@ -149,8 +155,14 @@ impl CpuEngine {
         };
         self.pos = gather(&self.pos);
         self.vel = gather(&self.vel);
-        self.mass = keyed.par_iter().map(|&(_, i)| self.mass[i as usize]).collect();
-        self.ids = keyed.par_iter().map(|&(_, i)| self.ids[i as usize]).collect();
+        self.mass = keyed
+            .par_iter()
+            .map(|&(_, i)| self.mass[i as usize])
+            .collect();
+        self.ids = keyed
+            .par_iter()
+            .map(|&(_, i)| self.ids[i as usize])
+            .collect();
         let codes: Vec<u64> = keyed.into_iter().map(|k| k.0).collect();
 
         // 2. Octree.
@@ -181,7 +193,10 @@ impl CpuEngine {
             .zip(self.pot.par_iter())
             .map(|((&m, v), &phi)| (0.5 * m * v.length_squared(), 0.5 * m * phi))
             .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
-        self.diagnostics = Diagnostics { kinetic_energy: kin, potential_energy: pot };
+        self.diagnostics = Diagnostics {
+            kinetic_energy: kin,
+            potential_energy: pot,
+        };
     }
 
     /// Fusionne les corps entrés en contact durant la phase de dérive.

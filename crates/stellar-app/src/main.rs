@@ -12,16 +12,19 @@ mod home;
 mod picking;
 mod render;
 mod sim;
+mod source;
 
 use std::sync::Arc;
 
 use eframe::egui;
 use stellar_application::{EngineRegistry, SimulatorService};
 use stellar_engine_cpu::CpuEngineFactory;
-use stellar_persistence::FileRepository;
+use stellar_persistence::{FileRecordingRepository, FileRepository};
 
 /// Dossier des sauvegardes, relatif au répertoire de lancement.
 const SAVES_DIR: &str = "saves";
+/// Dossier des enregistrements (relecture).
+const RECORDINGS_DIR: &str = "recordings";
 
 /// Journal des plantages, écrit dans le répertoire de lancement.
 const CRASH_LOG: &str = "stellar-crash.log";
@@ -38,7 +41,11 @@ fn install_panic_hook() {
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
         );
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(CRASH_LOG) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(CRASH_LOG)
+        {
             let _ = f.write_all(report.as_bytes());
         }
         let _ = rfd::MessageDialog::new()
@@ -57,7 +64,8 @@ fn main() -> eframe::Result {
     // Un futur moteur (GPU…) s'enregistre ici et devient sélectionnable.
 
     let repository = Arc::new(FileRepository::new(SAVES_DIR));
-    let service = SimulatorService::new(registry, repository);
+    let recordings = Arc::new(FileRecordingRepository::new(RECORDINGS_DIR));
+    let service = SimulatorService::new(registry, repository, recordings);
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

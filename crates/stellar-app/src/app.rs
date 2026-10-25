@@ -8,6 +8,7 @@ use stellar_application::SimulatorService;
 use crate::home::{HomeAction, HomeScreen};
 use crate::render::PointRenderer;
 use crate::sim::{SimAction, SimScreen};
+use crate::source::Source;
 
 enum Screen {
     Home(HomeScreen),
@@ -32,21 +33,49 @@ impl StellarApp {
         }
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let home = HomeScreen::new(&service);
-        let mut app = Self { service, screen: Screen::Home(home), last_frame: None };
+        let mut app = Self {
+            service,
+            screen: Screen::Home(home),
+            last_frame: None,
+        };
         app.autostart();
         app
     }
 
     /// Démarrage direct, pour les essais : `STELLAR_AUTOSTART=<nombre de particules>`.
     fn autostart(&mut self) {
-        let Some(count) = std::env::var("STELLAR_AUTOSTART").ok().and_then(|v| v.parse::<usize>().ok()) else {
+        // `STELLAR_REPLAY=<fichier>` : relecture directe.
+        if let Ok(path) = std::env::var("STELLAR_REPLAY") {
+            if let Ok(player) = self.service.open_replay(std::path::Path::new(&path)) {
+                let source = Source::Replay(Box::new(crate::source::Replay::new(player)));
+                self.screen = Screen::Sim(SimScreen::new(source, self.service.clone(), None));
+                return;
+            }
+        }
+        let Some(count) = std::env::var("STELLAR_AUTOSTART")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+        else {
             return;
         };
         let mut config = stellar_domain::SimulationConfig::default();
         config.initial.count = count.max(2);
         config.physics = stellar_domain::PhysicsParams::suggested(&config.initial, 1.0);
         if let Ok(handle) = self.service.new_simulation(config) {
-            self.screen = Screen::Sim(SimScreen::new(handle, self.service.clone(), None));
+            // `STELLAR_AUTORECORD=<intervalle>` : enregistrement immédiat.
+            if let Some(interval) = std::env::var("STELLAR_AUTORECORD")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                let _ =
+                    self.service
+                        .start_recording("autorecord", &handle, interval, Some(1_000_000));
+            }
+            self.screen = Screen::Sim(SimScreen::new(
+                Source::Live(handle),
+                self.service.clone(),
+                None,
+            ));
         }
     }
 
@@ -77,17 +106,45 @@ impl eframe::App for StellarApp {
             Screen::Home(home) => match home.show(ctx, &self.service) {
                 HomeAction::None => {}
                 HomeAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                HomeAction::Start(config) => match self.service.new_simulation(config) {
+                HomeAction::Start(config, record) => match self.service.new_simulation(config) {
                     Ok(handle) => {
-                        self.screen = Screen::Sim(SimScreen::new(handle, self.service.clone(), None));
+                        if let Some(r) = record {
+                            let name =
+                                format!("rec_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
+                            if let Err(e) = self.service.start_recording(
+                                &name,
+                                &handle,
+                                r.interval,
+                                r.dust_budget,
+                            ) {
+                                home.message = Some(format!("Enregistrement impossible : {e}"));
+                            }
+                        }
+                        self.screen = Screen::Sim(SimScreen::new(
+                            Source::Live(handle),
+                            self.service.clone(),
+                            None,
+                        ));
                     }
                     Err(e) => home.message = Some(e.to_string()),
                 },
                 HomeAction::Load(path) => match self.service.load_simulation(&path) {
                     Ok((handle, view)) => {
-                        self.screen = Screen::Sim(SimScreen::new(handle, self.service.clone(), view));
+                        self.screen = Screen::Sim(SimScreen::new(
+                            Source::Live(handle),
+                            self.service.clone(),
+                            view,
+                        ));
                     }
                     Err(e) => home.message = Some(format!("Chargement impossible : {e}")),
+                },
+                HomeAction::Replay(path) => match self.service.open_replay(&path) {
+                    Ok(player) => {
+                        let source = Source::Replay(Box::new(crate::source::Replay::new(player)));
+                        self.screen =
+                            Screen::Sim(SimScreen::new(source, self.service.clone(), None));
+                    }
+                    Err(e) => home.message = Some(format!("Relecture impossible : {e}")),
                 },
             },
             Screen::Sim(sim) => match sim.show(ctx) {

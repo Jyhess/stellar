@@ -1,6 +1,8 @@
 /target
 /saves
+/recordings
 *.stellar
 *.exe
 *~
-
+*.stellarec
+stellar-crash.log

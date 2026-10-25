@@ -7,7 +7,9 @@ use stellar_domain::{EngineDescriptor, SimulationConfig};
 
 use crate::generator::generate_state;
 use crate::ports::{RepositoryError, SaveData, SaveSummary, SimulationRepository, ViewState};
+use crate::recording::{RecordingHeader, RecordingRepository, RecordingSummary};
 use crate::registry::EngineRegistry;
+use crate::replay::ReplayPlayer;
 use crate::runner::{Phase, SimulationHandle, Snapshot};
 
 #[derive(Debug, thiserror::Error)]
@@ -25,11 +27,20 @@ pub enum AppError {
 pub struct SimulatorService {
     registry: Arc<EngineRegistry>,
     repository: Arc<dyn SimulationRepository>,
+    recordings: Arc<dyn RecordingRepository>,
 }
 
 impl SimulatorService {
-    pub fn new(registry: EngineRegistry, repository: Arc<dyn SimulationRepository>) -> Self {
-        Self { registry: Arc::new(registry), repository }
+    pub fn new(
+        registry: EngineRegistry,
+        repository: Arc<dyn SimulationRepository>,
+        recordings: Arc<dyn RecordingRepository>,
+    ) -> Self {
+        Self {
+            registry: Arc::new(registry),
+            repository,
+            recordings,
+        }
     }
 
     /// Moteurs de calcul disponibles.
@@ -68,7 +79,11 @@ impl SimulatorService {
             .registry
             .get(&data.config.engine)
             .ok_or_else(|| AppError::UnknownEngine(data.config.engine.clone()))?;
-        let SaveData { config, state, view } = data;
+        let SaveData {
+            config,
+            state,
+            view,
+        } = data;
         let handle = SimulationHandle::start(config, factory, move || state, true);
         Ok((handle, view))
     }
@@ -85,11 +100,54 @@ impl SimulatorService {
         if snapshot.phase != Phase::Ready {
             return Err(AppError::NotReady);
         }
-        let data = SaveData { config: config.clone(), state: snapshot.state.clone(), view };
+        let data = SaveData {
+            config: config.clone(),
+            state: snapshot.state.clone(),
+            view,
+        };
         Ok(self.repository.save(name, &data)?)
     }
 
     pub fn list_saves(&self) -> Result<Vec<SaveSummary>, AppError> {
         Ok(self.repository.list()?)
+    }
+
+    /// Démarre l'enregistrement d'une simulation : un instantané maintenant,
+    /// puis tous les `interval` pas.
+    pub fn start_recording(
+        &self,
+        name: &str,
+        handle: &SimulationHandle,
+        interval: u32,
+        dust_budget: Option<u64>,
+    ) -> Result<(), AppError> {
+        let header = RecordingHeader {
+            config: handle.config().clone(),
+            interval: interval.max(1),
+            start_step: handle.latest().state.step,
+            created_at_unix: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            dust_budget,
+        };
+        let writer = self.recordings.create(name, &header)?;
+        handle.start_recording(writer, interval.max(1), dust_budget);
+        Ok(())
+    }
+
+    pub fn list_recordings(&self) -> Result<Vec<RecordingSummary>, AppError> {
+        Ok(self.recordings.list()?)
+    }
+
+    /// Ouvre un enregistrement pour relecture.
+    pub fn open_replay(&self, path: &Path) -> Result<ReplayPlayer, AppError> {
+        let reader = self.recordings.open(path)?;
+        if reader.info().frames.is_empty() {
+            return Err(AppError::Repository(RepositoryError::Format(
+                "enregistrement vide".into(),
+            )));
+        }
+        Ok(ReplayPlayer::new(reader))
     }
 }

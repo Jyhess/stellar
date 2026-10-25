@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use eframe::egui;
-use eframe::egui_wgpu::{self, wgpu};
 use eframe::egui_wgpu::wgpu::util::DeviceExt;
+use eframe::egui_wgpu::{self, wgpu};
 
 /// Une instance = un corps à l'écran (20 octets).
 #[repr(C)]
@@ -151,7 +151,10 @@ impl PointRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState { color: additive, alpha: additive }),
+                    blend: Some(wgpu::BlendState {
+                        color: additive,
+                        alpha: additive,
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -179,7 +182,11 @@ impl PointRenderer {
             if !fits {
                 // Marge de 25 % pour limiter les réallocations, sans dépasser le plafond.
                 let capacity = (needed + needed / 4).clamp(1024, self.chunk_capacity);
-                let chunk = Chunk { buffer: Self::create_instance_buffer(device, capacity), capacity, count: 0 };
+                let chunk = Chunk {
+                    buffer: Self::create_instance_buffer(device, capacity),
+                    capacity,
+                    count: 0,
+                };
                 if i < self.chunks.len() {
                     self.chunks[i] = chunk;
                 } else {
@@ -281,5 +288,10 @@ pub fn mass_color(mass: f64, max_mass: f64) -> [u8; 4] {
             break;
         }
     }
-    [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, 255]
+    [
+        (c[0] * 255.0) as u8,
+        (c[1] * 255.0) as u8,
+        (c[2] * 255.0) as u8,
+        255,
+    ]
 }

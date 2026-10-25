@@ -101,7 +101,11 @@ impl Grid {
             .map(|&i| (pack(coord(boxes[i as usize].center(), origin, cell)), i))
             .collect();
         entries.par_sort_unstable_by_key(|e| e.0);
-        Self { cell, origin, entries }
+        Self {
+            cell,
+            origin,
+            entries,
+        }
     }
 
     fn coord(&self, p: DVec3) -> [i64; 3] {
@@ -211,7 +215,10 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
         .into_par_iter()
         .map(|i| {
             let r = DVec3::splat(radius[i]);
-            Swept { lo: old[i].min(new[i]) - r, hi: old[i].max(new[i]) + r }
+            Swept {
+                lo: old[i].min(new[i]) - r,
+                hi: old[i].max(new[i]) + r,
+            }
         })
         .collect();
     let touches = |i: usize, j: usize| -> bool {
@@ -256,12 +263,20 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
             l
         })
         .collect();
-    let top = level.iter().copied().filter(|&l| l != u32::MAX).max().unwrap_or(0);
+    let top = level
+        .iter()
+        .copied()
+        .filter(|&l| l != u32::MAX)
+        .max()
+        .unwrap_or(0);
 
     let mut pairs: Vec<(u32, u32)> = Vec::new();
     let mut lower: Vec<u32> = Vec::new(); // corps des niveaux déjà traités
     for l in 0..=top {
-        let members: Vec<u32> = (0..n as u32).into_par_iter().filter(|&i| level[i as usize] == l).collect();
+        let members: Vec<u32> = (0..n as u32)
+            .into_par_iter()
+            .filter(|&i| level[i as usize] == l)
+            .collect();
         if members.is_empty() {
             continue;
         }
@@ -320,7 +335,9 @@ pub struct DisjointSets {
 
 impl DisjointSets {
     pub fn new(n: usize) -> Self {
-        Self { parent: (0..n as u32).collect() }
+        Self {
+            parent: (0..n as u32).collect(),
+        }
     }
 
     pub fn find(&mut self, mut x: u32) -> u32 {
@@ -374,7 +391,13 @@ mod tests {
         let mut rng = rand_pcg::Pcg64Mcg::seed_from_u64(3);
         let n = 3_000;
         let old: Vec<DVec3> = (0..n)
-            .map(|_| DVec3::new(rng.gen_range(-20.0..20.0), rng.gen_range(-20.0..20.0), rng.gen_range(-20.0..20.0)))
+            .map(|_| {
+                DVec3::new(
+                    rng.gen_range(-20.0..20.0),
+                    rng.gen_range(-20.0..20.0),
+                    rng.gen_range(-20.0..20.0),
+                )
+            })
             .collect();
         // Quelques corps très rapides pour solliciter la voie « étendus ».
         let new: Vec<DVec3> = old
@@ -382,10 +405,16 @@ mod tests {
             .enumerate()
             .map(|(i, p)| {
                 let speed = if i % 97 == 0 { 15.0 } else { 0.3 };
-                *p + DVec3::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)) * speed
+                *p + DVec3::new(
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                ) * speed
             })
             .collect();
-        let r: Vec<f64> = (0..n).map(|i| if i % 211 == 0 { 2.0 } else { 0.25 }).collect();
+        let r: Vec<f64> = (0..n)
+            .map(|i| if i % 211 == 0 { 2.0 } else { 0.25 })
+            .collect();
         let fast = normalise(find_contacts(&old, &new, &r));
         let slow = normalise(brute(&old, &new, &r));
         assert!(!slow.is_empty());

@@ -2966,6 +2966,7 @@ dependencies = [
  "chrono",
  "eframe",
  "glam",
+ "rayon",
  "rfd",
  "stellar-application",
  "stellar-domain",
@@ -2979,6 +2980,7 @@ version = "0.1.0"
 dependencies = [
  "rand 0.8.8",
  "rand_pcg",
+ "rayon",
  "serde",
  "stellar-domain",
  "thiserror 1.0.69",

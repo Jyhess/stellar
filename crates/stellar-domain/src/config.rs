@@ -15,7 +15,10 @@ pub enum Distribution {
     /// Boule pleine de rayon R, densité uniforme.
     Sphere,
     /// Disque de rayon R dans le plan (x, y), d'épaisseur `thickness`·R.
-    Disk { thickness: f64, profile: DensityProfile },
+    Disk {
+        thickness: f64,
+        profile: DensityProfile,
+    },
 }
 
 /// Vitesse initiale des particules — modes exclusifs.

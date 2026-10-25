@@ -52,7 +52,12 @@ pub fn build(codes: &[u64], pos: &[DVec3], mass: &[f64], cube: Cube, theta: f64)
     if pos.is_empty() {
         return out;
     }
-    let ctx = Ctx { codes, pos, mass, inv_theta: 1.0 / theta.max(1e-3) };
+    let ctx = Ctx {
+        codes,
+        pos,
+        mass,
+        inv_theta: 1.0 / theta.max(1e-3),
+    };
     build_node(&ctx, 0, pos.len(), 0, cube.min, cube.side, &mut out);
     out
 }
@@ -82,7 +87,16 @@ fn child_min(cmin: DVec3, half: f64, c: usize) -> DVec3 {
     )
 }
 
-fn make_node(ctx: &Ctx, com: DVec3, mass: f64, cmin: DVec3, side: f64, start: usize, end: usize, subtree: usize) -> Node {
+fn make_node(
+    ctx: &Ctx,
+    com: DVec3,
+    mass: f64,
+    cmin: DVec3,
+    side: f64,
+    start: usize,
+    end: usize,
+    subtree: usize,
+) -> Node {
     let center = cmin + DVec3::splat(0.5 * side);
     let r_crit = side * ctx.inv_theta + (com - center).length();
     Node {
@@ -95,7 +109,15 @@ fn make_node(ctx: &Ctx, com: DVec3, mass: f64, cmin: DVec3, side: f64, start: us
     }
 }
 
-fn build_node(ctx: &Ctx, start: usize, end: usize, level: u32, cmin: DVec3, side: f64, out: &mut Vec<Node>) {
+fn build_node(
+    ctx: &Ctx,
+    start: usize,
+    end: usize,
+    level: u32,
+    cmin: DVec3,
+    side: f64,
+    out: &mut Vec<Node>,
+) {
     let count = end - start;
     let me = out.len();
 
@@ -106,7 +128,11 @@ fn build_node(ctx: &Ctx, start: usize, end: usize, level: u32, cmin: DVec3, side
             m += ctx.mass[j];
             mx += ctx.pos[j] * ctx.mass[j];
         }
-        let com = if m > 0.0 { mx / m } else { cmin + DVec3::splat(0.5 * side) };
+        let com = if m > 0.0 {
+            mx / m
+        } else {
+            cmin + DVec3::splat(0.5 * side)
+        };
         out.push(make_node(ctx, com, m, cmin, side, start, end, 1));
         return;
     }
@@ -114,7 +140,14 @@ fn build_node(ctx: &Ctx, start: usize, end: usize, level: u32, cmin: DVec3, side
     let ranges = child_ranges(ctx.codes, start, end, level);
     let half = 0.5 * side;
     // Emplacement réservé pour le nœud courant, complété après les enfants.
-    out.push(Node { com: DVec3::ZERO, mass: 0.0, crit2: 0.0, start: 0, count: 0, subtree: 0 });
+    out.push(Node {
+        com: DVec3::ZERO,
+        mass: 0.0,
+        crit2: 0.0,
+        start: 0,
+        count: 0,
+        subtree: 0,
+    });
 
     let mut m = 0.0;
     let mut mx = DVec3::ZERO;
@@ -146,7 +179,11 @@ fn build_node(ctx: &Ctx, start: usize, end: usize, level: u32, cmin: DVec3, side
         }
     }
 
-    let com = if m > 0.0 { mx / m } else { cmin + DVec3::splat(half) };
+    let com = if m > 0.0 {
+        mx / m
+    } else {
+        cmin + DVec3::splat(half)
+    };
     let subtree = out.len() - me;
     out[me] = make_node(ctx, com, m, cmin, side, start, end, subtree);
 }
@@ -154,7 +191,14 @@ fn build_node(ctx: &Ctx, start: usize, end: usize, level: u32, cmin: DVec3, side
 /// Accélération (sans le facteur G) et potentiel (sans G) subis par le corps
 /// `i` situé en `p`, avec adoucissement de Plummer ε² = `eps2`.
 #[inline]
-pub fn field_at(nodes: &[Node], pos: &[DVec3], mass: &[f64], i: usize, p: DVec3, eps2: f64) -> (DVec3, f64) {
+pub fn field_at(
+    nodes: &[Node],
+    pos: &[DVec3],
+    mass: &[f64],
+    i: usize,
+    p: DVec3,
+    eps2: f64,
+) -> (DVec3, f64) {
     let mut acc = DVec3::ZERO;
     let mut phi = 0.0;
     let mut k = 0usize;

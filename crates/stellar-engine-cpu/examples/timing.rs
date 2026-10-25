@@ -10,7 +10,10 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let n: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(200_000);
     let steps: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(3);
-    let ic = InitialConditions { count: n, ..Default::default() };
+    let ic = InitialConditions {
+        count: n,
+        ..Default::default()
+    };
     let t = Instant::now();
     let s = generate_state(&ic, 1.0);
     println!("génération : {:?}", t.elapsed());

@@ -90,6 +90,27 @@ En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la dir
 
 ---
 
+### Enregistrement et relecture
+
+Une simulation lourde peut être enregistrée puis rejouée de façon fluide, à 60 images par seconde, avec une navigation entièrement libre.
+
+- **Enregistrer :**
+  - **F9**, ou le panneau « Simulation », démarre ou arrête l'enregistrement à tout moment ;
+  - à l'accueil, la case « Enregistrer dès le départ » lance l'enregistrement avec la simulation ;
+  - un instantané (positions, vitesses, masses, fusions) est écrit tous les N pas, réglable, dans le dossier `recordings\` (fichiers `.stellarec`) ;
+  - l'écriture se fait dans un thread dédié, ce qui ne ralentit presque pas le calcul.
+- **Budget de poussière (optionnel) :**
+  - au plus B particules de masse 1 par instantané (1 million par défaut), choisies d'après leur identifiant : ce sont toujours les mêmes, sans clignotement ;
+  - les corps plus massifs sont toujours tous enregistrés ;
+  - chaque particule gardée est éclairée en proportion de celles qu'elle représente, et l'exclusion disparaît d'elle-même quand le nombre de corps passe sous le budget ;
+  - un instantané pèse environ 12 octets par corps enregistré, soit environ 12 Mo pour un million.
+- **Rejouer :**
+  - depuis la liste « Enregistrements » de l'accueil ;
+  - entre deux instantanés, chaque corps suit une interpolation cubique d'Hermite sur ses positions et vitesses, et un corps absorbé rejoint celui qui l'absorbe ;
+  - commandes : Espace (lecture / pause), ← / → (instantané précédent / suivant), ↑ / ↓ (vitesse), ⌫ (sens de lecture), barre de temps ;
+  - la caméra, la sélection, les traces (T, R) et la vue d'ensemble fonctionnent comme en direct.
+- **Après un plantage :** un enregistrement interrompu reste lisible, car son index est reconstruit à l'ouverture.
+
 ## 3. Architecture
 
 Le projet suit la **clean architecture**. Les dépendances pointent toutes vers le domaine :

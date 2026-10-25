@@ -11,10 +11,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::recording::{BodyFate, Keyframe, Recorder, RecordingStatus, RecordingWriter};
 use crate::trace::TraceSet;
 use stellar_domain::{
-    ranking, BodyId, Diagnostics, EngineFactory, PhysicsEngine, SimulationConfig,
-    SimulationState,
+    ranking, BodyId, Diagnostics, EngineFactory, PhysicsEngine, SimulationConfig, SimulationState,
 };
 
 /// Nombre de corps listés dans le classement publié.
@@ -76,6 +76,12 @@ enum Command {
     StartTraces(Vec<BodyId>),
     StopTraces,
     SetTraceReference(Option<BodyId>),
+    StartRecording {
+        writer: Box<dyn RecordingWriter>,
+        interval: u32,
+        dust_budget: Option<u64>,
+    },
+    StopRecording,
     Shutdown,
 }
 
@@ -92,6 +98,7 @@ struct Shared {
     fates: Mutex<HashMap<BodyId, Fate>>,
     traces: Mutex<Option<TraceSet>>,
     tracing: AtomicBool,
+    recording: Arc<RecordingStatus>,
 }
 
 /// Poignée de pilotage d'une simulation en cours. L'arrêter (ou la détruire)
@@ -122,6 +129,7 @@ impl SimulationHandle {
             fates: Mutex::new(HashMap::new()),
             traces: Mutex::new(None),
             tracing: AtomicBool::new(false),
+            recording: Arc::new(RecordingStatus::default()),
         });
         let worker_shared = Arc::clone(&shared);
         let params = config.physics;
@@ -145,11 +153,17 @@ impl SimulationHandle {
                     last_step_ms: 0.0,
                     last_publish: None,
                     step,
+                    recording: None,
                 }
                 .run();
             })
             .expect("impossible de lancer le thread de simulation");
-        Self { config, tx, shared, thread: Some(thread) }
+        Self {
+            config,
+            tx,
+            shared,
+            thread: Some(thread),
+        }
     }
 
     pub fn config(&self) -> &SimulationConfig {
@@ -188,6 +202,31 @@ impl SimulationHandle {
     /// pas, à partir de maintenant). Remplace les traces existantes.
     pub fn start_traces(&self, ids: Vec<BodyId>) {
         let _ = self.tx.send(Command::StartTraces(ids));
+    }
+
+    /// Démarre l'enregistrement : un instantané maintenant, puis tous les
+    /// `interval` pas. Remplace un éventuel enregistrement en cours.
+    pub fn start_recording(
+        &self,
+        writer: Box<dyn RecordingWriter>,
+        interval: u32,
+        dust_budget: Option<u64>,
+    ) {
+        let _ = self.tx.send(Command::StartRecording {
+            writer,
+            interval,
+            dust_budget,
+        });
+    }
+
+    /// Arrête l'enregistrement (le fichier est clos par le thread de calcul).
+    pub fn stop_recording(&self) {
+        let _ = self.tx.send(Command::StopRecording);
+    }
+
+    /// État de l'enregistrement (instantanés écrits, octets, erreurs…).
+    pub fn recording_status(&self) -> &RecordingStatus {
+        &self.shared.recording
     }
 
     /// Corps de référence pour l'affichage relatif des traces.
@@ -251,10 +290,70 @@ struct Worker {
     last_publish: Option<Instant>,
     /// Numéro du pas courant (pour dater les points des traces).
     step: u64,
+    recording: Option<ActiveRecording>,
+}
+
+/// Enregistrement en cours : un instantané tous les `interval` pas.
+struct ActiveRecording {
+    recorder: Recorder,
+    interval: u64,
+    next_step: u64,
+    /// Devenirs accumulés depuis le dernier instantané.
+    pending: Vec<(BodyId, BodyFate)>,
 }
 
 impl Worker {
     fn run(mut self) {
+        self.run_loop();
+        // Fin du thread : un enregistrement en cours est clos proprement.
+        self.stop_recording();
+    }
+
+    fn start_recording(
+        &mut self,
+        writer: Box<dyn RecordingWriter>,
+        interval: u32,
+        dust_budget: Option<u64>,
+    ) {
+        self.stop_recording();
+        let status = &self.shared.recording;
+        status.frames.store(0, Ordering::Relaxed);
+        status.bytes.store(0, Ordering::Relaxed);
+        status
+            .interval
+            .store(interval.max(1) as u64, Ordering::Relaxed);
+        *status.error.lock().expect("verrou empoisonné") = None;
+        let recorder = Recorder::start(writer, Arc::clone(status), dust_budget);
+        let mut rec = ActiveRecording {
+            recorder,
+            interval: interval.max(1) as u64,
+            next_step: self.step,
+            pending: Vec::new(),
+        };
+        self.record_keyframe(&mut rec);
+        self.recording = Some(rec);
+    }
+
+    fn stop_recording(&mut self) {
+        if let Some(rec) = self.recording.take() {
+            let _ = rec.recorder.finish();
+        }
+    }
+
+    fn record_keyframe(&self, rec: &mut ActiveRecording) {
+        let mut s = SimulationState::default();
+        self.engine.write_state(&mut s);
+        rec.recorder.push(Keyframe {
+            step: self.step,
+            time: s.time,
+            bodies: s.bodies,
+            fates: std::mem::take(&mut rec.pending),
+            dust_weight: 1.0,
+        });
+        rec.next_step = self.step + rec.interval;
+    }
+
+    fn run_loop(&mut self) {
         self.publish();
         loop {
             // 1. Traitement des commandes (bloquant en pause).
@@ -298,6 +397,12 @@ impl Worker {
                             set.push(self.step, &pos);
                         }
                     }
+                    Command::StartRecording {
+                        writer,
+                        interval,
+                        dust_budget,
+                    } => self.start_recording(writer, interval, dust_budget),
+                    Command::StopRecording => self.stop_recording(),
                     Command::StopTraces => {
                         self.shared.tracing.store(false, Ordering::Release);
                         *self.shared.traces.lock().expect("verrou empoisonné") = None;
@@ -349,6 +454,20 @@ impl Worker {
                     set.push(self.step, &pos);
                 }
             }
+        }
+        if let Some(mut rec) = self.recording.take() {
+            rec.pending.extend(
+                report
+                    .merges
+                    .iter()
+                    .map(|&(a, s)| (a, BodyFate::MergedInto(s))),
+            );
+            rec.pending
+                .extend(report.removed.iter().map(|&id| (id, BodyFate::Removed)));
+            if self.step >= rec.next_step {
+                self.record_keyframe(&mut rec);
+            }
+            self.recording = Some(rec);
         }
         if !report.merges.is_empty() || !report.removed.is_empty() {
             let mut fates = self.shared.fates.lock().expect("verrou empoisonné");

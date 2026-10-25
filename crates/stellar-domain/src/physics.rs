@@ -100,8 +100,18 @@ mod tests {
     #[test]
     fn merge_conserves_mass_and_momentum() {
         let g = [
-            MergeInput { id: 7, mass: 1.0, position: Vec3::X, velocity: Vec3::Y },
-            MergeInput { id: 3, mass: 3.0, position: -Vec3::X, velocity: -Vec3::Y },
+            MergeInput {
+                id: 7,
+                mass: 1.0,
+                position: Vec3::X,
+                velocity: Vec3::Y,
+            },
+            MergeInput {
+                id: 3,
+                mass: 3.0,
+                position: -Vec3::X,
+                velocity: -Vec3::Y,
+            },
         ];
         let m = merge(&g);
         assert_eq!(m.id, 3);
@@ -114,8 +124,18 @@ mod tests {
     #[test]
     fn merge_tie_keeps_smallest_id() {
         let g = [
-            MergeInput { id: 9, mass: 1.0, position: Vec3::ZERO, velocity: Vec3::ZERO },
-            MergeInput { id: 2, mass: 1.0, position: Vec3::ZERO, velocity: Vec3::ZERO },
+            MergeInput {
+                id: 9,
+                mass: 1.0,
+                position: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+            },
+            MergeInput {
+                id: 2,
+                mass: 1.0,
+                position: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+            },
         ];
         assert_eq!(merge(&g).id, 2);
     }

@@ -53,7 +53,9 @@ fn vs_main(in: VsIn) -> VsOut {
     let offset = vec4<f32>(corner * size, 0.0, 0.0);
     out.clip = u.proj * (center + offset);
     out.uv = corner;
-    out.color = vec4<f32>(in.color.rgb * intensity * u.look.x, 1.0);
+    // Le canal alpha porte un poids (×16) : 16/255 ↔ 1.
+    let weight = in.color.a * (255.0 / 16.0);
+    out.color = vec4<f32>(in.color.rgb * intensity * weight * u.look.x, 1.0);
     return out;
 }
 
