@@ -133,6 +133,14 @@ cargo test --release            # tests unitaires et physiques
 cargo bench -p stellar-engine-cpu   # temps par pas pour 10k / 100k / 1M corps
 ```
 
+Mesure rapide du moteur, avec affichage de l'évolution (corps restants, fusions, dérive d'énergie) :
+
+```powershell
+cargo run --release -p stellar-engine-cpu --example timing -- 1000000 5
+```
+
+Pour lancer directement une simulation sans passer par l'accueil : `$env:STELLAR_AUTOSTART=200000; cargo run --release`.
+
 Les tests physiques (`crates/stellar-engine-cpu/tests/physics.rs`) vérifient notamment :
 
 - la précision de Barnes-Hut par rapport à la somme directe ;
