@@ -23,7 +23,35 @@ use stellar_persistence::FileRepository;
 /// Dossier des sauvegardes, relatif au répertoire de lancement.
 const SAVES_DIR: &str = "saves";
 
+/// Journal des plantages, écrit dans le répertoire de lancement.
+const CRASH_LOG: &str = "stellar-crash.log";
+
+/// En mode fenêtré, Windows n'affiche pas la console : toute erreur fatale est
+/// consignée dans `stellar-crash.log` et signalée par une boîte de dialogue.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current().name().unwrap_or("?").to_owned();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let report = format!(
+            "[{}] Plantage dans le thread « {thread} »\n{info}\n\n{backtrace}\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        );
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(CRASH_LOG) {
+            let _ = f.write_all(report.as_bytes());
+        }
+        let _ = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Stellar — erreur fatale")
+            .set_description(format!("{info}\n\nDétails enregistrés dans {CRASH_LOG}."))
+            .show();
+        default(info);
+    }));
+}
+
 fn main() -> eframe::Result {
+    install_panic_hook();
     let mut registry = EngineRegistry::new();
     registry.register(Arc::new(CpuEngineFactory));
     // Un futur moteur (GPU…) s'enregistre ici et devient sélectionnable.

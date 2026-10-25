@@ -45,11 +45,23 @@ pub struct PointRenderer {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    instance_buffer: wgpu::Buffer,
-    capacity: usize,
-    count: u32,
+    /// Tampons d'instances : un même tampon ne peut dépasser la limite
+    /// `max_buffer_size` du GPU (256 Mo par défaut, soit ~13 millions de
+    /// corps), d'où un découpage en tronçons.
+    chunks: Vec<Chunk>,
+    /// Nombre maximal d'instances par tronçon.
+    chunk_capacity: usize,
     generation: u64,
 }
+
+struct Chunk {
+    buffer: wgpu::Buffer,
+    capacity: usize,
+    count: u32,
+}
+
+/// Plafond d'instances par tronçon (80 Mo), bien en deçà des limites usuelles.
+const MAX_CHUNK_INSTANCES: usize = 4 * 1024 * 1024;
 
 impl PointRenderer {
     /// Installe le moteur de rendu dans l'état wgpu d'eframe.
@@ -146,17 +158,39 @@ impl PointRenderer {
             multiview: None,
             cache: None,
         });
-        let capacity = 1024;
-        let instance_buffer = Self::create_instance_buffer(device, capacity);
+        let stride = std::mem::size_of::<Instance>() as u64;
+        let by_limit = (device.limits().max_buffer_size / stride) as usize;
         Self {
             pipeline,
             uniform_buffer,
             bind_group,
-            instance_buffer,
-            capacity,
-            count: 0,
+            chunks: Vec::new(),
+            chunk_capacity: by_limit.clamp(1024, MAX_CHUNK_INSTANCES),
             generation: u64::MAX,
         }
+    }
+
+    /// Téléverse les instances, tronçon par tronçon.
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[Instance]) {
+        let parts: Vec<&[Instance]> = instances.chunks(self.chunk_capacity).collect();
+        for (i, part) in parts.iter().enumerate() {
+            let needed = part.len();
+            let fits = self.chunks.get(i).is_some_and(|c| c.capacity >= needed);
+            if !fits {
+                // Marge de 25 % pour limiter les réallocations, sans dépasser le plafond.
+                let capacity = (needed + needed / 4).clamp(1024, self.chunk_capacity);
+                let chunk = Chunk { buffer: Self::create_instance_buffer(device, capacity), capacity, count: 0 };
+                if i < self.chunks.len() {
+                    self.chunks[i] = chunk;
+                } else {
+                    self.chunks.push(chunk);
+                }
+            }
+            queue.write_buffer(&self.chunks[i].buffer, 0, bytemuck::cast_slice(part));
+            self.chunks[i].count = needed as u32;
+        }
+        // Tronçons devenus inutiles : libérés.
+        self.chunks.truncate(parts.len());
     }
 
     fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -189,15 +223,7 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
         };
         if let Some(batch) = &self.batch {
             if batch.generation != r.generation {
-                let n = batch.instances.len();
-                if n > r.capacity {
-                    r.capacity = n.next_power_of_two();
-                    r.instance_buffer = PointRenderer::create_instance_buffer(device, r.capacity);
-                }
-                if n > 0 {
-                    queue.write_buffer(&r.instance_buffer, 0, bytemuck::cast_slice(&batch.instances));
-                }
-                r.count = n as u32;
+                r.upload(device, queue, &batch.instances);
                 r.generation = batch.generation;
             }
         }
@@ -214,13 +240,16 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
         let Some(r) = resources.get::<PointRenderer>() else {
             return;
         };
-        if r.count == 0 {
+        if r.chunks.iter().all(|c| c.count == 0) {
             return;
         }
         pass.set_pipeline(&r.pipeline);
         pass.set_bind_group(0, &r.bind_group, &[]);
-        pass.set_vertex_buffer(0, r.instance_buffer.slice(..));
-        pass.draw(0..4, 0..r.count);
+        let stride = std::mem::size_of::<Instance>() as u64;
+        for c in r.chunks.iter().filter(|c| c.count > 0) {
+            pass.set_vertex_buffer(0, c.buffer.slice(..c.count as u64 * stride));
+            pass.draw(0..4, 0..c.count);
+        }
     }
 }
 

@@ -18,6 +18,12 @@ use crate::format;
 use crate::picking::{pick, visible_top_k};
 use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, Uniforms};
 
+/// Luminosité initiale : le mélange additif sature quand les corps se
+/// superposent, d'où une atténuation avec leur nombre (1 pour un million).
+fn default_brightness(count: usize) -> f32 {
+    (1e6 / count.max(1) as f64).powf(0.75).clamp(0.05, 1.5) as f32
+}
+
 pub enum SimAction {
     None,
     BackHome,
@@ -107,6 +113,7 @@ impl SimScreen {
         let selected = camera.followed();
         let snapshot = handle.latest();
         let paused = !snapshot.running;
+        let handle_count = handle.config().initial.count.max(snapshot.state.bodies.len());
         Self {
             handle,
             service,
@@ -123,7 +130,7 @@ impl SimScreen {
             batch: None,
             generation: 0,
             need_upload: true,
-            brightness: 1.0,
+            brightness: default_brightness(handle_count),
             dust_floor: 0.2,
             min_pixels: 1.6,
             limit_rate: false,

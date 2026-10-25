@@ -288,8 +288,9 @@ impl HomeScreen {
             .show(ui, |ui| self.advanced(ui, service, ic));
 
         ui.add_space(10.0);
-        let mem_mb = self.count as f64 * 220.0 / 1e6;
-        ui.label(RichText::new(format!("Mémoire estimée : ≈ {:.0} Mo", mem_mb)).weak());
+        // Mesuré : ≈ 4,2 Go pour 10 millions de corps (moteur, instantanés, rendu).
+        let mem_mb = self.count as f64 * 420.0 / 1e6;
+        ui.label(RichText::new(if mem_mb >= 1000.0 { format!("Mémoire estimée : ≈ {:.1} Go", mem_mb / 1000.0).replace('.', ",") } else { format!("Mémoire estimée : ≈ {:.0} Mo", mem_mb) }).weak());
         if ui
             .add_sized([260.0, 36.0], egui::Button::new(RichText::new("▶  Lancer la simulation").size(17.0)))
             .clicked()

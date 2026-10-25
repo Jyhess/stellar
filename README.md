@@ -33,6 +33,10 @@ La première compilation prend quelques minutes, le temps de télécharger et de
 
 L'affichage est plafonné à 120 images par seconde.
 
+Comptez environ 420 octets de mémoire vive par particule : à peu près 4,2 Go pour 10 millions.
+
+En cas d'erreur fatale, une boîte de dialogue s'affiche et le détail est consigné dans `stellar-crash.log`, dans le répertoire de lancement.
+
 Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de lancement.
 
 ---
