@@ -5,12 +5,13 @@
 //! immuable, que l'interface lit sans jamais bloquer le calcul.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::trace::TraceSet;
 use stellar_domain::{
     ranking, BodyId, Diagnostics, EngineFactory, PhysicsEngine, SimulationConfig,
     SimulationState,
@@ -72,6 +73,8 @@ enum Command {
     Resume,
     StepOnce,
     SetMaxRate(Option<f64>),
+    StartTraces(Vec<BodyId>),
+    StopTraces,
     Shutdown,
 }
 
@@ -86,6 +89,8 @@ struct Shared {
     latest: Mutex<Arc<Snapshot>>,
     sequence: AtomicU64,
     fates: Mutex<HashMap<BodyId, Fate>>,
+    traces: Mutex<Option<TraceSet>>,
+    tracing: AtomicBool,
 }
 
 /// Poignée de pilotage d'une simulation en cours. L'arrêter (ou la détruire)
@@ -114,6 +119,8 @@ impl SimulationHandle {
             latest: Mutex::new(Arc::new(Snapshot::initialising(!start_paused))),
             sequence: AtomicU64::new(0),
             fates: Mutex::new(HashMap::new()),
+            traces: Mutex::new(None),
+            tracing: AtomicBool::new(false),
         });
         let worker_shared = Arc::clone(&shared);
         let params = config.physics;
@@ -172,6 +179,22 @@ impl SimulationHandle {
     /// Limite la cadence de calcul (pas par seconde) ; `None` = illimitée.
     pub fn set_max_rate(&self, rate: Option<f64>) {
         let _ = self.tx.send(Command::SetMaxRate(rate));
+    }
+
+    /// Démarre l'enregistrement des traces des corps donnés (un point par
+    /// pas, à partir de maintenant). Remplace les traces existantes.
+    pub fn start_traces(&self, ids: Vec<BodyId>) {
+        let _ = self.tx.send(Command::StartTraces(ids));
+    }
+
+    /// Arrête et efface les traces.
+    pub fn stop_traces(&self) {
+        let _ = self.tx.send(Command::StopTraces);
+    }
+
+    /// Accès en lecture aux traces (verrou bref : copier ce qui est utile).
+    pub fn traces(&self) -> MutexGuard<'_, Option<TraceSet>> {
+        self.shared.traces.lock().expect("verrou empoisonné")
     }
 
     /// Identifiant actuel d'un corps, en suivant la chaîne des fusions.
@@ -249,6 +272,17 @@ impl Worker {
                         self.publish();
                     }
                     Command::SetMaxRate(r) => self.max_rate = r.filter(|r| *r > 0.0),
+                    Command::StartTraces(ids) => {
+                        let mut set = TraceSet::new(ids);
+                        let pos = self.engine.positions_of(&set.current_ids());
+                        set.push(&pos);
+                        *self.shared.traces.lock().expect("verrou empoisonné") = Some(set);
+                        self.shared.tracing.store(true, Ordering::Release);
+                    }
+                    Command::StopTraces => {
+                        self.shared.tracing.store(false, Ordering::Release);
+                        *self.shared.traces.lock().expect("verrou empoisonné") = None;
+                    }
                     Command::Shutdown => return,
                 }
             }
@@ -285,6 +319,17 @@ impl Worker {
         } else {
             0.9 * self.steps_per_second + 0.1 * inst
         };
+        if self.shared.tracing.load(Ordering::Acquire) {
+            let mut guard = self.shared.traces.lock().expect("verrou empoisonné");
+            if let Some(set) = guard.as_mut() {
+                set.apply_fates(&report.merges, &report.removed);
+                let ids = set.current_ids();
+                if !ids.is_empty() {
+                    let pos = self.engine.positions_of(&ids);
+                    set.push(&pos);
+                }
+            }
+        }
         if !report.merges.is_empty() || !report.removed.is_empty() {
             let mut fates = self.shared.fates.lock().expect("verrou empoisonné");
             for (absorbed, survivor) in report.merges {

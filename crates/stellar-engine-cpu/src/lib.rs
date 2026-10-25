@@ -378,6 +378,24 @@ impl PhysicsEngine for CpuEngine {
         self.ids.len()
     }
 
+    fn positions_of(&self, ids: &[BodyId]) -> Vec<Option<DVec3>> {
+        // Un seul passage, en s'arrêtant dès que tout est trouvé.
+        let mut out = vec![None; ids.len()];
+        let mut remaining = ids.len();
+        for (i, id) in self.ids.iter().enumerate() {
+            if remaining == 0 {
+                break;
+            }
+            for (k, w) in ids.iter().enumerate() {
+                if w == id && out[k].is_none() {
+                    out[k] = Some(self.pos[i]);
+                    remaining -= 1;
+                }
+            }
+        }
+        out
+    }
+
     fn diagnostics(&self) -> Diagnostics {
         self.diagnostics
     }

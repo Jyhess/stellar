@@ -14,8 +14,10 @@ pub mod ports;
 pub mod registry;
 pub mod runner;
 pub mod service;
+pub mod trace;
 
 pub use ports::{RepositoryError, SaveData, SaveSummary, SimulationRepository, ViewState};
 pub use registry::EngineRegistry;
 pub use runner::{Phase, SimulationHandle, Snapshot};
 pub use service::{AppError, SimulatorService};
+pub use trace::{Trace, TraceSet};

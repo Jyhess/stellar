@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, Key, Pos2, RichText, Stroke};
 use eframe::egui_wgpu;
 use glam::DVec3;
+use stellar_application::trace::MAX_TAIL;
 use stellar_application::{Phase, SimulationHandle, SimulatorService, Snapshot, ViewState};
 use stellar_domain::physics::body_radius;
 use stellar_domain::{ranking, BodyId};
@@ -27,6 +28,19 @@ const MOUSE_SENSITIVITY: f64 = 0.0022;
 const SCROLL_SENSITIVITY: f64 = 0.0025;
 const PICK_TOLERANCE_PX: f64 = 10.0;
 const TOAST_DURATION: Duration = Duration::from_secs(4);
+/// Couleurs des traces, une par corps tracé.
+const TRACE_PALETTE: [Color32; 10] = [
+    Color32::from_rgb(255, 99, 71),
+    Color32::from_rgb(255, 200, 40),
+    Color32::from_rgb(120, 230, 90),
+    Color32::from_rgb(60, 200, 255),
+    Color32::from_rgb(190, 120, 255),
+    Color32::from_rgb(255, 120, 200),
+    Color32::from_rgb(255, 150, 60),
+    Color32::from_rgb(80, 255, 200),
+    Color32::from_rgb(150, 170, 255),
+    Color32::from_rgb(230, 230, 230),
+];
 /// Fraction de la masse cadrée par la vue d'ensemble.
 const OVERVIEW_MASS_FRACTION: f64 = 0.9;
 /// Marge autour de la sphère cadrée.
@@ -69,6 +83,11 @@ pub struct SimScreen {
     last_aspect: f64,
     toast: Option<(String, Instant)>,
     save_job: Option<Receiver<Result<PathBuf, String>>>,
+
+    traces_active: bool,
+    /// Affiche seulement la queue récente des traces.
+    trace_tail_only: bool,
+    trace_tail_len: usize,
 }
 
 impl SimScreen {
@@ -108,6 +127,9 @@ impl SimScreen {
             last_aspect: 16.0 / 9.0,
             toast: None,
             save_job: None,
+            traces_active: false,
+            trace_tail_only: false,
+            trace_tail_len: 600,
         }
     }
 
@@ -195,6 +217,24 @@ impl SimScreen {
         self.camera.mode = Mode::Orbit { target: id, distance };
         self.refresh_selection_cache();
         self.camera.place_in_orbit(p);
+    }
+
+    /// Active le tracé des 10 corps les plus massifs affichés, ou l'arrête.
+    fn toggle_traces(&mut self) {
+        if self.traces_active {
+            self.traces_active = false;
+            self.handle.stop_traces();
+            self.notify("Traces effacées.");
+            return;
+        }
+        if self.snapshot.phase != Phase::Ready || self.snapshot.top.is_empty() {
+            self.notify("La simulation n'est pas encore prête.");
+            return;
+        }
+        // Les corps du classement affiché à cet instant.
+        self.handle.start_traces(self.snapshot.top.iter().map(|(id, _)| *id).collect());
+        self.traces_active = true;
+        self.notify("Traces activées sur les 10 corps les plus massifs.");
     }
 
     /// Oriente la visée vers le centre de gravité (vol libre).
@@ -294,6 +334,9 @@ impl SimScreen {
                 self.toggle_pause();
             }
             self.handle.step_once();
+        }
+        if pressed(Key::T) {
+            self.toggle_traces();
         }
         if pressed(Key::C) {
             self.aim_at_barycenter();
@@ -543,6 +586,51 @@ impl SimScreen {
             }
         }
 
+        // Traces.
+        if self.traces_active {
+            // Copie rapide sous verrou, puis dessin hors verrou.
+            let lines: Vec<Vec<DVec3>> = match self.handle.traces().as_ref() {
+                Some(set) => set
+                    .traces
+                    .iter()
+                    .map(|t| if self.trace_tail_only { t.recent(self.trace_tail_len) } else { t.full() })
+                    .collect(),
+                None => Vec::new(),
+            };
+            for (k, pts) in lines.iter().enumerate() {
+                let color = TRACE_PALETTE[k % TRACE_PALETTE.len()];
+                if pts.len() < 2 {
+                    continue;
+                }
+                let screen: Vec<Option<Pos2>> =
+                    pts.iter().map(|p| self.camera.project(*p, aspect).map(to_screen)).collect();
+                if self.trace_tail_only {
+                    // Dégradé : opaque au présent, transparent vers le passé.
+                    let n = screen.len() as f32;
+                    for (k, w) in screen.windows(2).enumerate() {
+                        if let [Some(a), Some(b)] = w {
+                            let alpha = (k as f32 + 1.0) / n;
+                            painter.line_segment([*a, *b], Stroke::new(1.5_f32, color.gamma_multiply(alpha)));
+                        }
+                    }
+                } else {
+                    // Tronçons continus devant la caméra, en une seule polyligne chacun.
+                    let mut run: Vec<Pos2> = Vec::new();
+                    for p in screen.iter().copied().chain(std::iter::once(None)) {
+                        match p {
+                            Some(q) => run.push(q),
+                            None => {
+                                if run.len() >= 2 {
+                                    painter.add(egui::Shape::line(std::mem::take(&mut run), Stroke::new(1.5_f32, color)));
+                                }
+                                run.clear();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Réticule en mode capturé.
         if self.captured && !self.menu_open {
             let c = rect.center();
@@ -580,7 +668,7 @@ impl SimScreen {
         }
 
         let hint = if self.captured {
-            "Tab : libérer la souris · Échap : menu · Origine / PgDn / PgUp : corps par masse · C : barycentre · V : vue d'ensemble · F5 : sauvegarder"
+            "Tab : libérer la souris · Échap : menu · Origine / PgDn / PgUp : corps par masse · C : barycentre · V : vue d'ensemble · T : traces · F5 : sauvegarder"
         } else {
             "Souris libre — clic gauche : suivre un corps · clic droit ou Tab : reprendre la visée · Échap : menu"
         };
@@ -713,6 +801,8 @@ impl SimScreen {
                     }
                 }
                 ui.separator();
+                self.traces_panel(ui);
+                ui.separator();
                 ui.label(RichText::new("Les plus massifs").strong());
                 egui::Grid::new("top").num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
                     for (rank, (id, m)) in snap.top.iter().enumerate() {
@@ -731,6 +821,47 @@ impl SimScreen {
                 self.select_index(i);
             }
         }
+    }
+
+    fn traces_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Traces (T)").strong());
+            let label = if self.traces_active { "Effacer" } else { "Tracer le top 10" };
+            if ui.small_button(label).clicked() {
+                self.toggle_traces();
+            }
+        });
+        if !self.traces_active {
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut self.trace_tail_only, false, "Historique");
+            ui.radio_value(&mut self.trace_tail_only, true, "Queue");
+        });
+        if self.trace_tail_only {
+            ui.add(
+                egui::Slider::new(&mut self.trace_tail_len, 10..=MAX_TAIL)
+                    .logarithmic(true)
+                    .text("pas"),
+            );
+        }
+        let rows: Vec<(BodyId, Option<BodyId>)> = match self.handle.traces().as_ref() {
+            Some(set) => set.traces.iter().map(|t| (t.origin, t.current)).collect(),
+            None => Vec::new(),
+        };
+        egui::Grid::new("traces").num_columns(2).spacing([8.0, 1.0]).show(ui, |ui| {
+            for (k, (origin, current)) in rows.into_iter().enumerate() {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 2.0, TRACE_PALETTE[k % TRACE_PALETTE.len()]);
+                let text = match current {
+                    Some(c) if c == origin => format!("#{c}"),
+                    Some(c) => format!("#{origin}, fusionné dans #{c}"),
+                    None => format!("#{origin} (éliminé)"),
+                };
+                ui.label(RichText::new(text).monospace());
+                ui.end_row();
+            }
+        });
     }
 
     fn menu(&mut self, ctx: &egui::Context) -> SimAction {
@@ -775,6 +906,7 @@ impl SimScreen {
                         ("PgDn / PgUp", "corps suivant / précédent par masse"),
                         ("C", "viser le centre de gravité"),
                         ("V", "vue d'ensemble (90 % de la masse)"),
+                        ("T", "tracer les 10 plus massifs / effacer"),
                         ("Espace / P", "pause / pas à pas"),
                         ("Tab", "libérer / capturer la souris"),
                         ("Clic droit", "reprendre la visée (souris libre)"),

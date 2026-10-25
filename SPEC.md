@@ -52,3 +52,4 @@
 - Souris libre : un clic droit reprend la visée.
 - C : viser le centre de gravité ; V : vue d'ensemble (recul, dans la direction de visée, jusqu'à voir la sphère centrée sur le barycentre contenant 90 % de la masse).
 - Affichage plafonné à 120 images par seconde.
+- Mode trace (T) : trajectoires des 10 corps les plus massifs affichés à l'activation, un point par pas (enregistré par le thread de calcul) ; historique complet décimé ou queue glissante de N pas, au choix ; une trace se poursuit sur le corps issu d'une fusion ; traces non sauvegardées.

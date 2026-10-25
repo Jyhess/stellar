@@ -5,7 +5,7 @@
 //! [`PhysicsEngine`], puis en l'enregistrant auprès du registre de
 //! l'application ; il devient alors sélectionnable dans les paramètres.
 
-use crate::{BodyId, PhysicsParams, SimulationState};
+use crate::{BodyId, PhysicsParams, SimulationState, Vec3};
 
 /// Description d'un moteur, affichée dans l'interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +56,15 @@ pub trait PhysicsEngine: Send {
     }
 
     fn body_count(&self) -> usize;
+
+    /// Positions courantes des corps demandés (`None` si absent). Appelé à
+    /// chaque pas pour les traces : les moteurs gagnent à le spécialiser.
+    fn positions_of(&self, ids: &[BodyId]) -> Vec<Option<Vec3>> {
+        let s = self.state();
+        ids.iter()
+            .map(|&id| s.bodies.index_of(id).map(|i| s.bodies.positions[i]))
+            .collect()
+    }
 
     /// Énergies au dernier pas calculé.
     fn diagnostics(&self) -> Diagnostics;

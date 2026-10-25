@@ -63,6 +63,7 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 | Origine | aller au corps le plus massif |
 | PgDn / PgUp | corps suivant / précédent dans l'ordre des masses |
 | C | viser le centre de gravité (vol libre) |
+| T | mode trace : trajectoires des 10 corps les plus massifs affichés à cet instant / effacer |
 | V | vue d'ensemble : recul jusqu'à voir 90 % de la masse, dans la direction de visée actuelle |
 | Espace | pause / reprise |
 | P | pas à pas |
@@ -71,7 +72,14 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 | F5 | sauvegarder |
 | Échap | menu (reprendre, sauvegarder, accueil, quitter) |
 
-Quand un corps est suivi, la caméra l'accompagne et tourne autour de lui. Si ce corps fusionne, le suivi passe au corps qui en résulte. Une touche de déplacement rend la main en vol libre. En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la direction de visée, le zoom et la distance à la cible sont conservés.
+Quand un corps est suivi, la caméra l'accompagne et tourne autour de lui. Si ce corps fusionne, le suivi passe au corps qui en résulte. Une touche de déplacement rend la main en vol libre. En mode trace, chaque trace a sa couleur, rappelée dans le panneau « Corps ». Elle reçoit un point à chaque pas de calcul et se poursuit sur le corps issu d'une fusion. Le panneau propose deux affichages :
+
+- l'**historique** complet depuis l'activation (décimé au-delà de 4 096 points) ;
+- une **queue** des N derniers pas, de 10 à 5 000, qui s'estompe vers le passé.
+
+Les traces ne sont pas sauvegardées.
+
+En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la direction de visée, le zoom et la distance à la cible sont conservés.
 
 ---
 
