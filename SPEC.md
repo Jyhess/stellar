@@ -46,3 +46,9 @@
 - Espace : pause / reprise ; P : pas à pas ; « multiplicateur de vitesse » réalisé par une limite de cadence (pas/s), le calcul allant sinon au plus vite.
 - Échap ouvre un menu (reprendre, sauvegarder, accueil, quitter, aide des touches) ; Tab bascule la capture de la souris.
 - Une simulation chargée redémarre en pause.
+
+## Évolutions (v1.1)
+- Passage d'un corps à un autre : direction de visée, zoom et distance à la cible conservés (seule exception : ne jamais se retrouver à l'intérieur du nouveau corps).
+- Souris libre : un clic droit reprend la visée.
+- C : viser le centre de gravité ; V : vue d'ensemble (recul, dans la direction de visée, jusqu'à voir la sphère centrée sur le barycentre contenant 90 % de la masse).
+- Affichage plafonné à 120 images par seconde.

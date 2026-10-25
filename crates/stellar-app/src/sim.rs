@@ -27,6 +27,10 @@ const MOUSE_SENSITIVITY: f64 = 0.0022;
 const SCROLL_SENSITIVITY: f64 = 0.0025;
 const PICK_TOLERANCE_PX: f64 = 10.0;
 const TOAST_DURATION: Duration = Duration::from_secs(4);
+/// Fraction de la masse cadrée par la vue d'ensemble.
+const OVERVIEW_MASS_FRACTION: f64 = 0.9;
+/// Marge autour de la sphère cadrée.
+const OVERVIEW_MARGIN: f64 = 1.05;
 
 /// Données dérivées d'un instantané, recalculées à chaque publication.
 struct SnapshotCache {
@@ -62,6 +66,7 @@ pub struct SimScreen {
 
     fps: f64,
     last_frame: Option<Instant>,
+    last_aspect: f64,
     toast: Option<(String, Instant)>,
     save_job: Option<Receiver<Result<PathBuf, String>>>,
 }
@@ -100,6 +105,7 @@ impl SimScreen {
             max_rate: 30.0,
             fps: 0.0,
             last_frame: None,
+            last_aspect: 16.0 / 9.0,
             toast: None,
             save_job: None,
         }
@@ -168,21 +174,57 @@ impl SimScreen {
         }
     }
 
+    /// Suit le corps d'indice `i`. Si un corps est déjà suivi, la direction
+    /// de visée, le zoom et la distance à la cible sont conservés ; depuis le
+    /// vol libre, la caméra se tourne vers le corps sans changer de distance.
     fn select_index(&mut self, i: usize) {
         let bodies = &self.snapshot.state.bodies;
         let p = bodies.positions[i];
-        let r = body_radius(bodies.masses[i], self.base_radius()).max(1e-9);
-        let current = (p - self.camera.position).length();
-        let preferred = (60.0 * r).max(0.03 * self.reference_radius());
-        let distance = current.min(preferred).max(3.0 * r);
-        self.selected = Some(bodies.ids[i]);
-        self.camera.look_towards(p - self.camera.position);
-        self.camera.mode = Mode::Orbit { target: bodies.ids[i], distance };
+        let id = bodies.ids[i];
+        let r = body_radius(bodies.masses[i], self.base_radius());
+        let distance = match self.camera.mode {
+            Mode::Orbit { distance, .. } => distance,
+            Mode::Free => {
+                self.camera.look_towards(p - self.camera.position);
+                (p - self.camera.position).length()
+            }
+        };
+        // Seule exception : ne jamais se retrouver à l'intérieur du corps.
+        let distance = distance.max(1.5 * r).max(1e-9);
+        self.selected = Some(id);
+        self.camera.mode = Mode::Orbit { target: id, distance };
         self.refresh_selection_cache();
         self.camera.place_in_orbit(p);
     }
 
-    fn select_heaviest(&mut self) {
+    /// Oriente la visée vers le centre de gravité (vol libre).
+    fn aim_at_barycenter(&mut self) {
+        if self.snapshot.state.bodies.is_empty() {
+            return;
+        }
+        self.camera.mode = Mode::Free;
+        self.camera.look_towards(self.cache.barycenter - self.camera.position);
+    }
+
+    /// Recule la caméra, dans sa direction de visée actuelle, jusqu'à voir la
+    /// sphère centrée sur le barycentre qui contient 90 % de la masse.
+    fn frame_mass(&mut self) {
+        let bodies = &self.snapshot.state.bodies;
+        if bodies.is_empty() {
+            return;
+        }
+        let c = self.cache.barycenter;
+        let r90 = bodies.mass_radius(c, OVERVIEW_MASS_FRACTION).max(1e-9);
+        let half_v = 0.5 * self.camera.fov_y;
+        let half_h = (half_v.tan() * self.last_aspect.max(1e-3)).atan();
+        let half = half_v.min(half_h);
+        let d = OVERVIEW_MARGIN * r90 / half.sin();
+        self.camera.mode = Mode::Free;
+        self.camera.position = c - self.camera.forward() * d;
+        self.notify(format!("Vue d'ensemble : 90 % de la masse dans un rayon de {}", format::real(r90)));
+    }
+
+        fn select_heaviest(&mut self) {
         let b = &self.snapshot.state.bodies;
         if let Some(i) = ranking::heaviest(&b.ids, &b.masses) {
             self.select_index(i);
@@ -253,6 +295,12 @@ impl SimScreen {
             }
             self.handle.step_once();
         }
+        if pressed(Key::C) {
+            self.aim_at_barycenter();
+        }
+        if pressed(Key::V) {
+            self.frame_mass();
+        }
         if pressed(Key::Home) {
             self.select_heaviest();
         }
@@ -303,8 +351,10 @@ impl SimScreen {
             (moves, mouse, i.smooth_scroll_delta.y as f64, i.modifiers.shift, i.modifiers.ctrl)
         });
 
-        // Orientation (souris capturée uniquement).
-        if self.captured && mouse != egui::Vec2::ZERO {
+        // Orientation (souris capturée uniquement). Le premier mouvement suivant
+        // une (re)capture est ignoré : il peut contenir un saut parasite.
+        let just_captured = self.capture_applied != Some(true);
+        if self.captured && !just_captured && mouse != egui::Vec2::ZERO {
             self.camera.rotate(-(mouse.x as f64) * MOUSE_SENSITIVITY, -(mouse.y as f64) * MOUSE_SENSITIVITY);
         }
 
@@ -333,6 +383,13 @@ impl SimScreen {
                 }
             }
         }
+
+        // Souris libre : un clic droit reprend la visée.
+        if !self.captured && ctx.input(|i| i.pointer.secondary_clicked()) {
+            self.captured = true;
+            return;
+        }
+        self.last_aspect = (viewport.width() / viewport.height().max(1.0)) as f64;
 
         // Sélection au clic.
         let clicked = ctx.input(|i| i.pointer.primary_clicked());
@@ -523,9 +580,9 @@ impl SimScreen {
         }
 
         let hint = if self.captured {
-            "Tab : libérer la souris · Échap : menu · Origine / PgDn / PgUp : corps par masse · Espace : pause · F5 : sauvegarder"
+            "Tab : libérer la souris · Échap : menu · Origine / PgDn / PgUp : corps par masse · C : barycentre · V : vue d'ensemble · F5 : sauvegarder"
         } else {
-            "Souris libre — cliquez un corps pour le suivre · Tab : reprendre la visée · Échap : menu"
+            "Souris libre — clic gauche : suivre un corps · clic droit ou Tab : reprendre la visée · Échap : menu"
         };
         painter.text(
             rect.center_bottom() - egui::vec2(0.0, 14.0),
@@ -716,8 +773,11 @@ impl SimScreen {
                         ("Clic gauche", "suivre le corps visé"),
                         ("Origine", "corps le plus massif"),
                         ("PgDn / PgUp", "corps suivant / précédent par masse"),
+                        ("C", "viser le centre de gravité"),
+                        ("V", "vue d'ensemble (90 % de la masse)"),
                         ("Espace / P", "pause / pas à pas"),
                         ("Tab", "libérer / capturer la souris"),
+                        ("Clic droit", "reprendre la visée (souris libre)"),
                         ("F5", "sauvegarder"),
                         ("Échap", "ce menu"),
                     ] {

@@ -83,6 +83,31 @@ impl BodySet {
         Some(s / m)
     }
 
+    /// Rayon de la plus petite sphère centrée en `center` contenant au moins
+    /// la fraction `fraction` (entre 0 et 1) de la masse totale.
+    pub fn mass_radius(&self, center: Vec3, fraction: f64) -> f64 {
+        let total = self.total_mass();
+        if total <= 0.0 {
+            return 0.0;
+        }
+        let mut d: Vec<(f64, f64)> = self
+            .positions
+            .iter()
+            .zip(&self.masses)
+            .map(|(p, &m)| ((*p - center).length_squared(), m))
+            .collect();
+        d.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        let target = fraction.clamp(0.0, 1.0) * total;
+        let mut acc = 0.0;
+        for (r2, m) in &d {
+            acc += m;
+            if acc >= target {
+                return r2.sqrt();
+            }
+        }
+        d.last().map_or(0.0, |x| x.0.sqrt())
+    }
+
     /// Énergie cinétique totale Σ ½ m v².
     pub fn kinetic_energy(&self) -> f64 {
         self.masses
@@ -90,5 +115,21 @@ impl BodySet {
             .zip(&self.velocities)
             .map(|(&m, v)| 0.5 * m * v.length_squared())
             .sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mass_radius_weights_by_mass() {
+        let mut b = BodySet::default();
+        b.push(0, Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, 8.0);
+        b.push(1, Vec3::new(0.0, 2.0, 0.0), Vec3::ZERO, 1.0);
+        b.push(2, Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO, 1.0);
+        assert_eq!(b.mass_radius(Vec3::ZERO, 0.8), 1.0);
+        assert_eq!(b.mass_radius(Vec3::ZERO, 0.9), 2.0);
+        assert_eq!(b.mass_radius(Vec3::ZERO, 1.0), 10.0);
     }
 }

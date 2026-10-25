@@ -31,6 +31,8 @@ La première compilation prend quelques minutes, le temps de télécharger et de
 
 > Lancez toujours en `--release` : en mode debug, le calcul est plusieurs dizaines de fois plus lent.
 
+L'affichage est plafonné à 120 images par seconde.
+
 Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de lancement.
 
 ---
@@ -60,13 +62,16 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 | Clic gauche | suivre le corps visé (réticule, ou pointeur quand la souris est libre) |
 | Origine | aller au corps le plus massif |
 | PgDn / PgUp | corps suivant / précédent dans l'ordre des masses |
+| C | viser le centre de gravité (vol libre) |
+| V | vue d'ensemble : recul jusqu'à voir 90 % de la masse, dans la direction de visée actuelle |
 | Espace | pause / reprise |
 | P | pas à pas |
 | Tab | libérer / capturer la souris |
+| Clic droit | reprendre la visée quand la souris est libre |
 | F5 | sauvegarder |
 | Échap | menu (reprendre, sauvegarder, accueil, quitter) |
 
-Quand un corps est suivi, la caméra l'accompagne et tourne autour de lui. Si ce corps fusionne, le suivi passe au corps qui en résulte. Une touche de déplacement rend la main en vol libre.
+Quand un corps est suivi, la caméra l'accompagne et tourne autour de lui. Si ce corps fusionne, le suivi passe au corps qui en résulte. Une touche de déplacement rend la main en vol libre. En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la direction de visée, le zoom et la distance à la cible sont conservés.
 
 ---
 

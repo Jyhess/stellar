@@ -1,5 +1,7 @@
 //! Application egui : enchaînement des écrans.
 
+use std::time::{Duration, Instant};
+
 use eframe::egui;
 use stellar_application::SimulatorService;
 
@@ -14,9 +16,13 @@ enum Screen {
     Switching,
 }
 
+/// Plafond de la cadence d'affichage.
+pub const MAX_FPS: f64 = 120.0;
+
 pub struct StellarApp {
     service: SimulatorService,
     screen: Screen,
+    last_frame: Option<Instant>,
 }
 
 impl StellarApp {
@@ -26,7 +32,7 @@ impl StellarApp {
         }
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let home = HomeScreen::new(&service);
-        let mut app = Self { service, screen: Screen::Home(home) };
+        let mut app = Self { service, screen: Screen::Home(home), last_frame: None };
         app.autostart();
         app
     }
@@ -56,6 +62,17 @@ impl StellarApp {
 
 impl eframe::App for StellarApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Limiteur de cadence : aucune image avant 1/MAX_FPS s, y compris
+        // lorsque les mouvements de souris déclenchent des repeints.
+        let min_interval = Duration::from_secs_f64(1.0 / MAX_FPS);
+        if let Some(t) = self.last_frame {
+            let elapsed = t.elapsed();
+            if elapsed < min_interval {
+                std::thread::sleep(min_interval - elapsed);
+            }
+        }
+        self.last_frame = Some(Instant::now());
+
         match &mut self.screen {
             Screen::Home(home) => match home.show(ctx, &self.service) {
                 HomeAction::None => {}
