@@ -2,7 +2,9 @@
 
 use glam::DVec3;
 use stellar_domain::physics::body_radius;
-use stellar_domain::BodySet;
+use stellar_domain::{ranking, BodyId, BodySet};
+
+use crate::camera::Camera;
 
 /// Corps visé par le rayon (`origin`, `dir` unitaire) : parmi les corps dont
 /// l'écart angulaire au rayon est inférieur à la tolérance (augmentée de leur
@@ -39,9 +41,37 @@ pub fn pick(
     best.map(|b| b.0)
 }
 
+/// Les `k` corps les plus massifs parmi ceux visibles à l'écran (dans le
+/// champ de la caméra, devant elle), du plus lourd au plus léger.
+pub fn visible_top_k(bodies: &BodySet, camera: &Camera, aspect: f64, k: usize) -> Vec<BodyId> {
+    let mut ids = Vec::new();
+    let mut masses = Vec::new();
+    for i in 0..bodies.len() {
+        if let Some((x, y)) = camera.project(bodies.positions[i], aspect) {
+            if x.abs() <= 1.0 && y.abs() <= 1.0 {
+                ids.push(bodies.ids[i]);
+                masses.push(bodies.masses[i]);
+            }
+        }
+    }
+    ranking::top_k(&ids, &masses, k).into_iter().map(|(id, _)| id).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_top_k_ignores_bodies_out_of_view() {
+        let mut b = BodySet::default();
+        b.push(1, DVec3::new(10.0, 0.0, 0.0), DVec3::ZERO, 5.0); // devant
+        b.push(2, DVec3::new(-10.0, 0.0, 0.0), DVec3::ZERO, 100.0); // derrière
+        b.push(3, DVec3::new(10.0, 50.0, 0.0), DVec3::ZERO, 90.0); // hors champ
+        b.push(4, DVec3::new(10.0, 1.0, 0.5), DVec3::ZERO, 7.0); // devant
+        let cam = Camera::looking_at(DVec3::ZERO, DVec3::X, 1.0);
+        assert_eq!(visible_top_k(&b, &cam, 1.0, 10), vec![4, 1]);
+        assert_eq!(visible_top_k(&b, &cam, 1.0, 1), vec![4]);
+    }
 
     #[test]
     fn prefers_massive_body_within_tolerance() {

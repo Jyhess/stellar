@@ -63,7 +63,7 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 | Origine | aller au corps le plus massif |
 | PgDn / PgUp | corps suivant / précédent dans l'ordre des masses |
 | C | viser le centre de gravité (vol libre) |
-| T | mode trace : trajectoires des 10 corps les plus massifs affichés à cet instant / effacer |
+| T | mode trace : trajectoires des 10 corps les plus massifs visibles à l'écran à cet instant / effacer |
 | R | traces : référentiel absolu / relatif au corps sélectionné |
 | V | vue d'ensemble : recul jusqu'à voir 90 % de la masse, dans la direction de visée actuelle |
 | Espace | pause / reprise |

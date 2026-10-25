@@ -15,7 +15,7 @@ use stellar_domain::{ranking, BodyId};
 
 use crate::camera::{Camera, Mode, MAX_FOV, MIN_FOV};
 use crate::format;
-use crate::picking::pick;
+use crate::picking::{pick, visible_top_k};
 use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, Uniforms};
 
 pub enum SimAction {
@@ -28,6 +28,8 @@ const MOUSE_SENSITIVITY: f64 = 0.0022;
 const SCROLL_SENSITIVITY: f64 = 0.0025;
 const PICK_TOLERANCE_PX: f64 = 10.0;
 const TOAST_DURATION: Duration = Duration::from_secs(4);
+/// Nombre de corps tracés.
+const TRACE_COUNT: usize = 10;
 /// Couleurs des traces, une par corps tracé.
 const TRACE_PALETTE: [Color32; 10] = [
     Color32::from_rgb(255, 99, 71),
@@ -225,7 +227,7 @@ impl SimScreen {
         self.camera.place_in_orbit(p);
     }
 
-    /// Active le tracé des 10 corps les plus massifs affichés, ou l'arrête.
+    /// Active le tracé des 10 corps les plus massifs visibles à l'écran, ou l'arrête.
     fn toggle_traces(&mut self) {
         if self.traces_active {
             self.traces_active = false;
@@ -233,16 +235,22 @@ impl SimScreen {
             self.notify("Traces effacées.");
             return;
         }
-        if self.snapshot.phase != Phase::Ready || self.snapshot.top.is_empty() {
+        if self.snapshot.phase != Phase::Ready {
             self.notify("La simulation n'est pas encore prête.");
             return;
         }
-        // Les corps du classement affiché à cet instant.
-        self.handle.start_traces(self.snapshot.top.iter().map(|(id, _)| *id).collect());
+        // Les 10 corps les plus massifs parmi ceux visibles à l'écran.
+        let ids = visible_top_k(&self.snapshot.state.bodies, &self.camera, self.last_aspect, TRACE_COUNT);
+        if ids.is_empty() {
+            self.notify("Aucun corps visible à l'écran : rien à tracer.");
+            return;
+        }
+        let n = ids.len();
+        self.handle.start_traces(ids);
         self.traces_active = true;
         self.sent_reference = None; // la référence sera retransmise
         self.sync_trace_reference();
-        self.notify("Traces activées sur les 10 corps les plus massifs.");
+        self.notify(format!("Traces activées sur les {n} corps visibles les plus massifs."));
     }
 
     /// Transmet au thread de calcul le corps de référence des traces
@@ -873,7 +881,7 @@ impl SimScreen {
     fn traces_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Traces (T)").strong());
-            let label = if self.traces_active { "Effacer" } else { "Tracer le top 10" };
+            let label = if self.traces_active { "Effacer" } else { "Tracer les 10 plus gros visibles" };
             if ui.small_button(label).clicked() {
                 self.toggle_traces();
             }
@@ -965,7 +973,7 @@ impl SimScreen {
                         ("PgDn / PgUp", "corps suivant / précédent par masse"),
                         ("C", "viser le centre de gravité"),
                         ("V", "vue d'ensemble (90 % de la masse)"),
-                        ("T", "tracer les 10 plus massifs / effacer"),
+                        ("T", "tracer les 10 plus massifs visibles / effacer"),
                         ("R", "traces : référentiel absolu / corps sélectionné"),
                         ("Espace / P", "pause / pas à pas"),
                         ("Tab", "libérer / capturer la souris"),
