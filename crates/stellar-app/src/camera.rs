@@ -7,7 +7,7 @@ use glam::{DMat4, DVec3, Mat4};
 use stellar_application::ViewState;
 use stellar_domain::BodyId;
 
-const MAX_PITCH: f64 = 89.0 * std::f64::consts::PI / 180.0;
+const MAX_PITCH: f64 = 89.9 * std::f64::consts::PI / 180.0;
 pub const MIN_FOV: f64 = 0.2 * std::f64::consts::PI / 180.0;
 pub const MAX_FOV: f64 = 120.0 * std::f64::consts::PI / 180.0;
 
@@ -17,6 +17,10 @@ pub enum Mode {
     /// Orbite autour du corps `target`, à la distance `distance`.
     Orbit {
         target: BodyId,
+        distance: f64,
+    },
+    /// Orbite autour du centre de gravité, à la distance `distance`.
+    Barycenter {
         distance: f64,
     },
 }
@@ -67,7 +71,7 @@ impl Camera {
     pub fn to_view(&self) -> ViewState {
         let (followed, orbit_distance) = match self.mode {
             Mode::Orbit { target, distance } => (Some(target), distance),
-            Mode::Free => (None, 0.0),
+            Mode::Free | Mode::Barycenter { .. } => (None, 0.0),
         };
         ViewState {
             position: self.position.to_array(),
@@ -113,7 +117,7 @@ impl Camera {
 
     /// Recalcule la position en mode orbite, autour de `target_pos`.
     pub fn place_in_orbit(&mut self, target_pos: DVec3) {
-        if let Mode::Orbit { distance, .. } = self.mode {
+        if let Mode::Orbit { distance, .. } | Mode::Barycenter { distance } = self.mode {
             self.position = target_pos - self.forward() * distance;
         }
     }
@@ -121,8 +125,20 @@ impl Camera {
     pub fn followed(&self) -> Option<BodyId> {
         match self.mode {
             Mode::Orbit { target, .. } => Some(target),
+            Mode::Free | Mode::Barycenter { .. } => None,
+        }
+    }
+
+    /// Distance à la cible en mode orbite (corps ou barycentre).
+    pub fn orbit_distance(&self) -> Option<f64> {
+        match self.mode {
+            Mode::Orbit { distance, .. } | Mode::Barycenter { distance } => Some(distance),
             Mode::Free => None,
         }
+    }
+
+    pub fn is_orbiting(&self) -> bool {
+        !matches!(self.mode, Mode::Free)
     }
 
     /// Matrice de vue en `f32`, relative à l'ancre.

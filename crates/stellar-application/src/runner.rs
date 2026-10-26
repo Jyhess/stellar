@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::recording::{
     BodyFate, Keyframe, Recorder, RecordingLink, RecordingStatus, RecordingWriter,
 };
-use crate::trace::TraceSet;
+use crate::trace::{TraceReference, TraceSet};
 use stellar_domain::{
     ranking, BodyId, Diagnostics, EngineFactory, PhysicsEngine, SimulationConfig, SimulationState,
 };
@@ -95,7 +95,7 @@ enum Command {
     SetMaxRate(Option<f64>),
     StartTraces(Vec<BodyId>),
     StopTraces,
-    SetTraceReference(Option<BodyId>),
+    SetTraceReference(Option<TraceReference>),
     StartRecording {
         writer: Box<dyn RecordingWriter>,
         interval: u32,
@@ -280,7 +280,7 @@ impl SimulationHandle {
     }
 
     /// Corps de référence pour l'affichage relatif des traces.
-    pub fn set_trace_reference(&self, id: Option<BodyId>) {
+    pub fn set_trace_reference(&self, id: Option<TraceReference>) {
         let _ = self.tx.send(Command::SetTraceReference(id));
     }
 
@@ -488,13 +488,16 @@ impl Worker {
                         let mut set = TraceSet::new(ids);
                         let pos = self.engine.positions_of(&set.current_ids());
                         set.push(self.step, &pos);
+                        if let Some(c) = self.engine.center_of_mass() {
+                            set.push_barycenter(self.step, c);
+                        }
                         *self.shared.traces.lock().expect("verrou empoisonné") = Some(set);
                         self.shared.tracing.store(true, Ordering::Release);
                     }
                     Command::SetTraceReference(id) => {
                         let mut guard = self.shared.traces.lock().expect("verrou empoisonné");
                         if let Some(set) = guard.as_mut() {
-                            set.set_reference(id);
+                            set.set_reference_kind(id);
                             let ids = set.current_ids();
                             let pos = self.engine.positions_of(&ids);
                             set.push(self.step, &pos);
@@ -561,6 +564,9 @@ impl Worker {
                 if !ids.is_empty() {
                     let pos = self.engine.positions_of(&ids);
                     set.push(self.step, &pos);
+                }
+                if let Some(c) = self.engine.center_of_mass() {
+                    set.push_barycenter(self.step, c);
                 }
             }
         }

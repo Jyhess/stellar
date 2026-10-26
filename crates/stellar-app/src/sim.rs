@@ -11,7 +11,7 @@ use glam::DVec3;
 use rayon::prelude::*;
 use stellar_application::recording::is_dust;
 use stellar_application::trace::{relative_to, MAX_TAIL};
-use stellar_application::{Phase, SimulatorService, Snapshot, ViewState};
+use stellar_application::{Phase, SimulatorService, Snapshot, TraceReference, ViewState};
 use stellar_domain::physics::body_radius;
 use stellar_domain::{ranking, BodyId};
 
@@ -19,12 +19,30 @@ use crate::camera::{Camera, Mode, MAX_FOV, MIN_FOV};
 use crate::format;
 use crate::picking::{pick, visible_top_k};
 use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, Uniforms};
-use crate::source::Source;
+use crate::source::{angular_momentum, weighted_barycenter, Source};
 
 /// Luminosité initiale : le mélange additif sature quand les corps se
 /// superposent, d'où une atténuation avec leur nombre (1 pour un million).
 fn default_brightness(count: usize) -> f32 {
     (1e6 / count.max(1) as f64).powf(0.75).clamp(0.05, 1.5) as f32
+}
+
+/// Axe unitaire du moment cinétique total autour de `center` ; `None` en
+/// l'absence de rotation d'ensemble significative.
+fn rotation_axis(
+    bodies: &stellar_domain::BodySet,
+    dust_weight: f64,
+    center: DVec3,
+) -> Option<DVec3> {
+    let l = angular_momentum(bodies, dust_weight, center);
+    // Échelle : moment cinétique qu'aurait le système si tout tournait dans le même sens.
+    let scale: f64 = bodies
+        .masses
+        .iter()
+        .zip(bodies.positions.iter().zip(&bodies.velocities))
+        .map(|(&m, (&p, &v))| m * (p - center).length() * v.length())
+        .sum();
+    (l.length() > 1e-3 * scale && scale > 0.0).then(|| l.normalize())
 }
 
 /// Part exprimée en pourcentage, avec une précision adaptée.
@@ -83,6 +101,10 @@ const OVERVIEW_MARGIN: f64 = 1.05;
 /// Données dérivées d'un instantané, recalculées à chaque publication.
 struct SnapshotCache {
     barycenter: DVec3,
+    /// Vitesse du centre de masse.
+    barycenter_velocity: DVec3,
+    /// Axe du moment cinétique total (calculé quand le barycentre est sélectionné).
+    rotation_axis: Option<DVec3>,
     selected_index: Option<usize>,
     selected_rank: Option<usize>,
 }
@@ -95,6 +117,8 @@ pub struct SimScreen {
     capture_applied: Option<bool>,
     menu_open: bool,
     selected: Option<BodyId>,
+    /// Le barycentre est sélectionné (à la place d'un corps).
+    bary_selected: bool,
     paused: bool,
 
     snapshot: Arc<Snapshot>,
@@ -122,7 +146,7 @@ pub struct SimScreen {
     /// Traces affichées dans le référentiel du corps sélectionné.
     trace_relative: bool,
     /// Référence transmise au thread de calcul.
-    sent_reference: Option<BodyId>,
+    sent_reference: Option<TraceReference>,
     /// Affiche seulement la queue récente des traces.
     trace_tail_only: bool,
     trace_tail_len: usize,
@@ -165,11 +189,14 @@ impl SimScreen {
             capture_applied: None,
             menu_open: false,
             selected,
+            bary_selected: false,
             paused,
             seen_sequence: u64::MAX,
             snapshot,
             cache: SnapshotCache {
                 barycenter: DVec3::ZERO,
+                barycenter_velocity: DVec3::ZERO,
+                rotation_axis: None,
                 selected_index: None,
                 selected_rank: None,
             },
@@ -243,7 +270,21 @@ impl SimScreen {
         self.seen_sequence = seq;
         self.snapshot = self.source.latest();
         let bodies = &self.snapshot.state.bodies;
-        self.cache.barycenter = bodies.center_of_mass().unwrap_or(DVec3::ZERO);
+        let w = self.source.dust_weight() as f64;
+        self.cache.barycenter = weighted_barycenter(bodies, w).unwrap_or(DVec3::ZERO);
+        let total = self.snapshot.total_mass.max(1e-300);
+        self.cache.barycenter_velocity = bodies
+            .masses
+            .iter()
+            .zip(&bodies.velocities)
+            .map(|(&m, &v)| v * if is_dust(m) { m * w } else { m })
+            .sum::<DVec3>()
+            / total;
+        self.cache.rotation_axis = if self.bary_selected {
+            rotation_axis(bodies, w, self.cache.barycenter)
+        } else {
+            None
+        };
 
         // Suivi de la sélection à travers fusions et éjections.
         if let Some(id) = self.selected {
@@ -297,7 +338,7 @@ impl SimScreen {
         let id = bodies.ids[i];
         let r = body_radius(bodies.masses[i], self.base_radius());
         let distance = match self.camera.mode {
-            Mode::Orbit { distance, .. } => distance,
+            Mode::Orbit { distance, .. } | Mode::Barycenter { distance } => distance,
             Mode::Free => {
                 self.camera.look_towards(p - self.camera.position);
                 (p - self.camera.position).length()
@@ -306,6 +347,7 @@ impl SimScreen {
         // Seule exception : ne jamais se retrouver à l'intérieur du corps.
         let distance = distance.max(1.5 * r).max(1e-9);
         self.selected = Some(id);
+        self.bary_selected = false;
         self.camera.mode = Mode::Orbit {
             target: id,
             distance,
@@ -350,18 +392,23 @@ impl SimScreen {
     /// Transmet au thread de calcul le corps de référence des traces
     /// (le corps sélectionné, en mode relatif).
     fn sync_trace_reference(&mut self) {
-        let wanted = if self.traces_active && self.trace_relative {
-            self.selected
-        } else {
+        let wanted = if !(self.traces_active && self.trace_relative) {
             None
+        } else if self.bary_selected {
+            Some(TraceReference::Barycenter)
+        } else {
+            self.selected.map(TraceReference::Body)
         };
         if wanted == self.sent_reference {
             return;
         }
         // Si la sélection a seulement suivi une fusion, la piste suit d'elle-même.
-        let continuation = self
-            .sent_reference
-            .is_some_and(|sent| wanted.is_some() && self.source.resolve(sent) == wanted);
+        let continuation = match (self.sent_reference, wanted) {
+            (Some(TraceReference::Body(sent)), Some(TraceReference::Body(w))) => {
+                self.source.resolve(sent) == Some(w)
+            }
+            _ => false,
+        };
         if !continuation && self.traces_active {
             self.source.set_trace_reference(wanted);
         }
@@ -370,11 +417,45 @@ impl SimScreen {
 
     fn toggle_trace_relative(&mut self) {
         self.trace_relative = !self.trace_relative;
-        if self.trace_relative && self.selected.is_none() {
+        if self.trace_relative && self.selected.is_none() && !self.bary_selected {
             self.notify(
-                "Référentiel relatif : sélectionnez un corps pour voir les orbites autour de lui.",
+                "Référentiel relatif : sélectionnez un corps (ou le barycentre, touche B) pour voir les orbites autour de lui.",
             );
         }
+    }
+
+    /// Sélectionne le barycentre et le regarde perpendiculairement au plan
+    /// du disque (selon l'axe du moment cinétique total), en conservant la
+    /// distance à la cible. Sans rotation d'ensemble, la vue suit l'axe Oz.
+    fn view_barycenter_from_axis(&mut self) {
+        let bodies = &self.snapshot.state.bodies;
+        if bodies.is_empty() {
+            return;
+        }
+        let c = self.cache.barycenter;
+        let w = self.source.dust_weight() as f64;
+        let axis = rotation_axis(bodies, w, c);
+        let distance = self
+            .camera
+            .orbit_distance()
+            .unwrap_or_else(|| (c - self.camera.position).length())
+            .max(1e-9);
+        self.camera.look_towards(-axis.unwrap_or(DVec3::Z));
+        self.camera.mode = Mode::Barycenter { distance };
+        self.camera.place_in_orbit(c);
+        self.selected = None;
+        self.bary_selected = true;
+        self.cache.selected_index = None;
+        self.cache.selected_rank = None;
+        self.cache.rotation_axis = axis;
+        self.notify(match axis {
+            Some(a) => format!(
+                "Barycentre vu de face au disque (axe incliné de {:.1}° sur Oz).",
+                a.angle_between(DVec3::Z).to_degrees()
+            )
+            .replace('.', ","),
+            None => "Barycentre : aucune rotation d'ensemble, vue selon l'axe Oz.".to_owned(),
+        });
     }
 
     /// Oriente la visée vers le centre de gravité (vol libre).
@@ -507,6 +588,9 @@ impl SimScreen {
         }
         if pressed(Key::R) {
             self.toggle_trace_relative();
+        }
+        if pressed(Key::B) {
+            self.view_barycenter_from_axis();
         }
         if pressed(Key::C) {
             self.aim_at_barycenter();
@@ -647,7 +731,7 @@ impl SimScreen {
 
         // Déplacement : toute touche ZQSD/AE rend la main en vol libre.
         if moves != DVec3::ZERO {
-            if matches!(self.camera.mode, Mode::Orbit { .. }) {
+            if self.camera.is_orbiting() {
                 self.camera.mode = Mode::Free;
             }
             let boost = if shift {
@@ -675,6 +759,7 @@ impl SimScreen {
                 Mode::Orbit { distance, .. } => {
                     *distance = (*distance * k).max(1.5 * r).max(1e-9);
                 }
+                Mode::Barycenter { distance } => *distance = (*distance * k).max(1e-9),
             }
         }
 
@@ -714,6 +799,9 @@ impl SimScreen {
         if let (Mode::Orbit { .. }, Some(i)) = (self.camera.mode, self.cache.selected_index) {
             let p = self.snapshot.state.bodies.positions[i];
             self.camera.place_in_orbit(p);
+        }
+        if let Mode::Barycenter { .. } = self.camera.mode {
+            self.camera.place_in_orbit(self.cache.barycenter);
         }
     }
 
@@ -766,7 +854,9 @@ impl SimScreen {
 
     fn rebase_threshold(&self) -> f64 {
         match self.camera.mode {
-            Mode::Orbit { distance, .. } => (50.0 * distance).min(0.05 * self.reference_radius()),
+            Mode::Orbit { distance, .. } | Mode::Barycenter { distance } => {
+                (50.0 * distance).min(0.05 * self.reference_radius())
+            }
             Mode::Free => 0.05 * self.reference_radius(),
         }
     }
@@ -841,6 +931,32 @@ impl SimScreen {
             )
         };
 
+        // Repère du barycentre sélectionné : réticule doré.
+        if self.bary_selected {
+            if let Some(ndc) = self.camera.project(self.cache.barycenter, aspect) {
+                let c = to_screen(ndc);
+                let gold = Color32::from_rgb(255, 200, 80);
+                let s = Stroke::new(1.5_f32, gold);
+                painter.circle_stroke(c, 11.0, s);
+                for (a, b) in [
+                    (egui::vec2(-20.0, 0.0), egui::vec2(-5.0, 0.0)),
+                    (egui::vec2(5.0, 0.0), egui::vec2(20.0, 0.0)),
+                    (egui::vec2(0.0, -20.0), egui::vec2(0.0, -5.0)),
+                    (egui::vec2(0.0, 5.0), egui::vec2(0.0, 20.0)),
+                ] {
+                    painter.line_segment([c + a, c + b], s);
+                }
+                painter.circle_filled(c, 2.0, gold);
+                painter.text(
+                    c + egui::vec2(0.0, 26.0),
+                    egui::Align2::CENTER_TOP,
+                    "barycentre",
+                    egui::FontId::proportional(12.0),
+                    gold,
+                );
+            }
+        }
+
         // Repère du corps sélectionné.
         if let Some(i) = self.cache.selected_index {
             let b = &self.snapshot.state.bodies;
@@ -865,10 +981,12 @@ impl SimScreen {
             // Copie rapide sous verrou, puis dessin hors verrou.
             let lines: Vec<Vec<Option<DVec3>>> = self.source.with_traces(|set| match set {
                 Some(set) => {
-                    let reference = if self.trace_relative {
-                        self.selected.and_then(|id| set.reference_samples(id))
-                    } else {
+                    let reference = if !self.trace_relative {
                         None
+                    } else if self.bary_selected {
+                        set.samples_for(TraceReference::Barycenter)
+                    } else {
+                        self.selected.and_then(|id| set.reference_samples(id))
                     };
                     set.traces
                         .iter()
@@ -1014,6 +1132,41 @@ impl SimScreen {
             .resizable(false)
             .default_width(240.0)
             .show(ctx, |ui| {
+                if self.bary_selected {
+                    ui.label(RichText::new("Barycentre sélectionné").strong());
+                    egui::Grid::new("bary")
+                        .num_columns(2)
+                        .spacing([14.0, 3.0])
+                        .show(ui, |ui| {
+                            let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                                ui.label(k);
+                                ui.label(RichText::new(v).monospace());
+                                ui.end_row();
+                            };
+                            let c = self.cache.barycenter;
+                            row(ui, "Position", format!("{} ; {} ; {}", format::real(c.x), format::real(c.y), format::real(c.z)));
+                            row(ui, "Masse présente", format::real(snap.total_mass));
+                            row(ui, "Vitesse", format::real(self.cache.barycenter_velocity.length()));
+                            row(ui, "Distance caméra", format::real((c - self.camera.position).length()));
+                            match self.cache.rotation_axis {
+                                Some(a) => row(
+                                    ui,
+                                    "Axe de rotation",
+                                    format!("{:.1}° sur Oz", a.angle_between(DVec3::Z).to_degrees()).replace('.', ","),
+                                ),
+                                None => row(ui, "Axe de rotation", "aucune rotation".to_owned()),
+                            }
+                        });
+                    ui.horizontal(|ui| {
+                        if ui.button("Vue de face (B)").clicked() {
+                            self.view_barycenter_from_axis();
+                        }
+                        if ui.button("Cesser le suivi").clicked() {
+                            self.bary_selected = false;
+                            self.camera.mode = Mode::Free;
+                        }
+                    });
+                } else {
                 ui.label(RichText::new("Corps sélectionné").strong());
                 match self.cache.selected_index {
                     Some(i) => {
@@ -1061,9 +1214,10 @@ impl SimScreen {
                     }
                     None => {
                         ui.label(
-                            RichText::new("Aucun — visez et cliquez, ou touche Origine.").weak(),
+                            RichText::new("Aucun — visez et cliquez, ou touches Origine ou B (barycentre).").weak(),
                         );
                     }
+                }
                 }
                 ui.separator();
                 self.traces_panel(ui);
@@ -1119,18 +1273,25 @@ impl SimScreen {
             ui.label("Référentiel (R)");
             let mut rel = self.trace_relative;
             ui.radio_value(&mut rel, false, "Absolu");
-            ui.radio_value(&mut rel, true, "Corps sélectionné");
+            let label = if self.bary_selected {
+                "Barycentre"
+            } else {
+                "Corps sélectionné"
+            };
+            ui.radio_value(&mut rel, true, label);
             if rel != self.trace_relative {
                 self.toggle_trace_relative();
             }
         });
-        if self.trace_relative && self.selected.is_none() {
+        if self.trace_relative && self.selected.is_none() && !self.bary_selected {
             ui.label(
                 RichText::new(
-                    "Sélectionnez un corps : les traces s'affichent alors relativement à lui.",
+                    "Sélectionnez un corps, ou le barycentre (B) : les traces s'affichent alors relativement à lui.",
                 )
                 .weak(),
             );
+        } else if self.trace_relative && self.bary_selected {
+            ui.label(RichText::new("Orbites vues depuis le centre de gravité.").weak());
         }
         if self.trace_tail_only {
             ui.add(
@@ -1512,6 +1673,7 @@ impl SimScreen {
                             ("Clic gauche", "suivre le corps visé"),
                             ("Origine", "corps le plus massif"),
                             ("PgDn / PgUp", "corps suivant / précédent par masse"),
+                            ("B", "barycentre : sélection, vue de face au disque"),
                             ("C", "viser le centre de gravité"),
                             ("V", "vue d'ensemble (90 % de la masse)"),
                             ("T", "tracer les 10 plus massifs visibles / effacer"),

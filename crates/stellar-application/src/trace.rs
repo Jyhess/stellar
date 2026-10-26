@@ -109,19 +109,58 @@ impl Trace {
     }
 }
 
-/// Ensemble des traces actives, plus une éventuelle piste de référence.
-#[derive(Debug, Clone, Default)]
+/// Référentiel d'affichage relatif des traces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceReference {
+    /// Un corps (suivi à travers ses fusions).
+    Body(BodyId),
+    /// Le centre de gravité du système.
+    Barycenter,
+}
+
+/// Ensemble des traces actives, plus les pistes de référence.
+#[derive(Debug, Clone)]
 pub struct TraceSet {
     pub traces: Vec<Trace>,
     /// Piste du corps de référence, quand il ne fait pas partie des traces.
     pub reference: Option<Trace>,
+    /// Trajectoire du barycentre, enregistrée en permanence depuis
+    /// l'activation des traces.
+    pub barycenter: Trace,
 }
 
 impl TraceSet {
     pub fn new(ids: impl IntoIterator<Item = BodyId>) -> Self {
+        let mut barycenter = Trace::new(BodyId::MAX);
+        barycenter.current = None; // n'est pas un corps : jamais résolu ni recherché
         Self {
             traces: ids.into_iter().map(Trace::new).collect(),
             reference: None,
+            barycenter,
+        }
+    }
+
+    /// Ajoute un point à la trajectoire du barycentre.
+    pub fn push_barycenter(&mut self, step: u64, p: Vec3) {
+        self.barycenter.push((step, p));
+    }
+
+    /// Choisit le référentiel (corps ou barycentre).
+    pub fn set_reference_kind(&mut self, reference: Option<TraceReference>) {
+        match reference {
+            Some(TraceReference::Body(id)) => self.set_reference(Some(id)),
+            Some(TraceReference::Barycenter) | None => self.reference = None,
+        }
+    }
+
+    /// Trajectoire connue de la référence, pour l'affichage relatif.
+    pub fn samples_for(&self, reference: TraceReference) -> Option<Vec<Sample>> {
+        match reference {
+            TraceReference::Body(id) => self.reference_samples(id),
+            TraceReference::Barycenter => {
+                let s = self.barycenter.samples();
+                (!s.is_empty()).then_some(s)
+            }
         }
     }
 
@@ -303,6 +342,30 @@ mod tests {
         // Une référence déjà tracée n'ouvre pas de piste dédiée.
         t.set_reference(Some(1));
         assert!(t.reference.is_none());
+    }
+
+    #[test]
+    fn orbits_around_the_barycenter() {
+        // Deux corps égaux en orbite autour d'un barycentre qui dérive.
+        let mut t = TraceSet::new([1, 2]);
+        for k in 0..50u64 {
+            let a = k as f64 * 0.2;
+            let c = Vec3::new(k as f64 * 0.5, 0.0, 0.0);
+            let r = Vec3::new(a.cos(), a.sin(), 0.0);
+            t.push(k, &[Some(c + r), Some(c - r)]);
+            t.push_barycenter(k, c);
+        }
+        t.set_reference_kind(Some(TraceReference::Barycenter));
+        assert!(t.reference.is_none());
+        let reference = t.samples_for(TraceReference::Barycenter).unwrap();
+        let now = Vec3::new(49.0 * 0.5, 0.0, 0.0);
+        for tr in &t.traces {
+            for p in relative_to(&tr.full(), &reference) {
+                assert!(((p.unwrap() - now).length() - 1.0).abs() < 1e-9);
+            }
+        }
+        // Le barycentre n'est jamais demandé au moteur.
+        assert_eq!(t.current_ids(), vec![1, 2]);
     }
 
     #[test]

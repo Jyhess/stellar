@@ -4,8 +4,12 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use stellar_application::{Phase, ReplayPlayer, SimulationHandle, Snapshot, TraceSet};
+use stellar_application::recording::is_dust;
+use stellar_application::{
+    Phase, ReplayPlayer, SimulationHandle, Snapshot, TraceReference, TraceSet,
+};
 use stellar_domain::{BodyId, Diagnostics, SimulationConfig, SimulationState};
+use stellar_domain::{BodySet, Vec3};
 
 /// Relecture : lecteur, instantané interpolé courant et traces locales.
 pub struct Replay {
@@ -18,7 +22,7 @@ pub struct Replay {
     sequence: u64,
     traces: Option<TraceSet>,
     trace_origins: Vec<BodyId>,
-    trace_reference: Option<BodyId>,
+    trace_reference: Option<TraceReference>,
     trace_tick: u64,
     last_position: f64,
 }
@@ -79,7 +83,7 @@ impl Replay {
         if let Some(traces) = &mut self.traces {
             if jumped {
                 *traces = TraceSet::new(self.trace_origins.iter().copied());
-                traces.set_reference(self.trace_reference);
+                traces.set_reference_kind(self.trace_reference);
             }
             let player = &self.player;
             traces.resolve_with(|id| player.resolve(id));
@@ -97,6 +101,9 @@ impl Replay {
                 .collect();
             self.trace_tick += 1;
             traces.push(self.trace_tick, &positions);
+            if let Some(c) = weighted_barycenter(&state.bodies, w) {
+                traces.push_barycenter(self.trace_tick, c);
+            }
         }
 
         self.sequence += 1;
@@ -114,6 +121,39 @@ impl Replay {
         self.recent.push_back(Arc::clone(&snapshot));
         self.snapshot = snapshot;
     }
+}
+
+/// Centre de masse, la poussière sous-échantillonnée comptant pour `dust_weight`.
+pub fn weighted_barycenter(bodies: &BodySet, dust_weight: f64) -> Option<Vec3> {
+    let (m, mx) = bodies.masses.iter().zip(&bodies.positions).fold(
+        (0.0, Vec3::ZERO),
+        |(m, mx), (&mi, &p)| {
+            let w = if is_dust(mi) { mi * dust_weight } else { mi };
+            (m + w, mx + p * w)
+        },
+    );
+    (m > 0.0).then(|| mx / m)
+}
+
+/// Moment cinétique total autour du centre de masse (même pondération).
+pub fn angular_momentum(bodies: &BodySet, dust_weight: f64, center: Vec3) -> Vec3 {
+    let (m, mv) = bodies.masses.iter().zip(&bodies.velocities).fold(
+        (0.0, Vec3::ZERO),
+        |(m, mv), (&mi, &v)| {
+            let w = if is_dust(mi) { mi * dust_weight } else { mi };
+            (m + w, mv + v * w)
+        },
+    );
+    let v_cm = if m > 0.0 { mv / m } else { Vec3::ZERO };
+    bodies
+        .masses
+        .iter()
+        .zip(bodies.positions.iter().zip(&bodies.velocities))
+        .map(|(&mi, (&p, &v))| {
+            let w = if is_dust(mi) { mi * dust_weight } else { mi };
+            (p - center).cross(v - v_cm) * w
+        })
+        .sum()
 }
 
 fn empty_snapshot() -> Snapshot {
@@ -206,7 +246,7 @@ impl Source {
             Source::Replay(r) => {
                 r.trace_origins = ids.clone();
                 let mut set = TraceSet::new(ids);
-                set.set_reference(r.trace_reference);
+                set.set_reference_kind(r.trace_reference);
                 let state = &r.snapshot.state;
                 let positions: Vec<_> = set
                     .current_ids()
@@ -222,6 +262,9 @@ impl Source {
                     .collect();
                 r.trace_tick += 1;
                 set.push(r.trace_tick, &positions);
+                if let Some(c) = weighted_barycenter(&state.bodies, r.player.dust_weight() as f64) {
+                    set.push_barycenter(r.trace_tick, c);
+                }
                 r.traces = Some(set);
             }
         }
@@ -234,13 +277,13 @@ impl Source {
         }
     }
 
-    pub fn set_trace_reference(&mut self, id: Option<BodyId>) {
+    pub fn set_trace_reference(&mut self, id: Option<TraceReference>) {
         match self {
             Source::Live(h) => h.set_trace_reference(id),
             Source::Replay(r) => {
                 r.trace_reference = id;
                 if let Some(t) = &mut r.traces {
-                    t.set_reference(id);
+                    t.set_reference_kind(id);
                 }
             }
         }

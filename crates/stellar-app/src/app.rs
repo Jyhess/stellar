@@ -71,6 +71,15 @@ impl StellarApp {
         };
         let mut config = stellar_domain::SimulationConfig::default();
         config.initial.count = count.max(2);
+        // `STELLAR_AUTODISK=1` : disque incliné en rotation orbitale (essais).
+        if std::env::var("STELLAR_AUTODISK").is_ok() {
+            config.initial.distribution = stellar_domain::Distribution::Disk {
+                thickness: 0.05,
+                profile: stellar_domain::DensityProfile::Exponential { scale: 0.3 },
+            };
+            config.initial.velocity =
+                stellar_domain::VelocityMode::CircularOrbital { spread: 0.05 };
+        }
         config.physics = stellar_domain::PhysicsParams::suggested(&config.initial, 1.0);
         if let Ok(handle) = self.service.new_simulation(config) {
             // `STELLAR_AUTORECORD=<intervalle>` : enregistrement immédiat.

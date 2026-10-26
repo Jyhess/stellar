@@ -393,6 +393,16 @@ impl PhysicsEngine for CpuEngine {
         self.ids.len()
     }
 
+    fn center_of_mass(&self) -> Option<DVec3> {
+        let (m, mx) = self
+            .mass
+            .par_iter()
+            .zip(self.pos.par_iter())
+            .map(|(&m, &x)| (m, x * m))
+            .reduce(|| (0.0, DVec3::ZERO), |a, b| (a.0 + b.0, a.1 + b.1));
+        (m > 0.0).then(|| mx / m)
+    }
+
     fn positions_of(&self, ids: &[BodyId]) -> Vec<Option<DVec3>> {
         // Un seul passage, en s'arrêtant dès que tout est trouvé.
         let mut out = vec![None; ids.len()];

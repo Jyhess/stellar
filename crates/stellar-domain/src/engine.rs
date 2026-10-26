@@ -66,6 +66,12 @@ pub trait PhysicsEngine: Send {
             .collect()
     }
 
+    /// Centre de masse du système (`None` s'il est vide). Appelé à chaque
+    /// pas quand les traces sont actives.
+    fn center_of_mass(&self) -> Option<Vec3> {
+        self.state().bodies.center_of_mass()
+    }
+
     /// Énergies au dernier pas calculé.
     fn diagnostics(&self) -> Diagnostics;
 }
