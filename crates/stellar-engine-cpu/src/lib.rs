@@ -46,8 +46,12 @@ impl EngineFactory for CpuEngineFactory {
         }
     }
 
-    fn create(&self, state: SimulationState, params: PhysicsParams) -> Box<dyn PhysicsEngine> {
-        Box::new(CpuEngine::new(state, params))
+    fn create(
+        &self,
+        state: SimulationState,
+        params: PhysicsParams,
+    ) -> Result<Box<dyn PhysicsEngine>, String> {
+        Ok(Box::new(CpuEngine::new(state, params)))
     }
 }
 

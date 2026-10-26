@@ -80,6 +80,11 @@ pub trait PhysicsEngine: Send {
 pub trait EngineFactory: Send + Sync {
     fn descriptor(&self) -> EngineDescriptor;
 
-    /// Construit un moteur à partir d'un état et de paramètres.
-    fn create(&self, state: SimulationState, params: PhysicsParams) -> Box<dyn PhysicsEngine>;
+    /// Construit un moteur à partir d'un état et de paramètres. Échoue si le
+    /// matériel requis est absent ou insuffisant (message lisible).
+    fn create(
+        &self,
+        state: SimulationState,
+        params: PhysicsParams,
+    ) -> Result<Box<dyn PhysicsEngine>, String>;
 }

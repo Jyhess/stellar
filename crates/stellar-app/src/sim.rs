@@ -1073,6 +1073,18 @@ impl SimScreen {
                 Color32::from_gray(220),
             );
         }
+        if self.snapshot.phase == Phase::Failed {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!(
+                    "Le moteur de calcul n'a pas pu démarrer :\n{}\n\nÉchap → Retour à l'accueil, puis choisir un autre moteur dans les paramètres avancés.",
+                    self.snapshot.error.as_deref().unwrap_or("erreur inconnue")
+                ),
+                egui::FontId::proportional(18.0),
+                Color32::from_rgb(255, 140, 120),
+            );
+        }
 
         if let Some((msg, t)) = &self.toast {
             if t.elapsed() < TOAST_DURATION {
@@ -1325,6 +1337,12 @@ impl SimScreen {
     }
 
     fn live_panel(&mut self, ui: &mut egui::Ui, snap: &Snapshot) {
+        let engine_id = self.source.config().engine.clone();
+        let engine = if engine_id.starts_with("gpu") {
+            "GPU"
+        } else {
+            "CPU"
+        };
         egui::Grid::new("stats")
             .num_columns(2)
             .spacing([14.0, 3.0])
@@ -1334,7 +1352,9 @@ impl SimScreen {
                     ui.label(RichText::new(v).monospace());
                     ui.end_row();
                 };
-                let state = if snap.phase == Phase::Initialising {
+                let state = if snap.phase == Phase::Failed {
+                    "échec du moteur"
+                } else if snap.phase == Phase::Initialising {
                     "initialisation"
                 } else if self.paused {
                     "en pause"
@@ -1342,6 +1362,7 @@ impl SimScreen {
                     "en cours"
                 };
                 row(ui, "État", state.to_owned());
+                row(ui, "Moteur", engine.to_owned());
                 row(ui, "Corps", format::count(snap.state.bodies.len() as u64));
                 row(ui, "Pas", format::count(snap.state.step));
                 row(ui, "Temps simulé", format::real(snap.state.time));

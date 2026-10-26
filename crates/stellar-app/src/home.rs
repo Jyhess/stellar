@@ -390,15 +390,25 @@ impl HomeScreen {
 
         ui.add_space(10.0);
         // Mesuré : ≈ 4,2 Go pour 10 millions de corps (moteur, instantanés, rendu).
-        let mem_mb = self.count as f64 * 420.0 / 1e6;
-        ui.label(
-            RichText::new(if mem_mb >= 1000.0 {
-                format!("Mémoire estimée : ≈ {:.1} Go", mem_mb / 1000.0).replace('.', ",")
+        let size = |mb: f64| {
+            if mb >= 1000.0 {
+                format!("{:.1} Go", mb / 1000.0).replace('.', ",")
             } else {
-                format!("Mémoire estimée : ≈ {:.0} Mo", mem_mb)
-            })
-            .weak(),
+                format!("{mb:.0} Mo")
+            }
+        };
+        let mut text = format!(
+            "Mémoire estimée : ≈ {}",
+            size(self.count as f64 * 420.0 / 1e6)
         );
+        if self.engine.starts_with("gpu") {
+            // Moteur GPU : ≈ 330 octets par corps en mémoire vidéo.
+            text.push_str(&format!(
+                " · mémoire vidéo ≈ {}",
+                size(self.count as f64 * 330.0 / 1e6)
+            ));
+        }
+        ui.label(RichText::new(text).weak());
         if ui
             .add_sized(
                 [260.0, 36.0],
@@ -510,6 +520,9 @@ impl HomeScreen {
                     });
                 ui.end_row();
             });
+        if let Some(note) = service.engine_note() {
+            ui.label(RichText::new(note).small().weak());
+        }
         self.physics.reference_radius = ic.radius;
     }
 

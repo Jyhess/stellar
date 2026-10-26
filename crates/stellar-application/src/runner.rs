@@ -30,6 +30,8 @@ pub enum Phase {
     /// Génération de l'état initial / construction du moteur en cours.
     Initialising,
     Ready,
+    /// Le moteur n'a pas pu démarrer (message dans [`Snapshot::error`]).
+    Failed,
 }
 
 /// Instantané publié par le thread de simulation.
@@ -49,6 +51,8 @@ pub struct Snapshot {
     pub running: bool,
     /// Numéro de publication, strictement croissant.
     pub sequence: u64,
+    /// Message d'erreur si le moteur n'a pas pu démarrer.
+    pub error: Option<String>,
 }
 
 impl Snapshot {
@@ -63,6 +67,7 @@ impl Snapshot {
             last_step_ms: 0.0,
             running,
             sequence: 0,
+            error: None,
         }
     }
 
@@ -169,7 +174,24 @@ impl SimulationHandle {
                 // Sauvegardes antérieures : masse initiale déduite des conditions initiales.
                 let initial_mass = state.initial_mass.or(Some(initial_count as f64));
                 let step = state.step;
-                let engine = factory.create(state, params);
+                let engine = match factory.create(state, params) {
+                    Ok(e) => e,
+                    Err(message) => {
+                        let mut s = Snapshot::initialising(false);
+                        s.phase = Phase::Failed;
+                        s.error = Some(message);
+                        s.sequence = 1;
+                        *worker_shared.latest.lock().expect("verrou empoisonné") = Arc::new(s);
+                        worker_shared.sequence.store(1, Ordering::Release);
+                        // Attente de l'arrêt demandé par l'interface.
+                        while let Ok(cmd) = rx.recv() {
+                            if matches!(cmd, Command::Shutdown) {
+                                break;
+                            }
+                        }
+                        return;
+                    }
+                };
                 let initial_energy =
                     saved_energy.or_else(|| Some(engine.diagnostics().total_energy()));
                 Worker {
@@ -526,9 +548,12 @@ impl Worker {
             // 2. Un pas de calcul.
             let started = Instant::now();
             self.step();
+            // Au-delà d'un million de corps, la copie de l'état (relecture
+            // GPU comprise) devient coûteuse : publications plus espacées.
+            let scale = (self.engine.body_count() as f64 / 1e6).max(1.0);
             if self
                 .last_publish
-                .map_or(true, |t| t.elapsed() >= PUBLISH_INTERVAL)
+                .map_or(true, |t| t.elapsed() >= PUBLISH_INTERVAL.mul_f64(scale))
             {
                 self.publish();
             }
@@ -613,6 +638,7 @@ impl Worker {
             last_step_ms: self.last_step_ms,
             running: self.running,
             sequence,
+            error: None,
         });
         *self.shared.latest.lock().expect("verrou empoisonné") = snapshot;
         self.shared.sequence.store(sequence, Ordering::Release);
@@ -671,8 +697,12 @@ mod tests {
                 description: "",
             }
         }
-        fn create(&self, state: SimulationState, _: PhysicsParams) -> Box<dyn PhysicsEngine> {
-            Box::new(Drift { state })
+        fn create(
+            &self,
+            state: SimulationState,
+            _: PhysicsParams,
+        ) -> Result<Box<dyn PhysicsEngine>, String> {
+            Ok(Box::new(Drift { state }))
         }
     }
 

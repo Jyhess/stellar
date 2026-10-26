@@ -119,6 +119,20 @@ Une simulation lourde peut être enregistrée puis rejouée de façon fluide, à
   - recharger une sauvegarde de reprise plus ancienne tronque l'enregistrement à ce point : les instantanés postérieurs sont supprimés.
 - **Après un plantage :** un enregistrement interrompu reste lisible, car son index est reconstruit à l'ouverture.
 
+### Moteur GPU
+
+Si une carte graphique compatible (DirectX 12 ou Vulkan) est détectée, le moteur **GPU** devient le moteur par défaut. Le moteur CPU reste disponible dans « Paramètres avancés → Moteur de calcul », où la carte détectée est indiquée.
+
+- **Même algorithme que le moteur CPU :** Barnes-Hut, Leapfrog, fusions balayées, nettoyage.
+- **Simple précision :** sur les essais, l'écart avec le moteur CPU reste de l'ordre de 10⁻³ en position après 50 pas, avec un écart d'énergie de 4 × 10⁻⁵.
+- **Mémoire vidéo :** environ 330 octets par corps, soit environ 3,3 Go pour 10 millions. Le maximum est de 16,7 millions de corps.
+- **Repli automatique :** une sauvegarde faite avec le moteur GPU se recharge avec le moteur CPU si la carte est absente.
+- **Banc d'essai :**
+
+```powershell
+cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10
+```
+
 ## 3. Architecture
 
 Le projet suit la **clean architecture**. Les dépendances pointent toutes vers le domaine :
@@ -138,7 +152,8 @@ stellar-app (présentation + racine de composition : egui, wgpu)
 |---|---|
 | `stellar-domain` | Corps (`BodySet`, en structure de tableaux), état, paramètres, règles physiques (rayon, fusion, distance balayée), classement par masse, **traits `PhysicsEngine` / `EngineFactory`**. Aucune infrastructure. |
 | `stellar-application` | Génération des conditions initiales, thread de simulation découplé (`SimulationHandle`, instantanés publiés à ≤ 60 Hz), registre des moteurs, ports `SimulationRepository`, façade `SimulatorService`. |
-| `stellar-engine-cpu` | Moteur de calcul. Optimisé librement, comme prévu par la spécification (voir ci-dessous). |
+| `stellar-engine-cpu` | Moteur de calcul CPU. Optimisé librement, comme prévu par la spécification (voir ci-dessous). |
+| `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau, parcours de Barnes-Hut, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. |
 | `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. |
 | `stellar-app` | Écrans egui, caméra, sélection, rendu GPU des corps (billboards additifs, positions relatives à une ancre pour garder la précision en `f32`). |
 

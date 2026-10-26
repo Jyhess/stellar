@@ -4,6 +4,7 @@ members = [
     "crates/stellar-domain",
     "crates/stellar-application",
     "crates/stellar-engine-cpu",
+    "crates/stellar-engine-gpu",
     "crates/stellar-persistence",
     "crates/stellar-app",
 ]
@@ -18,6 +19,7 @@ rust-version = "1.80"
 stellar-domain = { path = "crates/stellar-domain" }
 stellar-application = { path = "crates/stellar-application" }
 stellar-engine-cpu = { path = "crates/stellar-engine-cpu" }
+stellar-engine-gpu = { path = "crates/stellar-engine-gpu" }
 stellar-persistence = { path = "crates/stellar-persistence" }
 
 glam = { version = "0.29", features = ["serde"] }

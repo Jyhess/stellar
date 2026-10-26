@@ -13,6 +13,7 @@ path = "src/main.rs"
 stellar-domain.workspace = true
 stellar-application.workspace = true
 stellar-engine-cpu.workspace = true
+stellar-engine-gpu.workspace = true
 stellar-persistence.workspace = true
 glam.workspace = true
 bytemuck.workspace = true

@@ -19,6 +19,7 @@ use std::sync::Arc;
 use eframe::egui;
 use stellar_application::{EngineRegistry, SimulatorService};
 use stellar_engine_cpu::CpuEngineFactory;
+use stellar_engine_gpu::GpuEngineFactory;
 use stellar_persistence::{FileRecordingRepository, FileRepository};
 
 /// Dossier des sauvegardes, relatif au répertoire de lancement.
@@ -60,12 +61,21 @@ fn install_panic_hook() {
 fn main() -> eframe::Result {
     install_panic_hook();
     let mut registry = EngineRegistry::new();
+    // Le moteur GPU devient le moteur par défaut si une carte compatible est
+    // présente ; le moteur CPU reste toujours disponible.
+    let gpu = GpuEngineFactory::probe();
+    if gpu.is_ok() {
+        registry.register(Arc::new(GpuEngineFactory));
+    }
     registry.register(Arc::new(CpuEngineFactory));
-    // Un futur moteur (GPU…) s'enregistre ici et devient sélectionnable.
 
     let repository = Arc::new(FileRepository::new(SAVES_DIR));
     let recordings = Arc::new(FileRecordingRepository::new(RECORDINGS_DIR));
-    let service = SimulatorService::new(registry, repository, recordings);
+    let mut service = SimulatorService::new(registry, repository, recordings);
+    service.set_engine_note(match gpu {
+        Ok(name) => format!("Carte graphique : {name}"),
+        Err(e) => format!("Moteur GPU indisponible : {e}"),
+    });
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

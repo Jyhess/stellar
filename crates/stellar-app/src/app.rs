@@ -70,6 +70,11 @@ impl StellarApp {
             return;
         };
         let mut config = stellar_domain::SimulationConfig::default();
+        // `STELLAR_ENGINE=<id>` : moteur imposé (sinon le moteur par défaut).
+        config.engine = std::env::var("STELLAR_ENGINE")
+            .ok()
+            .or_else(|| self.service.default_engine().map(str::to_owned))
+            .unwrap_or(config.engine);
         config.initial.count = count.max(2);
         // `STELLAR_AUTODISK=1` : disque incliné en rotation orbitale (essais).
         if std::env::var("STELLAR_AUTODISK").is_ok() {

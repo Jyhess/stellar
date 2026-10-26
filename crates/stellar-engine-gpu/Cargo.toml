@@ -1,0 +1,17 @@
+[package]
+name = "stellar-engine-gpu"
+description = "Moteur de calcul GPU (wgpu, compute shaders) : Barnes-Hut sur LBVH, fusions balayées."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+stellar-domain.workspace = true
+wgpu = "24"
+pollster = "0.4"
+bytemuck.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+stellar-application.workspace = true
+stellar-engine-cpu.workspace = true

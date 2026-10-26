@@ -117,6 +117,7 @@ impl Replay {
             last_step_ms: 0.0,
             running: self.player.clock.playing,
             sequence: self.sequence,
+            error: None,
         });
         self.recent.push_back(Arc::clone(&snapshot));
         self.snapshot = snapshot;
@@ -167,6 +168,7 @@ fn empty_snapshot() -> Snapshot {
         last_step_ms: 0.0,
         running: false,
         sequence: 0,
+        error: None,
     }
 }
 

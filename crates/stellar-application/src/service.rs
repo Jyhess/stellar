@@ -36,6 +36,8 @@ pub struct SimulatorService {
     registry: Arc<EngineRegistry>,
     repository: Arc<dyn SimulationRepository>,
     recordings: Arc<dyn RecordingRepository>,
+    /// Information sur les moteurs (carte graphique détectée ou absente).
+    engine_note: Option<String>,
 }
 
 impl SimulatorService {
@@ -48,7 +50,16 @@ impl SimulatorService {
             registry: Arc::new(registry),
             repository,
             recordings,
+            engine_note: None,
         }
+    }
+
+    pub fn set_engine_note(&mut self, note: String) {
+        self.engine_note = Some(note);
+    }
+
+    pub fn engine_note(&self) -> Option<&str> {
+        self.engine_note.as_deref()
     }
 
     /// Moteurs de calcul disponibles.
@@ -81,7 +92,14 @@ impl SimulatorService {
     /// un enregistrement suspendu, celui-ci est rouvert et reprend dès que le
     /// calcul est relancé (les instantanés postérieurs sont supprimés).
     pub fn load_simulation(&self, path: &Path) -> Result<LoadedSimulation, AppError> {
-        let data = self.repository.load(path)?;
+        let mut data = self.repository.load(path)?;
+        // Moteur de la sauvegarde absent (ex. pas de carte graphique) : le
+        // moteur par défaut prend le relais.
+        if self.registry.get(&data.config.engine).is_none() {
+            if let Some(id) = self.registry.default_id() {
+                data.config.engine = id.to_owned();
+            }
+        }
         let factory = self
             .registry
             .get(&data.config.engine)
