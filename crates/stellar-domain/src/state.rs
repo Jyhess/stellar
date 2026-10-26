@@ -14,4 +14,6 @@ pub struct SimulationState {
     pub time: f64,
     /// Énergie totale initiale (référence pour le suivi de la dérive).
     pub initial_energy: Option<f64>,
+    /// Masse totale initiale (référence pour la masse éjectée).
+    pub initial_mass: Option<f64>,
 }

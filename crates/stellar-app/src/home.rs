@@ -572,6 +572,13 @@ impl HomeScreen {
                             ))
                             .weak(),
                         );
+                        if let Some(rec) = &s.recording {
+                            ui.label(
+                                RichText::new(format!("Reprend l'enregistrement « {rec} »"))
+                                    .small()
+                                    .color(egui::Color32::from_rgb(255, 120, 120)),
+                            );
+                        }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Charger").clicked() {
@@ -629,6 +636,21 @@ impl HomeScreen {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Rejouer").clicked() {
                             action = Some(HomeAction::Replay(r.path.clone()));
+                        }
+                        // Sauvegarde de reprise la plus récente liée à cet enregistrement.
+                        let file = r.path.file_name().map(|n| n.to_string_lossy().into_owned());
+                        if let Some(save) = self.saves.iter().find(|s| s.recording.is_some() && s.recording == file) {
+                            if ui
+                                .button("Reprendre")
+                                .on_hover_text(format!(
+                                    "Recharge la sauvegarde « {} » (pas {}) et poursuit l'enregistrement",
+                                    save.name,
+                                    format::count(save.step)
+                                ))
+                                .clicked()
+                            {
+                                action = Some(HomeAction::Load(save.path.clone()));
+                            }
                         }
                     });
                 });

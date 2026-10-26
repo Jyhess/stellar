@@ -27,6 +27,19 @@ fn default_brightness(count: usize) -> f32 {
     (1e6 / count.max(1) as f64).powf(0.75).clamp(0.05, 1.5) as f32
 }
 
+/// Part exprimée en pourcentage, avec une précision adaptée.
+fn format_share(f: f64) -> String {
+    let p = 100.0 * f;
+    if p >= 10.0 {
+        format!("{p:.1} %")
+    } else if p >= 0.01 || p == 0.0 {
+        format!("{p:.2} %")
+    } else {
+        format!("{p:.1e} %")
+    }
+    .replace('.', ",")
+}
+
 fn format_bytes(b: u64) -> String {
     let b = b as f64;
     if b >= 1e9 {
@@ -193,7 +206,28 @@ impl SimScreen {
         self.source.config().physics.base_radius
     }
 
-    fn notify(&mut self, msg: impl Into<String>) {
+    /// Vrai si un enregistrement est en cours.
+    pub fn is_recording(&self) -> bool {
+        self.source.live().is_some_and(|h| h.is_recording())
+    }
+
+    /// Suspend l'enregistrement en cours (avec sauvegarde de reprise liée).
+    pub fn suspend_recording(&self) -> Option<Result<PathBuf, String>> {
+        let h = self.source.live()?;
+        if !h.is_recording() {
+            return None;
+        }
+        match self
+            .service
+            .suspend_recording(h, Some(self.camera.to_view()))
+        {
+            Ok(Some(p)) => Some(Ok(p)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e.to_string())),
+        }
+    }
+
+    pub fn notify(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), Instant::now()));
     }
 
@@ -1036,7 +1070,7 @@ impl SimScreen {
                 ui.separator();
                 ui.label(RichText::new("Les plus massifs").strong());
                 egui::Grid::new("top")
-                    .num_columns(3)
+                    .num_columns(4)
                     .spacing([10.0, 2.0])
                     .show(ui, |ui| {
                         for (rank, (id, m)) in snap.top.iter().enumerate() {
@@ -1046,6 +1080,11 @@ impl SimScreen {
                                 clicked_id = Some(*id);
                             }
                             ui.label(RichText::new(format::real(*m)).monospace());
+                            ui.label(
+                                RichText::new(format_share(snap.mass_fraction(*m)))
+                                    .monospace()
+                                    .weak(),
+                            );
                             ui.end_row();
                         }
                     });
@@ -1163,6 +1202,19 @@ impl SimScreen {
                 );
                 if let Some(d) = snap.energy_drift() {
                     row(ui, "ΔE / E₀", format::percent(d));
+                }
+                row(ui, "Masse présente", format::real(snap.total_mass));
+                if let Some(e) = snap.ejected_mass() {
+                    let m0 = snap.state.initial_mass.unwrap_or(0.0);
+                    row(
+                        ui,
+                        "Masse éjectée",
+                        format!(
+                            "{} ({})",
+                            format::real(e),
+                            format_share(if m0 > 0.0 { e / m0 } else { 0.0 })
+                        ),
+                    );
                 }
             });
         ui.label(
@@ -1328,6 +1380,18 @@ impl SimScreen {
                     "Corps affichés",
                     format::count(snap.state.bodies.len() as u64),
                 );
+                if let Some(e) = snap.ejected_mass() {
+                    let m0 = snap.state.initial_mass.unwrap_or(0.0);
+                    row(
+                        ui,
+                        "Masse éjectée",
+                        format!(
+                            "{} ({})",
+                            format::real(e),
+                            format_share(if m0 > 0.0 { e / m0 } else { 0.0 })
+                        ),
+                    );
+                }
                 if weight > 1.0 {
                     row(
                         ui,

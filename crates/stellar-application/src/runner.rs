@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::recording::{BodyFate, Keyframe, Recorder, RecordingStatus, RecordingWriter};
+use crate::recording::{
+    BodyFate, Keyframe, Recorder, RecordingLink, RecordingStatus, RecordingWriter,
+};
 use crate::trace::TraceSet;
 use stellar_domain::{
     ranking, BodyId, Diagnostics, EngineFactory, PhysicsEngine, SimulationConfig, SimulationState,
@@ -38,6 +40,8 @@ pub struct Snapshot {
     pub diagnostics: Diagnostics,
     /// Classement des corps les plus massifs : (id, masse).
     pub top: Vec<(BodyId, f64)>,
+    /// Masse totale des corps présents dans la simulation.
+    pub total_mass: f64,
     /// Cadence de calcul (moyenne glissante).
     pub steps_per_second: f64,
     /// Durée du dernier pas, en millisecondes.
@@ -54,10 +58,26 @@ impl Snapshot {
             state: SimulationState::default(),
             diagnostics: Diagnostics::default(),
             top: Vec::new(),
+            total_mass: 0.0,
             steps_per_second: 0.0,
             last_step_ms: 0.0,
             running,
             sequence: 0,
+        }
+    }
+
+    /// Masse sortie de la simulation (corps éjectés puis éliminés).
+    pub fn ejected_mass(&self) -> Option<f64> {
+        let m0 = self.state.initial_mass?;
+        (self.phase == Phase::Ready).then(|| (m0 - self.total_mass).max(0.0))
+    }
+
+    /// Part de la masse présente portée par un corps de masse `m`.
+    pub fn mass_fraction(&self, m: f64) -> f64 {
+        if self.total_mass > 0.0 {
+            m / self.total_mass
+        } else {
+            0.0
         }
     }
 
@@ -82,6 +102,13 @@ enum Command {
         dust_budget: Option<u64>,
     },
     StopRecording,
+    /// Clôt l'enregistrement et renvoie de quoi le poursuivre, avec l'état
+    /// exact de la simulation au même instant.
+    SuspendRecording(Sender<Option<(RecordingLink, SimulationState)>>),
+    ResumeRecording {
+        writer: Box<dyn RecordingWriter>,
+        link: RecordingLink,
+    },
     Shutdown,
 }
 
@@ -133,11 +160,14 @@ impl SimulationHandle {
         });
         let worker_shared = Arc::clone(&shared);
         let params = config.physics;
+        let initial_count = config.initial.count;
         let thread = std::thread::Builder::new()
             .name("stellar-simulation".into())
             .spawn(move || {
                 let state = source();
                 let saved_energy = state.initial_energy;
+                // Sauvegardes antérieures : masse initiale déduite des conditions initiales.
+                let initial_mass = state.initial_mass.or(Some(initial_count as f64));
                 let step = state.step;
                 let engine = factory.create(state, params);
                 let initial_energy =
@@ -149,6 +179,7 @@ impl SimulationHandle {
                     running: !start_paused,
                     max_rate: None,
                     initial_energy,
+                    initial_mass,
                     steps_per_second: 0.0,
                     last_step_ms: 0.0,
                     last_publish: None,
@@ -219,6 +250,25 @@ impl SimulationHandle {
         });
     }
 
+    /// Suspend l'enregistrement en cours (fichier clos proprement) et renvoie
+    /// le lien de reprise ainsi que l'état de la simulation au même pas.
+    /// `None` si aucun enregistrement n'est actif. Bloquant.
+    pub fn suspend_recording(&self) -> Option<(RecordingLink, SimulationState)> {
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(Command::SuspendRecording(tx)).ok()?;
+        rx.recv().ok().flatten()
+    }
+
+    /// Poursuit un enregistrement suspendu.
+    pub fn resume_recording(&self, writer: Box<dyn RecordingWriter>, link: RecordingLink) {
+        let _ = self.tx.send(Command::ResumeRecording { writer, link });
+    }
+
+    /// Vrai si un enregistrement est en cours.
+    pub fn is_recording(&self) -> bool {
+        self.shared.recording.active.load(Ordering::Acquire)
+    }
+
     /// Arrête l'enregistrement (le fichier est clos par le thread de calcul).
     pub fn stop_recording(&self) {
         let _ = self.tx.send(Command::StopRecording);
@@ -285,6 +335,7 @@ struct Worker {
     running: bool,
     max_rate: Option<f64>,
     initial_energy: Option<f64>,
+    initial_mass: Option<f64>,
     steps_per_second: f64,
     last_step_ms: f64,
     last_publish: Option<Instant>,
@@ -300,6 +351,8 @@ struct ActiveRecording {
     next_step: u64,
     /// Devenirs accumulés depuis le dernier instantané.
     pending: Vec<(BodyId, BodyFate)>,
+    dust_budget: Option<u64>,
+    last_frame_step: u64,
 }
 
 impl Worker {
@@ -329,9 +382,58 @@ impl Worker {
             interval: interval.max(1) as u64,
             next_step: self.step,
             pending: Vec::new(),
+            dust_budget,
+            last_frame_step: self.step,
         };
         self.record_keyframe(&mut rec);
         self.recording = Some(rec);
+    }
+
+    fn resume_recording(&mut self, writer: Box<dyn RecordingWriter>, link: RecordingLink) {
+        self.stop_recording();
+        let status = &self.shared.recording;
+        status.frames.store(0, Ordering::Relaxed);
+        status.bytes.store(0, Ordering::Relaxed);
+        status
+            .interval
+            .store(link.interval.max(1) as u64, Ordering::Relaxed);
+        *status.error.lock().expect("verrou empoisonné") = None;
+        let recorder = Recorder::start(writer, Arc::clone(status), link.dust_budget);
+        self.recording = Some(ActiveRecording {
+            recorder,
+            interval: link.interval.max(1) as u64,
+            next_step: link.next_step,
+            pending: link.pending,
+            dust_budget: link.dust_budget,
+            last_frame_step: link.last_frame_step,
+        });
+    }
+
+    fn suspend_recording(&mut self) -> Option<(RecordingLink, SimulationState)> {
+        let rec = self.recording.take()?;
+        let interval = rec.interval as u32;
+        let (next_step, pending, dust_budget, last) = (
+            rec.next_step,
+            rec.pending,
+            rec.dust_budget,
+            rec.last_frame_step,
+        );
+        let path = rec.recorder.finish().ok()?;
+        let mut state = SimulationState::default();
+        self.engine.write_state(&mut state);
+        state.initial_energy = self.initial_energy;
+        state.initial_mass = self.initial_mass;
+        Some((
+            RecordingLink {
+                path,
+                interval,
+                dust_budget,
+                last_frame_step: last,
+                next_step,
+                pending,
+            },
+            state,
+        ))
     }
 
     fn stop_recording(&mut self) {
@@ -350,6 +452,7 @@ impl Worker {
             fates: std::mem::take(&mut rec.pending),
             dust_weight: 1.0,
         });
+        rec.last_frame_step = self.step;
         rec.next_step = self.step + rec.interval;
     }
 
@@ -403,6 +506,12 @@ impl Worker {
                         dust_budget,
                     } => self.start_recording(writer, interval, dust_budget),
                     Command::StopRecording => self.stop_recording(),
+                    Command::SuspendRecording(reply) => {
+                        let _ = reply.send(self.suspend_recording());
+                    }
+                    Command::ResumeRecording { writer, link } => {
+                        self.resume_recording(writer, link)
+                    }
                     Command::StopTraces => {
                         self.shared.tracing.store(false, Ordering::Release);
                         *self.shared.traces.lock().expect("verrou empoisonné") = None;
@@ -484,6 +593,8 @@ impl Worker {
         let mut state = SimulationState::default();
         self.engine.write_state(&mut state);
         state.initial_energy = self.initial_energy;
+        state.initial_mass = self.initial_mass;
+        let total_mass = state.bodies.total_mass();
         let top = ranking::top_k(&state.bodies.ids, &state.bodies.masses, TOP_COUNT);
         let sequence = self.shared.sequence.load(Ordering::Relaxed) + 1;
         let snapshot = Arc::new(Snapshot {
@@ -491,6 +602,7 @@ impl Worker {
             state,
             diagnostics: self.engine.diagnostics(),
             top,
+            total_mass,
             steps_per_second: self.steps_per_second,
             last_step_ms: self.last_step_ms,
             running: self.running,
@@ -499,5 +611,139 @@ impl Worker {
         *self.shared.latest.lock().expect("verrou empoisonné") = snapshot;
         self.shared.sequence.store(sequence, Ordering::Release);
         self.last_publish = Some(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::RepositoryError;
+    use std::path::PathBuf;
+    use stellar_domain::{BodySet, EngineDescriptor, PhysicsParams, StepReport, Vec3};
+
+    /// Moteur factice : translation uniforme, le corps 2 absorbé au pas 3.
+    struct Drift {
+        state: SimulationState,
+    }
+
+    impl PhysicsEngine for Drift {
+        fn step(&mut self) -> StepReport {
+            self.state.step += 1;
+            self.state.time += 1.0;
+            for p in &mut self.state.bodies.positions {
+                p.x += 1.0;
+            }
+            let mut report = StepReport::default();
+            if self.state.step == 3 {
+                let b = &mut self.state.bodies;
+                b.ids.pop();
+                b.positions.pop();
+                b.velocities.pop();
+                b.masses.pop();
+                b.masses[0] += 1.0;
+                report.merges.push((2, 1));
+            }
+            report
+        }
+        fn state(&self) -> SimulationState {
+            self.state.clone()
+        }
+        fn body_count(&self) -> usize {
+            self.state.bodies.len()
+        }
+        fn diagnostics(&self) -> Diagnostics {
+            Diagnostics::default()
+        }
+    }
+
+    struct DriftFactory;
+    impl EngineFactory for DriftFactory {
+        fn descriptor(&self) -> EngineDescriptor {
+            EngineDescriptor {
+                id: "drift",
+                label: "drift",
+                description: "",
+            }
+        }
+        fn create(&self, state: SimulationState, _: PhysicsParams) -> Box<dyn PhysicsEngine> {
+            Box::new(Drift { state })
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct MemWriter(Arc<Mutex<Vec<Keyframe>>>);
+    impl RecordingWriter for MemWriter {
+        fn write_frame(&mut self, frame: &Keyframe) -> Result<u64, RepositoryError> {
+            self.0.lock().unwrap().push(frame.clone());
+            Ok(1)
+        }
+        fn finish(self: Box<Self>) -> Result<PathBuf, RepositoryError> {
+            Ok(PathBuf::from("mem.stellarec"))
+        }
+    }
+
+    fn wait_for(handle: &SimulationHandle, step: u64) {
+        for _ in 0..500 {
+            if handle.latest().state.step >= step {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("pas {step} jamais atteint");
+    }
+
+    #[test]
+    fn suspend_and_resume_keep_recording_continuous() {
+        let mut bodies = BodySet::default();
+        bodies.push(1, Vec3::ZERO, Vec3::X, 1.0);
+        bodies.push(2, Vec3::Y, Vec3::X, 1.0);
+        let state = SimulationState {
+            bodies,
+            initial_mass: Some(2.0),
+            ..Default::default()
+        };
+        let config = SimulationConfig {
+            engine: "drift".into(),
+            ..Default::default()
+        };
+        let handle =
+            SimulationHandle::start(config.clone(), Arc::new(DriftFactory), move || state, true);
+
+        let mem = MemWriter::default();
+        handle.start_recording(Box::new(mem.clone()), 2, None);
+        for k in 1..=5 {
+            handle.step_once();
+            wait_for(&handle, k);
+        }
+        let (link, saved) = handle.suspend_recording().expect("enregistrement actif");
+        assert!(!handle.is_recording());
+        let steps: Vec<u64> = mem.0.lock().unwrap().iter().map(|f| f.step).collect();
+        assert_eq!(steps, vec![0, 2, 4]);
+        assert_eq!(saved.step, 5);
+        assert_eq!(link.last_frame_step, 4);
+        assert_eq!(link.next_step, 6);
+        assert_eq!(link.interval, 2);
+        assert_eq!(saved.initial_mass, Some(2.0));
+        // La fusion du pas 3 figure dans l'instantané du pas 4.
+        assert_eq!(
+            mem.0.lock().unwrap()[2].fates,
+            vec![(2, BodyFate::MergedInto(1))]
+        );
+        handle.shutdown();
+
+        // Reprise depuis la sauvegarde : l'instantané suivant est au pas 6.
+        let handle = SimulationHandle::start(config, Arc::new(DriftFactory), move || saved, true);
+        let mem2 = MemWriter::default();
+        handle.resume_recording(Box::new(mem2.clone()), link);
+        for k in 6..=8 {
+            handle.step_once();
+            wait_for(&handle, k);
+        }
+        handle.stop_recording();
+        let snap = handle.latest();
+        assert_eq!(snap.ejected_mass(), Some(0.0));
+        handle.shutdown();
+        let steps: Vec<u64> = mem2.0.lock().unwrap().iter().map(|f| f.step).collect();
+        assert_eq!(steps, vec![6, 8]);
     }
 }

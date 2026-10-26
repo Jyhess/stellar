@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use stellar_domain::{BodyId, SimulationConfig, SimulationState};
 
+use crate::recording::RecordingLink;
+
 /// Point de vue de la caméra, enregistré avec la simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ViewState {
@@ -27,6 +29,8 @@ pub struct SaveData {
     pub config: SimulationConfig,
     pub state: SimulationState,
     pub view: Option<ViewState>,
+    /// Enregistrement suspendu à reprendre au chargement.
+    pub recording: Option<RecordingLink>,
 }
 
 /// Résumé d'une sauvegarde, lisible sans charger tout le fichier.
@@ -41,6 +45,8 @@ pub struct SaveSummary {
     pub step: u64,
     pub time: f64,
     pub engine: String,
+    /// Enregistrement lié (nom du fichier), repris automatiquement au chargement.
+    pub recording: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

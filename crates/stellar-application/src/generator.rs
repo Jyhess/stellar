@@ -10,11 +10,14 @@ use stellar_domain::{
 /// Construit l'état initial : particules de masse 1, barycentre à l'origine,
 /// quantité de mouvement totale nulle.
 pub fn generate_state(ic: &InitialConditions, g: f64) -> SimulationState {
+    let bodies = generate_bodies(ic, g);
+    let initial_mass = Some(bodies.total_mass());
     SimulationState {
-        bodies: generate_bodies(ic, g),
+        bodies,
         step: 0,
         time: 0.0,
         initial_energy: None,
+        initial_mass,
     }
 }
 

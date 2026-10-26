@@ -111,6 +111,22 @@ pub struct RecordingHeader {
     pub dust_budget: Option<u64>,
 }
 
+/// Lien entre une sauvegarde et un enregistrement suspendu : tout ce qu'il
+/// faut pour le poursuivre exactement là où il s'était arrêté.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecordingLink {
+    pub path: PathBuf,
+    pub interval: u32,
+    pub dust_budget: Option<u64>,
+    /// Pas du dernier instantané écrit avant la suspension : les instantanés
+    /// postérieurs éventuels sont supprimés à la reprise.
+    pub last_frame_step: u64,
+    /// Pas du prochain instantané à écrire.
+    pub next_step: u64,
+    /// Devenirs survenus depuis le dernier instantané.
+    pub pending: Vec<(BodyId, BodyFate)>,
+}
+
 /// Métadonnées d'un instantané (sans les corps).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FrameMeta {
@@ -162,6 +178,14 @@ pub trait RecordingRepository: Send + Sync {
     ) -> Result<Box<dyn RecordingWriter>, RepositoryError>;
     fn open(&self, path: &Path) -> Result<Box<dyn RecordingReader>, RepositoryError>;
     fn list(&self) -> Result<Vec<RecordingSummary>, RepositoryError>;
+    /// Rouvre un enregistrement pour le poursuivre : les instantanés
+    /// postérieurs à `keep_through_step` sont supprimés, l'écriture reprend à
+    /// la suite.
+    fn resume(
+        &self,
+        path: &Path,
+        keep_through_step: u64,
+    ) -> Result<Box<dyn RecordingWriter>, RepositoryError>;
 }
 
 /// État d'un enregistrement en cours, consultable par l'interface.
@@ -226,6 +250,11 @@ impl Recorder {
             thread: Some(thread),
             status,
         }
+    }
+
+    /// Nombre d'instantanés transmis depuis le démarrage.
+    pub fn status(&self) -> &RecordingStatus {
+        &self.status
     }
 
     /// Transmet un instantané (bloque si la file est pleine).

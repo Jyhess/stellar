@@ -27,7 +27,8 @@ use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepo
 
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
-const VERSION: u32 = 1;
+/// Version 2 : lien vers un enregistrement suspendu, masse initiale.
+const VERSION: u32 = 2;
 const MAX_HEADER: u32 = 1 << 20;
 const ZSTD_LEVEL: i32 = 3;
 
@@ -92,7 +93,71 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-fn read_header(r: &mut impl Read) -> Result<SaveSummary, RepositoryError> {
+/// Formes de la version 1, pour relire les anciennes sauvegardes.
+mod v1 {
+    use serde::Deserialize;
+    use stellar_application::{SaveData, SaveSummary, ViewState};
+    use stellar_domain::{BodySet, SimulationConfig, SimulationState};
+
+    #[derive(Deserialize)]
+    pub struct Summary {
+        name: String,
+        saved_at_unix: i64,
+        body_count: usize,
+        step: u64,
+        time: f64,
+        engine: String,
+    }
+
+    impl From<Summary> for SaveSummary {
+        fn from(s: Summary) -> Self {
+            SaveSummary {
+                path: Default::default(),
+                name: s.name,
+                saved_at_unix: s.saved_at_unix,
+                body_count: s.body_count,
+                step: s.step,
+                time: s.time,
+                engine: s.engine,
+                recording: None,
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct State {
+        bodies: BodySet,
+        step: u64,
+        time: f64,
+        initial_energy: Option<f64>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Data {
+        config: SimulationConfig,
+        state: State,
+        view: Option<ViewState>,
+    }
+
+    impl From<Data> for SaveData {
+        fn from(d: Data) -> Self {
+            SaveData {
+                config: d.config,
+                state: SimulationState {
+                    bodies: d.state.bodies,
+                    step: d.state.step,
+                    time: d.state.time,
+                    initial_energy: d.state.initial_energy,
+                    initial_mass: None,
+                },
+                view: d.view,
+                recording: None,
+            }
+        }
+    }
+}
+
+fn read_header(r: &mut impl Read) -> Result<(u32, SaveSummary), RepositoryError> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)
         .map_err(|_| fmt("fichier tronqué"))?;
@@ -104,7 +169,7 @@ fn read_header(r: &mut impl Read) -> Result<SaveSummary, RepositoryError> {
     let mut word = [0u8; 4];
     r.read_exact(&mut word).map_err(io)?;
     let version = u32::from_le_bytes(word);
-    if version != VERSION {
+    if version != 1 && version != VERSION {
         return Err(RepositoryError::UnsupportedVersion(version));
     }
     r.read_exact(&mut word).map_err(io)?;
@@ -114,7 +179,14 @@ fn read_header(r: &mut impl Read) -> Result<SaveSummary, RepositoryError> {
     }
     let mut buf = vec![0u8; len as usize];
     r.read_exact(&mut buf).map_err(io)?;
-    bincode::deserialize(&buf).map_err(fmt)
+    let summary = if version == 1 {
+        bincode::deserialize::<v1::Summary>(&buf)
+            .map_err(fmt)?
+            .into()
+    } else {
+        bincode::deserialize(&buf).map_err(fmt)?
+    };
+    Ok((version, summary))
 }
 
 impl SimulationRepository for FileRepository {
@@ -132,6 +204,11 @@ impl SimulationRepository for FileRepository {
             step: data.state.step,
             time: data.state.time,
             engine: data.config.engine.clone(),
+            recording: data
+                .recording
+                .as_ref()
+                .and_then(|l| l.path.file_name())
+                .map(|n| n.to_string_lossy().into_owned()),
         };
         let header = bincode::serialize(&summary).map_err(fmt)?;
 
@@ -156,9 +233,15 @@ impl SimulationRepository for FileRepository {
 
     fn load(&self, path: &Path) -> Result<SaveData, RepositoryError> {
         let mut r = BufReader::new(File::open(path).map_err(io)?);
-        read_header(&mut r)?;
+        let (version, _) = read_header(&mut r)?;
         let dec = zstd::stream::Decoder::with_buffer(r).map_err(io)?;
-        let data: SaveData = bincode::deserialize_from(dec).map_err(fmt)?;
+        let data: SaveData = if version == 1 {
+            bincode::deserialize_from::<_, v1::Data>(dec)
+                .map_err(fmt)?
+                .into()
+        } else {
+            bincode::deserialize_from(dec).map_err(fmt)?
+        };
         if !data.state.bodies.is_consistent() {
             return Err(fmt("tableaux de corps incohérents"));
         }
@@ -181,7 +264,7 @@ impl SimulationRepository for FileRepository {
                 continue;
             };
             // Les fichiers illisibles sont ignorés plutôt que de bloquer la liste.
-            if let Ok(mut s) = read_header(&mut BufReader::new(file)) {
+            if let Ok((_, mut s)) = read_header(&mut BufReader::new(file)) {
                 s.path = path;
                 out.push(s);
             }
@@ -225,6 +308,7 @@ mod tests {
                 step: 42,
                 time: 1.5,
                 initial_energy: Some(-3.0),
+                initial_mass: Some(1_000.0),
             },
             view: Some(ViewState {
                 position: [1.0, 2.0, 3.0],
@@ -234,7 +318,82 @@ mod tests {
                 followed: Some(7),
                 orbit_distance: 12.0,
             }),
+            recording: Some(stellar_application::RecordingLink {
+                path: PathBuf::from("recordings/rec_test.stellarec"),
+                interval: 10,
+                dust_budget: Some(500),
+                last_frame_step: 40,
+                next_step: 50,
+                pending: vec![(3, stellar_application::BodyFate::MergedInto(1))],
+            }),
         }
+    }
+
+    #[test]
+    fn reads_version_1_files() {
+        #[derive(serde::Serialize)]
+        struct SummaryV1<'a> {
+            name: &'a str,
+            saved_at_unix: i64,
+            body_count: usize,
+            step: u64,
+            time: f64,
+            engine: &'a str,
+        }
+        #[derive(serde::Serialize)]
+        struct StateV1<'a> {
+            bodies: &'a BodySet,
+            step: u64,
+            time: f64,
+            initial_energy: Option<f64>,
+        }
+        #[derive(serde::Serialize)]
+        struct DataV1<'a> {
+            config: &'a SimulationConfig,
+            state: StateV1<'a>,
+            view: Option<ViewState>,
+        }
+        let dir = temp_dir("v1");
+        fs::create_dir_all(&dir).unwrap();
+        let reference = sample();
+        let header = bincode::serialize(&SummaryV1 {
+            name: "ancienne",
+            saved_at_unix: 7,
+            body_count: reference.state.bodies.len(),
+            step: 42,
+            time: 1.5,
+            engine: "cpu-barnes-hut",
+        })
+        .unwrap();
+        let body = bincode::serialize(&DataV1 {
+            config: &reference.config,
+            state: StateV1 {
+                bodies: &reference.state.bodies,
+                step: 42,
+                time: 1.5,
+                initial_energy: Some(-3.0),
+            },
+            view: reference.view,
+        })
+        .unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(&zstd::bulk::compress(&body, 3).unwrap());
+        let path = dir.join("ancienne.stellar");
+        fs::write(&path, bytes).unwrap();
+
+        let repo = FileRepository::new(&dir);
+        let list = repo.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].recording, None);
+        let data = repo.load(&path).unwrap();
+        assert_eq!(data.state.bodies, reference.state.bodies);
+        assert_eq!(data.state.initial_mass, None);
+        assert_eq!(data.recording, None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -253,6 +412,7 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].body_count, 1_000);
         assert_eq!(list[0].step, 42);
+        assert_eq!(list[0].recording.as_deref(), Some("rec_test.stellarec"));
         let _ = fs::remove_dir_all(&dir);
     }
 

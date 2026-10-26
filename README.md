@@ -86,6 +86,8 @@ En **référentiel relatif** (touche R), chaque point devient p(t) − r(t) + r(
 
 Les traces ne sont pas sauvegardées.
 
+Le panneau « Simulation » indique la masse présente et la masse éjectée, c'est-à-dire sortie de la simulation par le nettoyage, avec sa part de la masse initiale. Le classement des corps les plus massifs donne la part de chacun dans la masse présente.
+
 En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la direction de visée, le zoom et la distance à la cible sont conservés.
 
 ---
@@ -109,6 +111,11 @@ Une simulation lourde peut être enregistrée puis rejouée de façon fluide, à
   - entre deux instantanés, chaque corps suit une interpolation cubique d'Hermite sur ses positions et vitesses, et un corps absorbé rejoint celui qui l'absorbe ;
   - commandes : Espace (lecture / pause), ← / → (instantané précédent / suivant), ↑ / ↓ (vitesse), ⌫ (sens de lecture), barre de temps ;
   - la caméra, la sélection, les traces (T, R) et la vue d'ensemble fonctionnent comme en direct.
+- **Suspendre et reprendre :**
+  - si l'on quitte le programme ou revient à l'accueil pendant un enregistrement, celui-ci est clos proprement ;
+  - la simulation est alors sauvegardée automatiquement (« <enregistrement>_reprise ») et liée à l'enregistrement ;
+  - recharger cette sauvegarde, ou cliquer « Reprendre » dans la liste des enregistrements, poursuit l'enregistrement dans le même fichier dès que le calcul est relancé, sans trou ni doublon ;
+  - recharger une sauvegarde de reprise plus ancienne tronque l'enregistrement à ce point : les instantanés postérieurs sont supprimés.
 - **Après un plantage :** un enregistrement interrompu reste lisible, car son index est reconstruit à l'ouverture.
 
 ## 3. Architecture

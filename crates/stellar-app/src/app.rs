@@ -44,6 +44,17 @@ impl StellarApp {
 
     /// Démarrage direct, pour les essais : `STELLAR_AUTOSTART=<nombre de particules>`.
     fn autostart(&mut self) {
+        // `STELLAR_LOAD=<sauvegarde>` : chargement direct (reprise d'enregistrement comprise).
+        if let Ok(path) = std::env::var("STELLAR_LOAD") {
+            if let Ok(loaded) = self.service.load_simulation(std::path::Path::new(&path)) {
+                self.screen = Screen::Sim(SimScreen::new(
+                    Source::Live(loaded.handle),
+                    self.service.clone(),
+                    loaded.view,
+                ));
+                return;
+            }
+        }
         // `STELLAR_REPLAY=<fichier>` : relecture directe.
         if let Ok(path) = std::env::var("STELLAR_REPLAY") {
             if let Ok(player) = self.service.open_replay(std::path::Path::new(&path)) {
@@ -79,7 +90,25 @@ impl StellarApp {
         }
     }
 
+    /// Si un enregistrement est en cours, le suspend et sauvegarde la
+    /// simulation (liée à l'enregistrement) pour une reprise ultérieure.
+    fn suspend_recording(&mut self) -> Option<String> {
+        let Screen::Sim(sim) = &self.screen else {
+            return None;
+        };
+        sim.suspend_recording().map(|r| match r {
+            Ok(path) => format!(
+                "Enregistrement suspendu. Il reprendra en rechargeant la sauvegarde « {} ».",
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ),
+            Err(e) => format!("La suspension de l'enregistrement a échoué : {e}"),
+        })
+    }
+
     fn go_home(&mut self, ctx: &egui::Context, message: Option<String>) {
+        let message = self.suspend_recording().or(message);
         if let Screen::Sim(sim) = std::mem::replace(&mut self.screen, Screen::Switching) {
             sim.shutdown(ctx);
         }
@@ -101,6 +130,19 @@ impl eframe::App for StellarApp {
             }
         }
         self.last_frame = Some(Instant::now());
+
+        // Fermeture de la fenêtre pendant un enregistrement : suspension et
+        // sauvegarde de reprise avant de quitter.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if let Screen::Sim(sim) = &self.screen {
+                if sim.is_recording() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    let _ = self.suspend_recording();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+            }
+        }
 
         match &mut self.screen {
             Screen::Home(home) => match home.show(ctx, &self.service) {
@@ -129,12 +171,21 @@ impl eframe::App for StellarApp {
                     Err(e) => home.message = Some(e.to_string()),
                 },
                 HomeAction::Load(path) => match self.service.load_simulation(&path) {
-                    Ok((handle, view)) => {
-                        self.screen = Screen::Sim(SimScreen::new(
-                            Source::Live(handle),
+                    Ok(loaded) => {
+                        let mut sim = SimScreen::new(
+                            Source::Live(loaded.handle),
                             self.service.clone(),
-                            view,
-                        ));
+                            loaded.view,
+                        );
+                        match loaded.recording {
+                            Some(Ok(p)) => sim.notify(format!(
+                                "Enregistrement « {} » repris : il se poursuit dès la reprise du calcul (Espace).",
+                                p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+                            )),
+                            Some(Err(e)) => sim.notify(format!("Reprise de l'enregistrement impossible : {e}")),
+                            None => {}
+                        }
+                        self.screen = Screen::Sim(sim);
                     }
                     Err(e) => home.message = Some(format!("Chargement impossible : {e}")),
                 },
@@ -150,7 +201,10 @@ impl eframe::App for StellarApp {
             Screen::Sim(sim) => match sim.show(ctx) {
                 SimAction::None => {}
                 SimAction::BackHome => self.go_home(ctx, None),
-                SimAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                SimAction::Quit => {
+                    let _ = self.suspend_recording();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             },
             Screen::Switching => {}
         }

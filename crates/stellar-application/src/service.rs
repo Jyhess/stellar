@@ -22,6 +22,14 @@ pub enum AppError {
     Repository(#[from] RepositoryError),
 }
 
+/// Résultat du chargement d'une sauvegarde.
+pub struct LoadedSimulation {
+    pub handle: SimulationHandle,
+    pub view: Option<ViewState>,
+    /// Reprise d'un enregistrement lié : chemin du fichier, ou erreur.
+    pub recording: Option<Result<PathBuf, String>>,
+}
+
 /// Point d'entrée des cas d'usage : créer, charger, sauvegarder, lister.
 #[derive(Clone)]
 pub struct SimulatorService {
@@ -69,11 +77,10 @@ impl SimulatorService {
         ))
     }
 
-    /// Charge une sauvegarde et la redémarre en pause.
-    pub fn load_simulation(
-        &self,
-        path: &Path,
-    ) -> Result<(SimulationHandle, Option<ViewState>), AppError> {
+    /// Charge une sauvegarde et la redémarre en pause. Si elle est liée à
+    /// un enregistrement suspendu, celui-ci est rouvert et reprend dès que le
+    /// calcul est relancé (les instantanés postérieurs sont supprimés).
+    pub fn load_simulation(&self, path: &Path) -> Result<LoadedSimulation, AppError> {
         let data = self.repository.load(path)?;
         let factory = self
             .registry
@@ -83,9 +90,51 @@ impl SimulatorService {
             config,
             state,
             view,
+            recording,
         } = data;
         let handle = SimulationHandle::start(config, factory, move || state, true);
-        Ok((handle, view))
+        let recording = recording.map(|link| {
+            let path = link.path.clone();
+            self.recordings
+                .resume(&link.path, link.last_frame_step)
+                .map(|writer| {
+                    handle.resume_recording(writer, link);
+                    path
+                })
+                .map_err(|e| e.to_string())
+        });
+        Ok(LoadedSimulation {
+            handle,
+            view,
+            recording,
+        })
+    }
+
+    /// Suspend l'enregistrement en cours et sauvegarde la simulation au même
+    /// instant, en liant les deux : recharger cette sauvegarde poursuivra
+    /// l'enregistrement. `Ok(None)` si aucun enregistrement n'était actif.
+    pub fn suspend_recording(
+        &self,
+        handle: &SimulationHandle,
+        view: Option<ViewState>,
+    ) -> Result<Option<PathBuf>, AppError> {
+        let Some((link, state)) = handle.suspend_recording() else {
+            return Ok(None);
+        };
+        let stem = link
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "enregistrement".into());
+        let data = SaveData {
+            config: handle.config().clone(),
+            state,
+            view,
+            recording: Some(link),
+        };
+        Ok(Some(
+            self.repository.save(&format!("{stem}_reprise"), &data)?,
+        ))
     }
 
     /// Sauvegarde un instantané. Peut être appelé depuis un thread
@@ -104,6 +153,7 @@ impl SimulatorService {
             config: config.clone(),
             state: snapshot.state.clone(),
             view,
+            recording: None,
         };
         Ok(self.repository.save(name, &data)?)
     }

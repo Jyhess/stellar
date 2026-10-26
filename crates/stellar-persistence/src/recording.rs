@@ -513,6 +513,50 @@ impl RecordingRepository for FileRecordingRepository {
         Ok(Box::new(FileRecordingReader::open(path)?))
     }
 
+    fn resume(
+        &self,
+        path: &Path,
+        keep_through_step: u64,
+    ) -> Result<Box<dyn RecordingWriter>, RepositoryError> {
+        let mut reader = FileRecordingReader::open(path)?;
+        let frames = &reader.info.frames;
+        // Instantanés conservés : ceux jusqu'au pas de reprise inclus.
+        let keep = frames.partition_point(|f| f.step <= keep_through_step);
+        if keep == 0 || frames[keep - 1].step != keep_through_step {
+            return Err(fmt(format!(
+                "l'instantané du pas {keep_through_step} est introuvable dans l'enregistrement"
+            )));
+        }
+        // Fin du dernier instantané conservé : tout ce qui suit (instantanés
+        // postérieurs, ancien index) est tronqué.
+        let last = reader.offsets[keep - 1];
+        reader
+            .file
+            .seek(SeekFrom::Start(last + FRAME_HEAD - 4))
+            .map_err(io)?;
+        let size = u32::from_le_bytes(read_exact::<4>(&mut reader.file)?) as u64;
+        let end = last + FRAME_HEAD + size;
+        let index: Vec<(u64, FrameMeta)> = reader
+            .offsets
+            .iter()
+            .copied()
+            .zip(reader.info.frames.iter().copied())
+            .take(keep)
+            .collect();
+        drop(reader);
+
+        let file = fs::OpenOptions::new().write(true).open(path).map_err(io)?;
+        file.set_len(end).map_err(io)?;
+        let mut out = BufWriter::with_capacity(1 << 20, file);
+        out.seek(SeekFrom::Start(end)).map_err(io)?;
+        Ok(Box::new(FileRecordingWriter {
+            path: path.to_path_buf(),
+            out,
+            offset: end,
+            index,
+        }))
+    }
+
     fn list(&self) -> Result<Vec<RecordingSummary>, RepositoryError> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(e) => e,
@@ -655,6 +699,56 @@ mod tests {
         let f2 = r.read_frame(2).unwrap();
         assert_eq!(f2.step, 20);
         assert_eq!(f2.bodies.len(), frame(2).bodies.len());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resume_truncates_and_appends() {
+        let dir = temp_dir("resume");
+        let repo = FileRecordingRepository::new(&dir);
+        let mut w = repo.create("suite", &header()).unwrap();
+        for k in 0..5 {
+            w.write_frame(&frame(k)).unwrap(); // pas 0, 10, 20, 30, 40
+        }
+        let path = w.finish().unwrap();
+
+        // Reprise au pas 20 : les instantanés 30 et 40 disparaissent.
+        let mut w = repo.resume(&path, 20).unwrap();
+        let mut next = frame(3);
+        next.step = 25;
+        w.write_frame(&next).unwrap();
+        w.finish().unwrap();
+        let mut r = repo.open(&path).unwrap();
+        let steps: Vec<u64> = r.info().frames.iter().map(|f| f.step).collect();
+        assert_eq!(steps, vec![0, 10, 20, 25]);
+        assert_eq!(r.read_frame(3).unwrap().step, 25);
+        assert_eq!(r.read_frame(2).unwrap().bodies, {
+            let mut f = frame(2);
+            let d = decode_frame(
+                FrameMeta {
+                    step: 20,
+                    time: 1.0,
+                    count: f.bodies.len() as u32,
+                },
+                &encode_frame(&f),
+            )
+            .unwrap();
+            f.bodies = d.bodies;
+            f.bodies
+        });
+
+        // Reprise à un pas absent : refusée.
+        assert!(repo.resume(&path, 21).is_err());
+
+        // Reprise d'un fichier non clos.
+        let mut w = repo.resume(&path, 25).unwrap();
+        let mut more = frame(4);
+        more.step = 35;
+        w.write_frame(&more).unwrap();
+        drop(w);
+        let r = repo.open(&path).unwrap();
+        let steps: Vec<u64> = r.info().frames.iter().map(|f| f.step).collect();
+        assert_eq!(steps, vec![0, 10, 20, 25, 35]);
         let _ = fs::remove_dir_all(&dir);
     }
 

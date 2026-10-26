@@ -55,6 +55,22 @@ impl Replay {
             .player
             .swap_state(self.spare.take().unwrap_or_default());
         state.initial_energy = None;
+        // Masse initiale : particules de masse 1 au départ de la simulation.
+        state.initial_mass = Some(self.player.info().header.config.initial.count as f64);
+        // Masse présente : la poussière sous-échantillonnée compte pour son poids.
+        let w = self.player.dust_weight() as f64;
+        let total_mass: f64 = state
+            .bodies
+            .masses
+            .iter()
+            .map(|&m| {
+                if stellar_application::recording::is_dust(m) {
+                    m * w
+                } else {
+                    m
+                }
+            })
+            .sum();
 
         // Un saut dans la barre de temps redémarre les traces.
         let pos = self.player.clock.position;
@@ -89,6 +105,7 @@ impl Replay {
             state,
             diagnostics: Diagnostics::default(),
             top: self.player.top().to_vec(),
+            total_mass,
             steps_per_second: 0.0,
             last_step_ms: 0.0,
             running: self.player.clock.playing,
@@ -105,6 +122,7 @@ fn empty_snapshot() -> Snapshot {
         state: SimulationState::default(),
         diagnostics: Diagnostics::default(),
         top: Vec::new(),
+        total_mass: 0.0,
         steps_per_second: 0.0,
         last_step_ms: 0.0,
         running: false,
