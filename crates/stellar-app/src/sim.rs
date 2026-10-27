@@ -14,11 +14,12 @@ use stellar_application::trace::{relative_to, MAX_TAIL};
 use stellar_application::{Phase, SimulatorService, Snapshot, TraceReference, ViewState};
 use stellar_domain::physics::body_radius;
 use stellar_domain::{ranking, BodyId};
+use stellar_engine_gpu::BodiesView;
 
 use crate::camera::{Camera, Mode, MAX_FOV, MIN_FOV};
 use crate::format;
 use crate::picking::{pick, visible_top_k};
-use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, Uniforms};
+use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, PointsSource, Uniforms};
 use crate::source::{angular_momentum, weighted_barycenter, Source};
 
 /// Luminosité initiale : le mélange additif sature quand les corps se
@@ -76,6 +77,19 @@ pub enum SimAction {
 
 const MOUSE_SENSITIVITY: f64 = 0.0022;
 const SCROLL_SENSITIVITY: f64 = 0.0025;
+/// Vitesse de bascule autour de l'axe de visée (rad/s).
+const ROLL_SPEED: f64 = 1.6;
+/// Multiplicateur de vitesse initial : fraction de la distance à la
+/// référence parcourue chaque seconde.
+const DEFAULT_SPEED: f64 = 0.5;
+/// Rythme du redressement de l'horizon (1/s).
+const LEVEL_RATE: f64 = 6.0;
+/// Intervalle de recalcul de la normale au disque (grille affichée).
+const DISK_NORMAL_REFRESH: Duration = Duration::from_secs(5);
+/// Demi-étendue de la grille du plan du disque, en mailles.
+const GRID_HALF_LINES: i64 = 24;
+/// Découpage de chaque ligne de la grille (pour l'estompage).
+const GRID_SUBDIVISIONS: usize = 24;
 const PICK_TOLERANCE_PX: f64 = 10.0;
 const TOAST_DURATION: Duration = Duration::from_secs(4);
 /// Nombre de corps tracés.
@@ -124,6 +138,11 @@ pub struct SimScreen {
     snapshot: Arc<Snapshot>,
     seen_sequence: u64,
     cache: SnapshotCache,
+    /// Corps du moteur GPU, dessinés directement (sans copie) quand le
+    /// moteur calcule sur la carte de l'interface.
+    direct: Option<Arc<BodiesView>>,
+    /// Corps dont le thread de calcul publie la position à chaque instantané.
+    sent_watch: Option<BodyId>,
 
     anchor: DVec3,
     batch: Option<InstanceBatch>,
@@ -155,12 +174,21 @@ pub struct SimScreen {
     record_interval: u32,
     record_budget_enabled: bool,
     record_budget: u64,
+
+    /// Grille du plan du disque affichée.
+    show_grid: bool,
+    /// Redressement progressif de l'horizon en cours (touche H).
+    leveling: bool,
+    /// Normale au plan du disque (axe du moment cinétique total), recalculée
+    /// de temps en temps.
+    disk_normal: Option<DVec3>,
+    disk_normal_at: Option<Instant>,
 }
 
 impl SimScreen {
     pub fn new(source: Source, service: SimulatorService, view: Option<ViewState>) -> Self {
         let r = source.config().physics.reference_radius.max(1e-9);
-        let speed = 0.3 * r;
+        let speed = DEFAULT_SPEED;
         let camera = match &view {
             Some(v) => Camera::from_view(v, speed),
             None => Camera::looking_at(DVec3::new(0.0, -2.6 * r, 0.9 * r), DVec3::ZERO, speed),
@@ -193,6 +221,8 @@ impl SimScreen {
             paused,
             seen_sequence: u64::MAX,
             snapshot,
+            direct: None,
+            sent_watch: None,
             cache: SnapshotCache {
                 barycenter: DVec3::ZERO,
                 barycenter_velocity: DVec3::ZERO,
@@ -222,6 +252,10 @@ impl SimScreen {
             record_interval: 10,
             record_budget_enabled: true,
             record_budget: 1_000_000,
+            show_grid: false,
+            leveling: false,
+            disk_normal: None,
+            disk_normal_at: None,
         }
     }
 
@@ -267,24 +301,47 @@ impl SimScreen {
         if seq == self.seen_sequence {
             return;
         }
+        let first = self.seen_sequence == u64::MAX;
         self.seen_sequence = seq;
-        self.snapshot = self.source.latest();
-        let bodies = &self.snapshot.state.bodies;
-        let w = self.source.dust_weight() as f64;
-        self.cache.barycenter = weighted_barycenter(bodies, w).unwrap_or(DVec3::ZERO);
-        let total = self.snapshot.total_mass.max(1e-300);
-        self.cache.barycenter_velocity = bodies
-            .masses
-            .iter()
-            .zip(&bodies.velocities)
-            .map(|(&m, &v)| v * if is_dust(m) { m * w } else { m })
-            .sum::<DVec3>()
-            / total;
-        self.cache.rotation_axis = if self.bary_selected {
-            rotation_axis(bodies, w, self.cache.barycenter)
-        } else {
-            None
-        };
+        let previous = std::mem::replace(&mut self.snapshot, self.source.latest());
+        if self.direct.is_none() {
+            self.direct = self
+                .source
+                .live()
+                .and_then(|h| h.live_view())
+                .and_then(|v| v.downcast::<BodiesView>().ok());
+        }
+        // Les grandeurs tirées de l'état complet ne sont recalculées que
+        // lorsqu'il change (avec l'affichage direct, la plupart des
+        // publications ne portent que les grandeurs globales).
+        let state_changed = first || !Arc::ptr_eq(&previous.state, &self.snapshot.state);
+        if state_changed {
+            let bodies = &self.snapshot.state.bodies;
+            let w = self.source.dust_weight() as f64;
+            self.cache.barycenter = weighted_barycenter(bodies, w).unwrap_or(DVec3::ZERO);
+            let total = self.snapshot.total_mass.max(1e-300);
+            self.cache.barycenter_velocity = bodies
+                .masses
+                .iter()
+                .zip(&bodies.velocities)
+                .map(|(&m, &v)| v * if is_dust(m) { m * w } else { m })
+                .sum::<DVec3>()
+                / total;
+            self.cache.rotation_axis = if self.bary_selected {
+                rotation_axis(bodies, w, self.cache.barycenter)
+            } else {
+                None
+            };
+            if self.bary_selected {
+                self.disk_normal = self.cache.rotation_axis;
+                self.disk_normal_at = Some(Instant::now());
+            }
+        }
+        // Centre de masse courant, quand le moteur le publie.
+        if let Some(c) = self.snapshot.center_of_mass {
+            self.cache.barycenter = c;
+        }
+        let selected_before = self.selected;
 
         // Suivi de la sélection à travers fusions et éjections.
         if let Some(id) = self.selected {
@@ -306,8 +363,32 @@ impl SimScreen {
                 }
             }
         }
-        self.refresh_selection_cache();
-        self.need_upload = true;
+        if state_changed || self.selected != selected_before {
+            self.refresh_selection_cache();
+            self.need_upload = true;
+        }
+    }
+
+    /// Demande au thread de calcul la position courante du corps
+    /// sélectionné à chaque publication (l'état complet peut dater).
+    fn sync_watch(&mut self) {
+        if self.selected == self.sent_watch {
+            return;
+        }
+        if let Some(h) = self.source.live() {
+            h.set_watched(self.selected.into_iter().collect());
+        }
+        self.sent_watch = self.selected;
+    }
+
+    /// Position courante du corps sélectionné : publiée à chaque instantané
+    /// s'il est suivi, sinon tirée de l'état complet.
+    fn selected_position(&self) -> Option<DVec3> {
+        self.snapshot.watched_position(self.selected?).or_else(|| {
+            self.cache
+                .selected_index
+                .map(|i| self.snapshot.state.bodies.positions[i])
+        })
     }
 
     fn refresh_selection_cache(&mut self) {
@@ -320,9 +401,12 @@ impl SimScreen {
                 (bodies.masses[i], bodies.ids[i]),
             )
         });
-        if self.selected.is_some()
-            && self.cache.selected_index.is_none()
+        // Absent de l'état complet (qui peut dater) et non suivi : perdu.
+        if self.cache.selected_index.is_none()
             && self.snapshot.phase == Phase::Ready
+            && self
+                .selected
+                .is_some_and(|id| self.snapshot.position_of(id).is_none())
         {
             self.selected = None;
             self.camera.mode = Mode::Free;
@@ -448,6 +532,8 @@ impl SimScreen {
         self.cache.selected_index = None;
         self.cache.selected_rank = None;
         self.cache.rotation_axis = axis;
+        self.disk_normal = axis;
+        self.disk_normal_at = Some(Instant::now());
         self.notify(match axis {
             Some(a) => format!(
                 "Barycentre vu de face au disque (axe incliné de {:.1}° sur Oz).",
@@ -466,6 +552,87 @@ impl SimScreen {
         self.camera.mode = Mode::Free;
         self.camera
             .look_towards(self.cache.barycenter - self.camera.position);
+    }
+
+    /// Recalcule la normale au plan du disque : toujours si `force`, sinon
+    /// une première fois puis périodiquement tant que la grille est affichée.
+    fn refresh_disk_normal(&mut self, force: bool) {
+        if self.snapshot.phase != Phase::Ready || self.snapshot.state.bodies.is_empty() {
+            return;
+        }
+        let due = match self.disk_normal_at {
+            None => true,
+            Some(t) => self.show_grid && t.elapsed() >= DISK_NORMAL_REFRESH,
+        };
+        if !(force || due) {
+            return;
+        }
+        let w = self.source.dust_weight() as f64;
+        self.disk_normal = rotation_axis(&self.snapshot.state.bodies, w, self.cache.barycenter);
+        self.disk_normal_at = Some(Instant::now());
+    }
+
+    /// Haut de référence : normale au disque, sinon Oz.
+    fn reference_up(&self) -> DVec3 {
+        self.disk_normal.unwrap_or(DVec3::Z)
+    }
+
+    /// Lance le redressement progressif de l'horizon (touche H).
+    fn start_leveling(&mut self) {
+        self.refresh_disk_normal(true);
+        if self.camera.roll_to(self.reference_up()).is_some() {
+            self.leveling = true;
+        } else {
+            self.notify("Visée selon la normale au disque : rien à redresser.");
+        }
+    }
+
+    /// Point de référence de la vitesse adaptative : la sélection (corps ou
+    /// barycentre), sinon le barycentre.
+    fn speed_reference(&self) -> Option<(DVec3, f64)> {
+        if !self.bary_selected {
+            if let (Some(i), Some(p)) = (self.cache.selected_index, self.selected_position()) {
+                let r = body_radius(self.snapshot.state.bodies.masses[i], self.base_radius());
+                return Some((p, r));
+            }
+        }
+        (!self.snapshot.state.bodies.is_empty()).then_some((self.cache.barycenter, 0.0))
+    }
+
+    /// Vitesse de déplacement en vol libre (unités/s), avant Maj / Ctrl :
+    /// proportionnelle à la distance à la référence.
+    fn free_speed(&self) -> f64 {
+        let floor = 1e-4 * self.reference_radius();
+        let d = match self.speed_reference() {
+            Some((p, r)) => (p - self.camera.position).length().max(2.0 * r),
+            None => self.reference_radius(),
+        };
+        self.camera.speed * d.max(floor)
+    }
+
+    /// Touche F : quitte le suivi (la vue reste telle quelle) ou suit la
+    /// sélection (corps ou barycentre).
+    fn toggle_follow(&mut self) {
+        if self.camera.is_orbiting() {
+            self.camera.mode = Mode::Free;
+            self.notify("Suivi interrompu : vol libre.");
+            return;
+        }
+        if self.bary_selected {
+            let c = self.cache.barycenter;
+            let distance = (c - self.camera.position).length().max(1e-9);
+            self.camera.look_towards(c - self.camera.position);
+            self.camera.mode = Mode::Barycenter { distance };
+            self.camera.place_in_orbit(c);
+            self.notify("Suivi du barycentre.");
+        } else if let Some(i) = self.cache.selected_index {
+            self.select_index(i);
+            self.notify("Suivi du corps sélectionné.");
+        } else {
+            self.notify(
+                "Rien à suivre : sélectionnez un corps (clic, Origine) ou le barycentre (B).",
+            );
+        }
     }
 
     /// Recule la caméra, dans sa direction de visée actuelle, jusqu'à voir la
@@ -598,6 +765,18 @@ impl SimScreen {
         if pressed(Key::V) {
             self.frame_mass();
         }
+        if pressed(Key::F) {
+            self.toggle_follow();
+        }
+        if pressed(Key::H) {
+            self.start_leveling();
+        }
+        if pressed(Key::G) {
+            self.show_grid = !self.show_grid;
+            if self.show_grid {
+                self.refresh_disk_normal(true);
+            }
+        }
         if pressed(Key::Home) {
             self.select_heaviest();
         }
@@ -697,13 +876,9 @@ impl SimScreen {
         if self.menu_open {
             return;
         }
-        let (moves, mouse, scroll, shift, ctrl) = ctx.input(|i| {
+        let (moves, roll, mouse, scroll, shift, ctrl) = ctx.input(|i| {
             let k = |key: Key| if i.key_down(key) { 1.0 } else { 0.0 };
-            let moves = DVec3::new(
-                k(Key::D) - k(Key::Q),
-                k(Key::E) - k(Key::A),
-                k(Key::Z) - k(Key::S),
-            );
+            let moves = DVec3::new(k(Key::D) - k(Key::Q), 0.0, k(Key::Z) - k(Key::S));
             let mut mouse = egui::Vec2::ZERO;
             for e in &i.events {
                 if let egui::Event::MouseMoved(d) = e {
@@ -712,15 +887,24 @@ impl SimScreen {
             }
             (
                 moves,
+                k(Key::E) - k(Key::A),
                 mouse,
                 i.smooth_scroll_delta.y as f64,
                 i.modifiers.shift,
                 i.modifiers.ctrl,
             )
         });
+        let boost = if shift {
+            5.0
+        } else if ctrl {
+            0.2
+        } else {
+            1.0
+        };
 
-        // Orientation (souris capturée uniquement). Le premier mouvement suivant
-        // une (re)capture est ignoré : il peut contenir un saut parasite.
+        // Orientation (souris capturée uniquement), dans le repère de l'écran ;
+        // en suivi, la caméra tourne autour de la cible. Le premier mouvement
+        // suivant une (re)capture est ignoré : il peut contenir un saut parasite.
         let just_captured = self.capture_applied != Some(true);
         if self.captured && !just_captured && mouse != egui::Vec2::ZERO {
             self.camera.rotate(
@@ -729,38 +913,68 @@ impl SimScreen {
             );
         }
 
-        // Déplacement : toute touche ZQSD/AE rend la main en vol libre.
-        if moves != DVec3::ZERO {
-            if self.camera.is_orbiting() {
-                self.camera.mode = Mode::Free;
-            }
-            let boost = if shift {
-                5.0
+        // A / E : bascule autour de l'axe de visée (interrompt le redressement).
+        if roll != 0.0 {
+            self.leveling = false;
+            let k = if shift {
+                2.0
             } else if ctrl {
-                0.2
+                0.3
             } else {
                 1.0
             };
-            self.camera
-                .translate_local(moves.normalize() * self.camera.speed * boost * dt);
+            self.camera.roll(roll * ROLL_SPEED * k * dt);
         }
 
-        // Molette : zoom optique en vol libre, distance en orbite.
+        // Redressement progressif de l'horizon (H).
+        if self.leveling {
+            match self.camera.roll_to(self.reference_up()) {
+                Some(a) if a.abs() > 2e-3 => {
+                    self.camera.roll(a * (1.0 - (-LEVEL_RATE * dt).exp()));
+                }
+                Some(a) => {
+                    self.camera.roll(a);
+                    self.leveling = false;
+                }
+                None => self.leveling = false,
+            }
+        }
+
+        // Déplacement : ZQSD en vol libre ; en suivi, Z / S règlent la distance
+        // à la cible (Q / D sont sans effet). Vitesse proportionnelle à la
+        // distance à la référence.
+        let r_target = self
+            .cache
+            .selected_index
+            .map(|i| body_radius(self.snapshot.state.bodies.masses[i], self.base_radius()))
+            .unwrap_or(0.0);
+        let rate = self.camera.speed * boost;
+        let v = self.free_speed() * boost;
+        match &mut self.camera.mode {
+            Mode::Free => {
+                if moves != DVec3::ZERO {
+                    self.camera.translate_local(moves.normalize() * v * dt);
+                }
+            }
+            Mode::Orbit { distance, .. } => {
+                if moves.z != 0.0 {
+                    let k = (-moves.z * rate * dt).exp();
+                    *distance = (*distance * k).max(1.5 * r_target).max(1e-9);
+                }
+            }
+            Mode::Barycenter { distance } => {
+                if moves.z != 0.0 {
+                    let k = (-moves.z * rate * dt).exp();
+                    *distance = (*distance * k).max(1e-9);
+                }
+            }
+        }
+
+        // Molette : zoom optique (champ de vision), dans tous les modes.
         let over_ui = ctx.is_pointer_over_area() && !self.captured;
         if scroll != 0.0 && !over_ui {
             let k = (-scroll * SCROLL_SENSITIVITY).exp();
-            let r = self
-                .cache
-                .selected_index
-                .map(|i| body_radius(self.snapshot.state.bodies.masses[i], self.base_radius()))
-                .unwrap_or(0.0);
-            match &mut self.camera.mode {
-                Mode::Free => self.camera.fov_y = (self.camera.fov_y * k).clamp(MIN_FOV, MAX_FOV),
-                Mode::Orbit { distance, .. } => {
-                    *distance = (*distance * k).max(1.5 * r).max(1e-9);
-                }
-                Mode::Barycenter { distance } => *distance = (*distance * k).max(1e-9),
-            }
+            self.camera.fov_y = (self.camera.fov_y * k).clamp(MIN_FOV, MAX_FOV);
         }
 
         // Souris libre : un clic droit reprend la visée.
@@ -796,8 +1010,7 @@ impl SimScreen {
         }
 
         // Orbite : la caméra accompagne le corps suivi.
-        if let (Mode::Orbit { .. }, Some(i)) = (self.camera.mode, self.cache.selected_index) {
-            let p = self.snapshot.state.bodies.positions[i];
+        if let (Mode::Orbit { .. }, Some(p)) = (self.camera.mode, self.selected_position()) {
             self.camera.place_in_orbit(p);
         }
         if let Mode::Barycenter { .. } = self.camera.mode {
@@ -897,9 +1110,22 @@ impl SimScreen {
     }
 
     fn paint_scene(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        self.prepare_batch();
+        // Affichage direct : les positions du moteur sont déjà en f32 ; l'ancre
+        // (retranchée dans le shader) suit simplement la caméra.
+        let source = match &self.direct {
+            Some(view) => {
+                self.anchor = self.camera.position;
+                PointsSource::Direct(Arc::clone(view))
+            }
+            None => {
+                self.prepare_batch();
+                PointsSource::Batch(self.batch.clone())
+            }
+        };
+        let max_mass = self.snapshot.top.first().map_or(1.0, |t| t.1);
         let ppp = ui.ctx().pixels_per_point();
         let aspect = rect.width() / rect.height().max(1.0);
+        let a = self.anchor.as_vec3();
         let uniforms = Uniforms {
             view: self.camera.view_matrix(self.anchor).to_cols_array_2d(),
             proj: self.camera.projection(aspect).to_cols_array_2d(),
@@ -910,13 +1136,21 @@ impl SimScreen {
                 0.0,
             ],
             look: [self.brightness, self.dust_floor, 0.0, 0.0],
+            anchor: [a.x, a.y, a.z, self.base_radius() as f32],
+            mass: [
+                if max_mass > 1.0 {
+                    max_mass.ln() as f32
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+                0.0,
+            ],
         };
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             rect,
-            PointsCallback {
-                uniforms,
-                batch: self.batch.clone(),
-            },
+            PointsCallback { uniforms, source },
         ));
         self.paint_overlay(ui, rect);
     }
@@ -930,6 +1164,10 @@ impl SimScreen {
                 rect.center().y - (y as f32) * 0.5 * rect.height(),
             )
         };
+
+        if self.show_grid && !self.snapshot.state.bodies.is_empty() {
+            self.paint_disk_grid(&painter, aspect, &to_screen);
+        }
 
         // Repère du barycentre sélectionné : réticule doré.
         if self.bary_selected {
@@ -958,11 +1196,11 @@ impl SimScreen {
         }
 
         // Repère du corps sélectionné.
-        if let Some(i) = self.cache.selected_index {
+        if let (Some(i), Some(p)) = (self.cache.selected_index, self.selected_position()) {
             let b = &self.snapshot.state.bodies;
-            if let Some(ndc) = self.camera.project(b.positions[i], aspect) {
+            if let Some(ndc) = self.camera.project(p, aspect) {
                 let c = to_screen(ndc);
-                let d = (b.positions[i] - self.camera.position).length().max(1e-12);
+                let d = (p - self.camera.position).length().max(1e-12);
                 let r_world = body_radius(b.masses[i], self.base_radius());
                 let r_px = (r_world / (d * (0.5 * self.camera.fov_y).tan())
                     * 0.5
@@ -975,6 +1213,27 @@ impl SimScreen {
                 );
             }
         }
+
+        // Cibles hors champ : flèche au bord de l'écran et distance.
+        if !self.snapshot.state.bodies.is_empty() {
+            let gold = Color32::from_rgb(255, 200, 80);
+            self.paint_edge_marker(
+                &painter,
+                rect,
+                aspect,
+                self.cache.barycenter,
+                "barycentre",
+                gold,
+            );
+        }
+        if let (Some(id), Some(p)) = (self.selected, self.selected_position()) {
+            if !self.bary_selected {
+                let label = format!("#{id}");
+                let blue = Color32::from_rgb(120, 220, 255);
+                self.paint_edge_marker(&painter, rect, aspect, p, &label, blue);
+            }
+        }
+        self.paint_triad(&painter, rect);
 
         // Traces.
         if self.traces_active {
@@ -1099,7 +1358,7 @@ impl SimScreen {
         }
 
         let hint = if self.captured {
-            "Tab : libérer la souris · Échap : menu · Origine / PgDn / PgUp : corps par masse · C : barycentre · V : vue d'ensemble · T : traces · F5 : sauvegarder"
+            "Tab : libérer la souris · Échap : menu · F : suivre / cesser · A / E : bascule · H : horizon · G : grille · C : barycentre · V : vue d'ensemble · T : traces"
         } else {
             "Souris libre — clic gauche : suivre un corps · clic droit ou Tab : reprendre la visée · Échap : menu"
         };
@@ -1110,6 +1369,177 @@ impl SimScreen {
             egui::FontId::proportional(13.0),
             Color32::from_gray(150),
         );
+    }
+
+    /// Flèche au bord de l'écran vers un point hors champ, avec sa distance.
+    fn paint_edge_marker(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        aspect: f64,
+        p: DVec3,
+        label: &str,
+        color: Color32,
+    ) {
+        let l = self.camera.to_local(p);
+        if let Some((x, y)) = self.camera.project_local(l, aspect) {
+            if x.abs() <= 1.0 && y.abs() <= 1.0 {
+                return;
+            }
+        }
+        // Direction à l'écran (devant comme derrière la caméra : le sens
+        // dans lequel tourner pour l'atteindre).
+        let t = (0.5 * self.camera.fov_y).tan();
+        let sx = l.x / (t * aspect) * 0.5 * rect.width() as f64;
+        let sy = -l.y / t * 0.5 * rect.height() as f64;
+        let dir = egui::vec2(sx as f32, sy as f32);
+        let dir = if dir.length() > 1e-6 {
+            dir.normalized()
+        } else {
+            egui::vec2(0.0, 1.0)
+        };
+        let margin = 30.0;
+        let hw = (0.5 * rect.width() - margin).max(1.0);
+        let hh = (0.5 * rect.height() - margin).max(1.0);
+        let scale = (hw / dir.x.abs().max(1e-6)).min(hh / dir.y.abs().max(1e-6));
+        let pos = rect.center() + dir * scale;
+        let perp = egui::vec2(-dir.y, dir.x);
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pos + dir * 12.0,
+                pos - dir * 6.0 + perp * 8.0,
+                pos - dir * 6.0 - perp * 8.0,
+            ],
+            color.gamma_multiply(0.85),
+            Stroke::NONE,
+        ));
+        let d = (p - self.camera.position).length();
+        painter.text(
+            pos - dir * 18.0,
+            {
+                // Le texte s'étend vers le centre de l'écran.
+                let h = if dir.x > 0.3 {
+                    egui::Align::Max
+                } else if dir.x < -0.3 {
+                    egui::Align::Min
+                } else {
+                    egui::Align::Center
+                };
+                let v = if dir.y > 0.3 {
+                    egui::Align::Max
+                } else if dir.y < -0.3 {
+                    egui::Align::Min
+                } else {
+                    egui::Align::Center
+                };
+                egui::Align2([h, v])
+            },
+            format!("{label}\n{}", format::real(d)),
+            egui::FontId::proportional(12.0),
+            color,
+        );
+    }
+
+    /// Trièdre d'orientation (coin inférieur gauche) : axes X, Y, Z du monde
+    /// et normale au disque.
+    fn paint_triad(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let center = rect.left_bottom() + egui::vec2(58.0, -78.0);
+        let size = 34.0_f32;
+        painter.circle_filled(center, size + 12.0, Color32::from_black_alpha(110));
+        let mut axes: Vec<(DVec3, &str, Color32)> = vec![
+            (DVec3::X, "X", Color32::from_rgb(235, 90, 80)),
+            (DVec3::Y, "Y", Color32::from_rgb(110, 220, 100)),
+            (DVec3::Z, "Z", Color32::from_rgb(90, 150, 255)),
+        ];
+        if let Some(n) = self.disk_normal {
+            axes.push((n, "N", Color32::from_rgb(255, 200, 80)));
+        }
+        let (r, u, f) = (self.camera.right(), self.camera.up(), self.camera.forward());
+        // Du plus lointain (vers l'écran) au plus proche.
+        axes.sort_by(|a, b| b.0.dot(f).total_cmp(&a.0.dot(f)));
+        for (v, name, color) in axes {
+            let depth = v.dot(f) as f32; // > 0 : s'enfonce dans l'écran
+            let color = color.gamma_multiply(1.0 - 0.55 * depth.max(0.0));
+            let end = center + egui::vec2(v.dot(r) as f32, -(v.dot(u) as f32)) * size;
+            let width: f32 = if name == "N" { 2.5 } else { 2.0 };
+            painter.line_segment([center, end], Stroke::new(width, color));
+            painter.circle_filled(end, 2.5, color);
+            let off = (end - center).normalized() * 9.0;
+            painter.text(
+                end + if off.is_finite() {
+                    off
+                } else {
+                    egui::Vec2::ZERO
+                },
+                egui::Align2::CENTER_CENTER,
+                name,
+                egui::FontId::proportional(11.0),
+                color,
+            );
+        }
+    }
+
+    /// Grille du plan du disque (passant par le barycentre, perpendiculaire à
+    /// la normale au disque), estompée avec la distance au pied de la caméra.
+    fn paint_disk_grid(
+        &self,
+        painter: &egui::Painter,
+        aspect: f64,
+        to_screen: &dyn Fn((f64, f64)) -> Pos2,
+    ) {
+        let n = self.reference_up().normalize();
+        let o = self.cache.barycenter;
+        let cam = &self.camera;
+        let h = (cam.position - o).dot(n);
+        let height = h.abs().max(0.02 * self.reference_radius());
+        // Maille : puissance de 10 comprise entre height/10 et height.
+        let step = 10f64.powf(height.log10().floor());
+        let (u, v) = n.any_orthonormal_pair();
+        let foot = cam.position - n * h;
+        let fu = (foot - o).dot(u) / step;
+        let fv = (foot - o).dot(v) / step;
+        let fade = GRID_HALF_LINES as f64 * step;
+        let near = 1e-3 * height;
+        let base = Color32::from_rgb(110, 150, 220);
+        for (a, b, fa, fb) in [(u, v, fu, fv), (v, u, fv, fu)] {
+            let i0 = fa.round() as i64;
+            let j0 = fb.round() as i64;
+            for i in (i0 - GRID_HALF_LINES)..=(i0 + GRID_HALF_LINES) {
+                let major = i.rem_euclid(10) == 0;
+                let strength = if major { 0.45 } else { 0.2 };
+                let t0 = (j0 - GRID_HALF_LINES) as f64;
+                let t1 = (j0 + GRID_HALF_LINES) as f64;
+                let point = |t: f64| o + a * (i as f64 * step) + b * (t * step);
+                for k in 0..GRID_SUBDIVISIONS {
+                    let ta = t0 + (t1 - t0) * k as f64 / GRID_SUBDIVISIONS as f64;
+                    let tb = t0 + (t1 - t0) * (k + 1) as f64 / GRID_SUBDIVISIONS as f64;
+                    let (pa, pb) = (point(ta), point(tb));
+                    let mid = 0.5 * (pa + pb);
+                    let d = (mid - foot).length() / fade;
+                    let alpha = ((1.0 - d).max(0.0).powi(2) * strength) as f32;
+                    if alpha < 0.01 {
+                        continue;
+                    }
+                    let (mut la, mut lb) = (cam.to_local(pa), cam.to_local(pb));
+                    if la.z < near && lb.z < near {
+                        continue;
+                    }
+                    if la.z < near {
+                        la += (lb - la) * ((near - la.z) / (lb.z - la.z));
+                    } else if lb.z < near {
+                        lb += (la - lb) * ((near - lb.z) / (la.z - lb.z));
+                    }
+                    if let (Some(sa), Some(sb)) =
+                        (cam.project_local(la, aspect), cam.project_local(lb, aspect))
+                    {
+                        painter.line_segment(
+                            [to_screen(sa), to_screen(sb)],
+                            Stroke::new(1.0_f32, base.gamma_multiply(alpha)),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1173,7 +1603,11 @@ impl SimScreen {
                         if ui.button("Vue de face (B)").clicked() {
                             self.view_barycenter_from_axis();
                         }
-                        if ui.button("Cesser le suivi").clicked() {
+                        let label = if self.camera.is_orbiting() { "Cesser le suivi (F)" } else { "Suivre (F)" };
+                        if ui.button(label).clicked() {
+                            self.toggle_follow();
+                        }
+                        if ui.button("Désélectionner").clicked() {
                             self.bary_selected = false;
                             self.camera.mode = Mode::Free;
                         }
@@ -1184,6 +1618,7 @@ impl SimScreen {
                     Some(i) => {
                         let b = &snap.state.bodies;
                         let m = b.masses[i];
+                        let p = self.selected_position().unwrap_or(b.positions[i]);
                         egui::Grid::new("sel")
                             .num_columns(2)
                             .spacing([14.0, 3.0])
@@ -1215,14 +1650,20 @@ impl SimScreen {
                                 row(
                                     ui,
                                     "Dist. barycentre",
-                                    format::real((b.positions[i] - self.cache.barycenter).length()),
+                                    format::real((p - self.cache.barycenter).length()),
                                 );
                             });
-                        if ui.button("Cesser le suivi").clicked() {
-                            self.selected = None;
-                            self.camera.mode = Mode::Free;
-                            self.cache.selected_index = None;
-                        }
+                        ui.horizontal(|ui| {
+                            let label = if self.camera.is_orbiting() { "Cesser le suivi (F)" } else { "Suivre (F)" };
+                            if ui.button(label).clicked() {
+                                self.toggle_follow();
+                            }
+                            if ui.button("Désélectionner").clicked() {
+                                self.selected = None;
+                                self.camera.mode = Mode::Free;
+                                self.cache.selected_index = None;
+                            }
+                        });
                     }
                     None => {
                         ui.label(
@@ -1363,9 +1804,9 @@ impl SimScreen {
                 };
                 row(ui, "État", state.to_owned());
                 row(ui, "Moteur", engine.to_owned());
-                row(ui, "Corps", format::count(snap.state.bodies.len() as u64));
-                row(ui, "Pas", format::count(snap.state.step));
-                row(ui, "Temps simulé", format::real(snap.state.time));
+                row(ui, "Corps", format::count(snap.body_count as u64));
+                row(ui, "Pas", format::count(snap.step));
+                row(ui, "Temps simulé", format::real(snap.time));
                 row(
                     ui,
                     "Pas / s",
@@ -1454,10 +1895,21 @@ impl SimScreen {
             ui.add(
                 egui::DragValue::new(&mut self.camera.speed)
                     .speed(sp)
-                    .range(1e-9..=1e12),
+                    .range(1e-3..=100.0)
+                    .suffix(" × dist./s"),
+            )
+            .on_hover_text(
+                "Fraction de la distance au corps sélectionné (ou au barycentre) parcourue chaque seconde.",
             );
             ui.label(RichText::new("(+/−, Maj, Ctrl)").weak());
         });
+        if ui
+            .checkbox(&mut self.show_grid, "Grille du plan du disque (G)")
+            .changed()
+            && self.show_grid
+        {
+            self.refresh_disk_normal(true);
+        }
     }
 
     fn recording_panel(&mut self, ui: &mut egui::Ui) {
@@ -1555,13 +2007,9 @@ impl SimScreen {
                     "Instantané",
                     format!("{:.1} / {}", c.position + 1.0, n).replace('.', ","),
                 );
-                row(ui, "Pas", format::count(snap.state.step));
-                row(ui, "Temps simulé", format::real(snap.state.time));
-                row(
-                    ui,
-                    "Corps affichés",
-                    format::count(snap.state.bodies.len() as u64),
-                );
+                row(ui, "Pas", format::count(snap.step));
+                row(ui, "Temps simulé", format::real(snap.time));
+                row(ui, "Corps affichés", format::count(snap.body_count as u64));
                 if let Some(e) = snap.ejected_mass() {
                     let m0 = snap.state.initial_mass.unwrap_or(0.0);
                     row(
@@ -1684,14 +2132,26 @@ impl SimScreen {
                     .spacing([16.0, 2.0])
                     .show(ui, |ui| {
                         for (k, v) in [
-                            ("Z / S", "avancer / reculer"),
-                            ("Q / D", "gauche / droite"),
-                            ("E / A", "monter / descendre"),
-                            ("Maj / Ctrl", "accélérer / ralentir le déplacement"),
-                            ("+ / −", "vitesse de déplacement"),
-                            ("Souris", "orientation (ou orbite autour du corps suivi)"),
-                            ("Molette", "zoom (ou distance au corps suivi)"),
+                            (
+                                "Z / S",
+                                "avancer / reculer (en suivi : distance à la cible)",
+                            ),
+                            ("Q / D", "gauche / droite (sans effet en suivi)"),
+                            ("A / E", "basculer la vue autour de l'axe de visée"),
+                            ("H", "redresser l'horizon sur le plan du disque"),
+                            ("Maj / Ctrl", "accélérer / ralentir"),
+                            (
+                                "+ / −",
+                                "vitesse (proportionnelle à la distance à la sélection)",
+                            ),
+                            (
+                                "Souris",
+                                "orientation (en suivi : tourner autour de la cible)",
+                            ),
+                            ("Molette", "zoom optique"),
                             ("Clic gauche", "suivre le corps visé"),
+                            ("F", "suivre la sélection / cesser le suivi"),
+                            ("G", "grille du plan du disque"),
                             ("Origine", "corps le plus massif"),
                             ("PgDn / PgUp", "corps suivant / précédent par masse"),
                             ("B", "barycentre : sélection, vue de face au disque"),
@@ -1737,6 +2197,8 @@ impl SimScreen {
 
         self.source.tick(dt);
         self.poll_snapshot();
+        self.refresh_disk_normal(false);
+        self.sync_watch();
         self.poll_save();
         let mut action = self.handle_shortcuts(ctx);
 

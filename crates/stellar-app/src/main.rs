@@ -17,6 +17,7 @@ mod source;
 use std::sync::Arc;
 
 use eframe::egui;
+use eframe::egui_wgpu::{self, wgpu};
 use stellar_application::{EngineRegistry, SimulatorService};
 use stellar_engine_cpu::CpuEngineFactory;
 use stellar_engine_gpu::GpuEngineFactory;
@@ -64,8 +65,11 @@ fn main() -> eframe::Result {
     // Le moteur GPU devient le moteur par défaut si une carte compatible est
     // présente ; le moteur CPU reste toujours disponible.
     let gpu = GpuEngineFactory::probe();
-    if gpu.is_ok() {
-        registry.register(Arc::new(GpuEngineFactory));
+    // Le moteur GPU partagera la carte graphique de l'interface (affichage
+    // des corps sans copie) dès que celle-ci sera ouverte.
+    let gpu_factory = gpu.is_ok().then(|| Arc::new(GpuEngineFactory::new()));
+    if let Some(f) = &gpu_factory {
+        registry.register(f.clone());
     }
     registry.register(Arc::new(CpuEngineFactory));
 
@@ -80,6 +84,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         vsync: true,
+        wgpu_options: wgpu_configuration(),
         viewport: egui::ViewportBuilder::default()
             .with_title("Stellar")
             .with_inner_size([1600.0, 900.0])
@@ -89,6 +94,30 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Stellar",
         options,
-        Box::new(move |cc| Ok(Box::new(app::StellarApp::new(cc, service)))),
+        Box::new(move |cc| Ok(Box::new(app::StellarApp::new(cc, service, gpu_factory)))),
     )
+}
+
+/// Carte graphique de l'interface : la plus performante, avec toutes ses
+/// limites (le moteur GPU, qui la partage, manipule des tampons de plusieurs
+/// centaines de mégaoctets, bien au-delà des limites par défaut de wgpu).
+fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
+    let mut setup = egui_wgpu::WgpuSetupCreateNew {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        ..Default::default()
+    };
+    let default_descriptor = setup.device_descriptor.clone();
+    setup.device_descriptor = Arc::new(move |adapter: &wgpu::Adapter| {
+        let mut descriptor = default_descriptor(adapter);
+        if adapter.get_info().backend != wgpu::Backend::Gl {
+            descriptor.label = Some("stellar-device");
+            descriptor.required_limits = adapter.limits();
+            descriptor.memory_hints = wgpu::MemoryHints::Performance;
+        }
+        descriptor
+    });
+    egui_wgpu::WgpuConfiguration {
+        wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
+        ..Default::default()
+    }
 }

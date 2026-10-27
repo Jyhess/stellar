@@ -15,6 +15,8 @@ pub struct ViewState {
     pub yaw: f64,
     /// Élévation (radians).
     pub pitch: f64,
+    /// Bascule autour de l'axe de visée (radians, > 0 : haut de l'écran vers la droite).
+    pub roll: f64,
     /// Champ de vision vertical (radians).
     pub fov_y: f64,
     /// Corps suivi, le cas échéant.

@@ -5,6 +5,9 @@
 //! [`PhysicsEngine`], puis en l'enregistrant auprès du registre de
 //! l'application ; il devient alors sélectionnable dans les paramètres.
 
+use std::any::Any;
+use std::sync::Arc;
+
 use crate::{BodyId, PhysicsParams, SimulationState, Vec3};
 
 /// Description d'un moteur, affichée dans l'interface.
@@ -74,6 +77,15 @@ pub trait PhysicsEngine: Send {
 
     /// Énergies au dernier pas calculé.
     fn diagnostics(&self) -> Diagnostics;
+
+    /// Accès direct aux données du moteur pour l'affichage, sans copie (par
+    /// exemple les tampons d'une carte graphique partagée avec l'interface).
+    /// Le type concret est propre au moteur : la couche de présentation le
+    /// reconnaît par conversion (`downcast`). `None` par défaut : l'affichage
+    /// passe alors par les copies de l'état ([`Self::write_state`]).
+    fn live_view(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
 }
 
 /// Fabrique de moteurs : point d'extension pour de futurs moteurs.

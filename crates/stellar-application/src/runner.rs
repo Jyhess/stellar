@@ -3,8 +3,15 @@
 //! Le thread de simulation enchaîne les pas aussi vite que possible (ou à la
 //! cadence maximale demandée) et publie régulièrement un [`Snapshot`]
 //! immuable, que l'interface lit sans jamais bloquer le calcul.
+//!
+//! Quand le moteur offre un accès direct à ses données pour l'affichage
+//! ([`PhysicsEngine::live_view`]), la copie complète de l'état, coûteuse,
+//! n'est faite que toutes les une à deux secondes ; entre-temps, les
+//! publications légères ne portent que les grandeurs globales et les
+//! positions des corps suivis ([`SimulationHandle::set_watched`]).
 
-use std::collections::HashMap;
+use std::any::Any;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,6 +24,7 @@ use crate::recording::{
 use crate::trace::{TraceReference, TraceSet};
 use stellar_domain::{
     ranking, BodyId, Diagnostics, EngineFactory, PhysicsEngine, SimulationConfig, SimulationState,
+    Vec3,
 };
 
 /// Nombre de corps listés dans le classement publié.
@@ -24,6 +32,13 @@ pub const TOP_COUNT: usize = 10;
 
 /// Intervalle minimal entre deux publications (≈ 60 Hz).
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Intervalle entre deux copies complètes de l'état quand l'affichage lit
+/// directement les données du moteur : une seconde par tranche de trois
+/// millions de corps, entre une et deux secondes.
+fn full_state_interval(bodies: usize) -> Duration {
+    Duration::from_secs_f64((bodies as f64 / 3e6).clamp(1.0, 2.0))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -35,11 +50,27 @@ pub enum Phase {
 }
 
 /// Instantané publié par le thread de simulation.
+///
+/// `state` (et les grandeurs qui en dérivent : `top`, `total_mass`) peut
+/// dater de quelques pas quand le moteur est affiché directement ; `step`,
+/// `time`, `body_count`, `diagnostics`, `center_of_mass` et `watched` sont
+/// toujours à jour.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub phase: Phase,
-    pub state: SimulationState,
+    /// Dernière copie complète de l'état (partagée entre publications).
+    pub state: Arc<SimulationState>,
+    /// Pas courant.
+    pub step: u64,
+    /// Temps simulé courant.
+    pub time: f64,
+    /// Nombre de corps courant.
+    pub body_count: usize,
     pub diagnostics: Diagnostics,
+    /// Centre de masse courant, si le moteur le fournit à moindre coût.
+    pub center_of_mass: Option<Vec3>,
+    /// Positions courantes des corps suivis (absents : éliminés ou fusionnés).
+    pub watched: Vec<(BodyId, Vec3)>,
     /// Classement des corps les plus massifs : (id, masse).
     pub top: Vec<(BodyId, f64)>,
     /// Masse totale des corps présents dans la simulation.
@@ -59,8 +90,13 @@ impl Snapshot {
     fn initialising(running: bool) -> Self {
         Self {
             phase: Phase::Initialising,
-            state: SimulationState::default(),
+            state: Arc::new(SimulationState::default()),
+            step: 0,
+            time: 0.0,
+            body_count: 0,
             diagnostics: Diagnostics::default(),
+            center_of_mass: None,
+            watched: Vec::new(),
             top: Vec::new(),
             total_mass: 0.0,
             steps_per_second: 0.0,
@@ -86,6 +122,20 @@ impl Snapshot {
         }
     }
 
+    /// Position courante d'un corps suivi ([`SimulationHandle::set_watched`]).
+    pub fn watched_position(&self, id: BodyId) -> Option<Vec3> {
+        self.watched.iter().find(|(w, _)| *w == id).map(|(_, p)| *p)
+    }
+
+    /// Position courante d'un corps : suivie si possible, sinon tirée de la
+    /// dernière copie complète de l'état (recherche linéaire).
+    pub fn position_of(&self, id: BodyId) -> Option<Vec3> {
+        self.watched_position(id).or_else(|| {
+            let b = &self.state.bodies;
+            b.index_of(id).map(|i| b.positions[i])
+        })
+    }
+
     /// Variation relative de l'énergie totale depuis l'origine.
     pub fn energy_drift(&self) -> Option<f64> {
         let e0 = self.state.initial_energy?;
@@ -99,6 +149,7 @@ enum Command {
     StepOnce,
     SetMaxRate(Option<f64>),
     StartTraces(Vec<BodyId>),
+    SetWatched(Vec<BodyId>),
     StopTraces,
     SetTraceReference(Option<TraceReference>),
     StartRecording {
@@ -131,6 +182,8 @@ struct Shared {
     traces: Mutex<Option<TraceSet>>,
     tracing: AtomicBool,
     recording: Arc<RecordingStatus>,
+    /// Accès direct du moteur pour l'affichage, une fois le moteur créé.
+    live_view: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
 }
 
 /// Poignée de pilotage d'une simulation en cours. L'arrêter (ou la détruire)
@@ -162,6 +215,7 @@ impl SimulationHandle {
             traces: Mutex::new(None),
             tracing: AtomicBool::new(false),
             recording: Arc::new(RecordingStatus::default()),
+            live_view: Mutex::new(None),
         });
         let worker_shared = Arc::clone(&shared);
         let params = config.physics;
@@ -194,6 +248,9 @@ impl SimulationHandle {
                 };
                 let initial_energy =
                     saved_energy.or_else(|| Some(engine.diagnostics().total_energy()));
+                let live_view = engine.live_view();
+                let direct_view = live_view.is_some();
+                *worker_shared.live_view.lock().expect("verrou empoisonné") = live_view;
                 Worker {
                     engine,
                     rx,
@@ -205,7 +262,16 @@ impl SimulationHandle {
                     steps_per_second: 0.0,
                     last_step_ms: 0.0,
                     last_publish: None,
+                    last_full: None,
+                    direct_view,
+                    watched: Vec::new(),
+                    full: Arc::new(SimulationState::default()),
+                    top: Vec::new(),
+                    total_mass: 0.0,
+                    recent: VecDeque::new(),
+                    spare: None,
                     step,
+                    dt: params.dt,
                     recording: None,
                 }
                 .run();
@@ -226,6 +292,22 @@ impl SimulationHandle {
     /// Dernier instantané publié (lecture non bloquante pour le calcul).
     pub fn latest(&self) -> Arc<Snapshot> {
         Arc::clone(&self.shared.latest.lock().expect("verrou empoisonné"))
+    }
+
+    /// Accès direct du moteur pour l'affichage (`None` tant que le moteur
+    /// n'est pas créé, ou s'il n'en offre pas). Voir [`PhysicsEngine::live_view`].
+    pub fn live_view(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.shared
+            .live_view
+            .lock()
+            .expect("verrou empoisonné")
+            .clone()
+    }
+
+    /// Corps dont la position est publiée à chaque instantané
+    /// ([`Snapshot::watched`]), typiquement le corps sélectionné.
+    pub fn set_watched(&self, ids: Vec<BodyId>) {
+        let _ = self.tx.send(Command::SetWatched(ids));
     }
 
     /// Numéro du dernier instantané publié.
@@ -361,8 +443,25 @@ struct Worker {
     steps_per_second: f64,
     last_step_ms: f64,
     last_publish: Option<Instant>,
+    /// Dernière copie complète de l'état.
+    last_full: Option<Instant>,
+    /// L'affichage lit directement les données du moteur : copies
+    /// complètes espacées, publications légères entre-temps.
+    direct_view: bool,
+    /// Corps dont la position accompagne chaque publication.
+    watched: Vec<BodyId>,
+    /// Dernière copie complète publiée, et grandeurs qui en dérivent.
+    full: Arc<SimulationState>,
+    top: Vec<(BodyId, f64)>,
+    total_mass: f64,
+    /// Copies récentes, dont les tableaux sont recyclés quand l'interface
+    /// les a lâchées (évite de réallouer des centaines de mégaoctets).
+    recent: VecDeque<Arc<SimulationState>>,
+    spare: Option<SimulationState>,
     /// Numéro du pas courant (pour dater les points des traces).
     step: u64,
+    /// Pas de temps (fixe).
+    dt: f64,
     recording: Option<ActiveRecording>,
 }
 
@@ -479,7 +578,7 @@ impl Worker {
     }
 
     fn run_loop(&mut self) {
-        self.publish();
+        self.publish(true);
         loop {
             // 1. Traitement des commandes (bloquant en pause).
             loop {
@@ -498,12 +597,18 @@ impl Worker {
                 match cmd {
                     Command::Pause => {
                         self.running = false;
-                        self.publish();
+                        self.publish(true);
                     }
                     Command::Resume => self.running = true,
                     Command::StepOnce => {
                         self.step();
-                        self.publish();
+                        self.publish(true);
+                    }
+                    Command::SetWatched(ids) => {
+                        self.watched = ids;
+                        if !self.running {
+                            self.publish(false);
+                        }
                     }
                     Command::SetMaxRate(r) => self.max_rate = r.filter(|r| *r > 0.0),
                     Command::StartTraces(ids) => {
@@ -548,14 +653,30 @@ impl Worker {
             // 2. Un pas de calcul.
             let started = Instant::now();
             self.step();
-            // Au-delà d'un million de corps, la copie de l'état (relecture
-            // GPU comprise) devient coûteuse : publications plus espacées.
-            let scale = (self.engine.body_count() as f64 / 1e6).max(1.0);
-            if self
-                .last_publish
-                .map_or(true, |t| t.elapsed() >= PUBLISH_INTERVAL.mul_f64(scale))
-            {
-                self.publish();
+            let n = self.engine.body_count();
+            if self.direct_view {
+                // Affichage direct : copie complète toutes les une à deux
+                // secondes, publications légères entre-temps.
+                let full = self
+                    .last_full
+                    .map_or(true, |t| t.elapsed() >= full_state_interval(n));
+                if full
+                    || self
+                        .last_publish
+                        .map_or(true, |t| t.elapsed() >= PUBLISH_INTERVAL)
+                {
+                    self.publish(full);
+                }
+            } else {
+                // Au-delà d'un million de corps, la copie de l'état devient
+                // coûteuse : publications plus espacées.
+                let scale = (n as f64 / 1e6).max(1.0);
+                if self
+                    .last_publish
+                    .map_or(true, |t| t.elapsed() >= PUBLISH_INTERVAL.mul_f64(scale))
+                {
+                    self.publish(true);
+                }
             }
 
             // 3. Limitation éventuelle de cadence.
@@ -620,20 +741,64 @@ impl Worker {
         }
     }
 
-    fn publish(&mut self) {
-        let mut state = SimulationState::default();
+    /// Copie complète de l'état, dans les tableaux d'une copie que plus
+    /// personne n'utilise quand c'est possible.
+    fn refresh_full_state(&mut self) {
+        // La copie publiée en dernier est encore affichée ; les précédentes
+        // ont en principe été lâchées par l'interface.
+        while self.recent.len() > 1 {
+            if let Some(old) = self.recent.pop_front() {
+                if let Ok(s) = Arc::try_unwrap(old) {
+                    self.spare = Some(s);
+                }
+            }
+        }
+        let mut state = self.spare.take().unwrap_or_default();
         self.engine.write_state(&mut state);
         state.initial_energy = self.initial_energy;
         state.initial_mass = self.initial_mass;
-        let total_mass = state.bodies.total_mass();
-        let top = ranking::top_k(&state.bodies.ids, &state.bodies.masses, TOP_COUNT);
+        self.total_mass = state.bodies.total_mass();
+        self.top = ranking::top_k(&state.bodies.ids, &state.bodies.masses, TOP_COUNT);
+        self.full = Arc::new(state);
+        self.recent.push_back(Arc::clone(&self.full));
+        self.last_full = Some(Instant::now());
+    }
+
+    /// Publie un instantané ; `full` : avec une nouvelle copie complète de
+    /// l'état (sinon, la précédente est reprise).
+    fn publish(&mut self, full: bool) {
+        if full {
+            self.refresh_full_state();
+        }
+        let watched = if self.watched.is_empty() {
+            Vec::new()
+        } else {
+            let pos = self.engine.positions_of(&self.watched);
+            self.watched
+                .iter()
+                .zip(pos)
+                .filter_map(|(&id, p)| p.map(|p| (id, p)))
+                .collect()
+        };
+        // Sans affichage direct, l'interface le déduit de l'état complet.
+        let center_of_mass = if self.direct_view {
+            self.engine.center_of_mass()
+        } else {
+            None
+        };
         let sequence = self.shared.sequence.load(Ordering::Relaxed) + 1;
         let snapshot = Arc::new(Snapshot {
             phase: Phase::Ready,
-            state,
+            state: Arc::clone(&self.full),
+            step: self.step,
+            // Pas de temps fixe : temps courant déduit de la dernière copie.
+            time: self.full.time + (self.step as f64 - self.full.step as f64) * self.dt,
+            body_count: self.engine.body_count(),
             diagnostics: self.engine.diagnostics(),
-            top,
-            total_mass,
+            center_of_mass,
+            watched,
+            top: self.top.clone(),
+            total_mass: self.total_mass,
             steps_per_second: self.steps_per_second,
             last_step_ms: self.last_step_ms,
             running: self.running,
@@ -706,6 +871,89 @@ mod tests {
         }
     }
 
+    /// Même moteur, mais qui se déclare affiché directement.
+    struct DirectDrift(Drift);
+
+    impl PhysicsEngine for DirectDrift {
+        fn step(&mut self) -> StepReport {
+            self.0.step()
+        }
+        fn state(&self) -> SimulationState {
+            self.0.state()
+        }
+        fn body_count(&self) -> usize {
+            self.0.body_count()
+        }
+        fn diagnostics(&self) -> Diagnostics {
+            self.0.diagnostics()
+        }
+        fn live_view(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+            Some(Arc::new(()))
+        }
+    }
+
+    struct DirectDriftFactory;
+    impl EngineFactory for DirectDriftFactory {
+        fn descriptor(&self) -> EngineDescriptor {
+            EngineDescriptor {
+                id: "direct-drift",
+                label: "direct-drift",
+                description: "",
+            }
+        }
+        fn create(
+            &self,
+            state: SimulationState,
+            _: PhysicsParams,
+        ) -> Result<Box<dyn PhysicsEngine>, String> {
+            Ok(Box::new(DirectDrift(Drift { state })))
+        }
+    }
+
+    /// Affichage direct : l'état complet n'est recopié que toutes les une à
+    /// deux secondes, mais le pas, le centre de masse et les corps suivis
+    /// sont publiés à jour.
+    #[test]
+    fn direct_view_publishes_light_snapshots_between_full_copies() {
+        let mut bodies = BodySet::default();
+        bodies.push(1, Vec3::ZERO, Vec3::X, 1.0);
+        bodies.push(2, Vec3::Y, Vec3::X, 1.0);
+        let state = SimulationState {
+            bodies,
+            ..Default::default()
+        };
+        let config = SimulationConfig {
+            engine: "direct-drift".into(),
+            ..Default::default()
+        };
+        let handle =
+            SimulationHandle::start(config, Arc::new(DirectDriftFactory), move || state, true);
+        handle.set_watched(vec![1]);
+        handle.resume();
+        wait_for(&handle, 50);
+        let snap = handle.latest();
+        assert!(handle.live_view().is_some());
+        // Copie complète initiale (pas 0), pas encore renouvelée.
+        assert_eq!(snap.state.step, 0);
+        assert!(snap.step >= 50);
+        assert_eq!(snap.body_count, 1);
+        // Le corps 1 avance d'une unité par pas ; il a absorbé le corps 2.
+        let p = snap.watched_position(1).expect("corps suivi");
+        assert_eq!(p.x, snap.step as f64);
+        assert!(snap.center_of_mass.is_some());
+        handle.pause();
+        // La pause publie une copie complète à jour.
+        for _ in 0..500 {
+            let s = handle.latest();
+            if !s.running && s.state.step == s.step {
+                handle.shutdown();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("pas de copie complète à la pause");
+    }
+
     #[derive(Clone, Default)]
     struct MemWriter(Arc<Mutex<Vec<Keyframe>>>);
     impl RecordingWriter for MemWriter {
@@ -720,7 +968,7 @@ mod tests {
 
     fn wait_for(handle: &SimulationHandle, step: u64) {
         for _ in 0..500 {
-            if handle.latest().state.step >= step {
+            if handle.latest().step >= step {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));

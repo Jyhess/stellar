@@ -169,7 +169,7 @@ impl SimulatorService {
         }
         let data = SaveData {
             config: config.clone(),
-            state: snapshot.state.clone(),
+            state: (*snapshot.state).clone(),
             view,
             recording: None,
         };
@@ -192,7 +192,7 @@ impl SimulatorService {
         let header = RecordingHeader {
             config: handle.config().clone(),
             interval: interval.max(1),
-            start_step: handle.latest().state.step,
+            start_step: handle.latest().step,
             created_at_unix: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)

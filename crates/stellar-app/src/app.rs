@@ -2,8 +2,11 @@
 
 use std::time::{Duration, Instant};
 
+use std::sync::Arc;
+
 use eframe::egui;
 use stellar_application::SimulatorService;
+use stellar_engine_gpu::{GpuEngineFactory, SharedDevice};
 
 use crate::home::{HomeAction, HomeScreen};
 use crate::render::PointRenderer;
@@ -27,9 +30,22 @@ pub struct StellarApp {
 }
 
 impl StellarApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, service: SimulatorService) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        service: SimulatorService,
+        gpu_factory: Option<Arc<GpuEngineFactory>>,
+    ) -> Self {
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             PointRenderer::install(rs);
+            // Le moteur GPU calcule sur la carte de l'interface : ses corps
+            // sont dessinés directement depuis ses tampons.
+            if let Some(f) = &gpu_factory {
+                f.attach(SharedDevice {
+                    adapter: rs.adapter.clone(),
+                    device: rs.device.clone(),
+                    queue: rs.queue.clone(),
+                });
+            }
         }
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let home = HomeScreen::new(&service);

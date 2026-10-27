@@ -56,13 +56,16 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 
 | Touche | Action |
 |---|---|
-| Z / S | avancer / reculer |
-| Q / D | gauche / droite |
-| E / A | monter / descendre |
+| Z / S | avancer / reculer (en suivi : rapprocher / éloigner de la cible) |
+| Q / D | gauche / droite (sans effet en suivi) |
+| A / E | basculer la vue autour de l'axe de visée |
+| H | redresser progressivement l'horizon : le haut de l'écran revient sur la normale au disque |
 | Maj / Ctrl | déplacement ×5 / ×0,2 |
-| + / − | vitesse de déplacement |
-| Souris | orientation de la vue (ou orbite autour du corps suivi) |
-| Molette | zoom optique (ou distance au corps suivi) |
+| + / − | multiplicateur de vitesse |
+| Souris | orientation de la vue, dans le repère de l'écran (en suivi : tourner autour de la cible) |
+| Molette | zoom optique |
+| F | suivre la sélection (corps ou barycentre) / cesser le suivi |
+| G | grille du plan du disque |
 | Clic gauche | suivre le corps visé (réticule, ou pointeur quand la souris est libre) |
 | Origine | aller au corps le plus massif |
 | PgDn / PgUp | corps suivant / précédent dans l'ordre des masses |
@@ -78,7 +81,7 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 | F5 | sauvegarder |
 | Échap | menu (reprendre, sauvegarder, accueil, quitter) |
 
-Quand un corps est suivi, la caméra l'accompagne et tourne autour de lui. Si ce corps fusionne, le suivi passe au corps qui en résulte. Une touche de déplacement rend la main en vol libre. En mode trace, chaque trace a sa couleur, rappelée dans le panneau « Corps ». Elle reçoit un point à chaque pas de calcul et se poursuit sur le corps issu d'une fusion. Le panneau propose deux affichages :
+Quand un corps (ou le barycentre) est suivi, il reste au centre de l'écran : la souris fait tourner la caméra autour de lui, Z / S règlent la distance et A / E basculent la vue. Si ce corps fusionne, le suivi passe au corps qui en résulte. F rend la main en vol libre sans rien changer à la vue. L'orientation est libre dans toutes les directions (on peut passer par-dessus un objet) ; H ramène l'horizon sur le plan du disque. La vitesse est proportionnelle à la distance au corps sélectionné, ou au barycentre si rien n'est sélectionné : lente près de la cible, rapide au loin. À l'écran, un trièdre (coin inférieur gauche) montre les axes X, Y, Z et la normale au disque N, et une flèche au bord de l'écran indique la direction et la distance du barycentre et du corps sélectionné quand ils sont hors champ. En mode trace, chaque trace a sa couleur, rappelée dans le panneau « Corps ». Elle reçoit un point à chaque pas de calcul et se poursuit sur le corps issu d'une fusion. Le panneau propose deux affichages :
 
 - l'**historique** complet depuis l'activation (décimé au-delà de 4 096 points) ;
 - une **queue** des N derniers pas, de 10 à 5 000, qui s'estompe vers le passé.
@@ -127,6 +130,7 @@ Si une carte graphique compatible (DirectX 12 ou Vulkan) est détectée, le mote
 - **Simple précision :** sur les essais, l'écart avec le moteur CPU reste de l'ordre de 10⁻³ en position après 50 pas, avec un écart d'énergie de 4 × 10⁻⁵.
 - **Mémoire vidéo :** environ 330 octets par corps, soit environ 3,3 Go pour 10 millions. Le maximum est de 16,7 millions de corps.
 - **Repli automatique :** une sauvegarde faite avec le moteur GPU se recharge avec le moteur CPU si la carte est absente.
+- **Affichage direct :** le moteur calcule sur la carte graphique de l'interface, qui dessine les corps directement depuis ses tampons, sans copie. L'état complet n'est relu qu'une fois toutes les une à deux secondes (pointage, classement, barycentre, sauvegarde) ; le pas, les énergies, le centre de masse et la position du corps suivi sont publiés à jour à chaque instantané. Si la carte de l'interface ne convient pas au calcul (OpenGL), le moteur ouvre sa propre carte et l'affichage repasse par les copies.
 - **Banc d'essai :**
 
 ```powershell
@@ -151,11 +155,11 @@ stellar-app (présentation + racine de composition : egui, wgpu)
 | Crate | Rôle |
 |---|---|
 | `stellar-domain` | Corps (`BodySet`, en structure de tableaux), état, paramètres, règles physiques (rayon, fusion, distance balayée), classement par masse, **traits `PhysicsEngine` / `EngineFactory`**. Aucune infrastructure. |
-| `stellar-application` | Génération des conditions initiales, thread de simulation découplé (`SimulationHandle`, instantanés publiés à ≤ 60 Hz), registre des moteurs, ports `SimulationRepository`, façade `SimulatorService`. |
+| `stellar-application` | Génération des conditions initiales, thread de simulation découplé (`SimulationHandle`, instantanés publiés à ≤ 60 Hz ; copie complète de l'état espacée quand le moteur est affiché directement), registre des moteurs, ports `SimulationRepository`, façade `SimulatorService`. |
 | `stellar-engine-cpu` | Moteur de calcul CPU. Optimisé librement, comme prévu par la spécification (voir ci-dessous). |
-| `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau, parcours de Barnes-Hut, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. |
+| `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau, parcours de Barnes-Hut, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. Sur la carte de l'interface, expose ses tampons de corps (`BodiesView`) pour l'affichage. |
 | `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. |
-| `stellar-app` | Écrans egui, caméra, sélection, rendu GPU des corps (billboards additifs, positions relatives à une ancre pour garder la précision en `f32`). |
+| `stellar-app` | Écrans egui, caméra, sélection, rendu GPU des corps (billboards additifs, positions relatives à une ancre pour garder la précision en `f32`), lus directement dans les tampons du moteur GPU ou téléversés depuis les instantanés. |
 
 ### Moteur CPU
 

@@ -323,3 +323,100 @@ fn queries_positions_and_barycenter() {
     let c = e.center_of_mass().unwrap();
     assert!((c - DVec3::new(-0.5, 0.5, 1.5)).length() < 1e-6);
 }
+
+/// Carte partagée : les tampons exposés à l'affichage contiennent, aux
+/// décalages annoncés, exactement les positions et masses de l'état.
+#[test]
+fn shared_device_exposes_current_bodies() {
+    use stellar_engine_gpu::{BodiesView, SharedDevice};
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::from_env()
+            .unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
+        ..Default::default()
+    });
+    let Some(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    else {
+        eprintln!("test GPU ignoré : aucune carte graphique");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: None,
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::Performance,
+        },
+        None,
+    ))
+    .expect("ouverture de la carte graphique");
+    let shared = SharedDevice {
+        adapter,
+        device: device.clone(),
+        queue: queue.clone(),
+    };
+
+    // Nuage qui s'effondre, gros rayons : fusions, donc compactions.
+    let ic = InitialConditions {
+        count: 2_000,
+        radius: 10.0,
+        seed: 11,
+        distribution: Distribution::Sphere,
+        velocity: VelocityMode::Rest,
+    };
+    let mut p = PhysicsParams::suggested(&ic, 1.0);
+    p.base_radius *= 20.0;
+    let mut e = match GpuEngine::with_device(generate_state(&ic, 1.0), p, &shared) {
+        Ok(e) => e,
+        Err(msg) => {
+            eprintln!("test GPU ignoré : {msg}");
+            return;
+        }
+    };
+    let view = e
+        .live_view()
+        .expect("vue exposée sur carte partagée")
+        .downcast::<BodiesView>()
+        .expect("vue du moteur GPU");
+
+    let mut merged = 0;
+    for _ in 0..300 {
+        merged += e.step().merges.len();
+    }
+    assert!(merged > 0, "le test doit provoquer des fusions");
+
+    let (buffer, count) = view.current();
+    assert_eq!(count as usize, e.body_count());
+    let size = count as u64 * BodiesView::STRIDE;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+    queue.submit(Some(enc.finish()));
+    staging
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    let _ = device.poll(wgpu::Maintain::Wait);
+    let raw = staging.slice(..).get_mapped_range().to_vec();
+
+    let s = e.state();
+    let stride = BodiesView::STRIDE as usize;
+    for i in 0..count as usize {
+        let f = |off: usize| f32::from_le_bytes(raw[off..off + 4].try_into().unwrap()) as f64;
+        let o = i * stride + BodiesView::POSITION_OFFSET as usize;
+        let pos = DVec3::new(f(o), f(o + 4), f(o + 8));
+        let mass = f(i * stride + BodiesView::MASS_OFFSET as usize);
+        assert_eq!(pos, s.bodies.positions[i]);
+        assert_eq!(mass, s.bodies.masses[i]);
+        assert!(mass > 0.0, "corps mort dans l'état publié");
+    }
+
+    // Sans carte partagée : pas de vue.
+    let own = GpuEngine::new(sphere(100, 3), params()).expect("carte graphique");
+    assert!(own.live_view().is_none());
+}

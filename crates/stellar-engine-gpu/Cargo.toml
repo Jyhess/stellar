@@ -10,6 +10,7 @@ stellar-domain.workspace = true
 wgpu = "24"
 pollster = "0.4"
 bytemuck.workspace = true
+rayon.workspace = true
 glam.workspace = true
 
 [dev-dependencies]

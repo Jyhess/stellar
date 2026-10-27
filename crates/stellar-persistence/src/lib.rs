@@ -2,7 +2,7 @@
 //!
 //! Implémentation de [`SimulationRepository`] sur le système de fichiers.
 //!
-//! ## Format `.stellar` (version 1)
+//! ## Format `.stellar` (version 3)
 //!
 //! | Octets      | Contenu                                         |
 //! |-------------|-------------------------------------------------|
@@ -28,7 +28,8 @@ use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepo
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
 /// Version 2 : lien vers un enregistrement suspendu, masse initiale.
-const VERSION: u32 = 2;
+/// Version 3 : bascule de la caméra (`ViewState::roll`).
+const VERSION: u32 = 3;
 const MAX_HEADER: u32 = 1 << 20;
 const ZSTD_LEVEL: i32 = 3;
 
@@ -93,10 +94,67 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Point de vue des versions 1 et 2, sans bascule.
+mod legacy {
+    use serde::{Deserialize, Serialize};
+    use stellar_application::ViewState;
+    use stellar_domain::BodyId;
+
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    pub struct View {
+        pub position: [f64; 3],
+        pub yaw: f64,
+        pub pitch: f64,
+        pub fov_y: f64,
+        pub followed: Option<BodyId>,
+        pub orbit_distance: f64,
+    }
+
+    impl From<View> for ViewState {
+        fn from(v: View) -> Self {
+            ViewState {
+                position: v.position,
+                yaw: v.yaw,
+                pitch: v.pitch,
+                roll: 0.0,
+                fov_y: v.fov_y,
+                followed: v.followed,
+                orbit_distance: v.orbit_distance,
+            }
+        }
+    }
+}
+
+/// Formes de la version 2.
+mod v2 {
+    use serde::Deserialize;
+    use stellar_application::{RecordingLink, SaveData};
+    use stellar_domain::{SimulationConfig, SimulationState};
+
+    #[derive(Deserialize)]
+    pub struct Data {
+        config: SimulationConfig,
+        state: SimulationState,
+        view: Option<super::legacy::View>,
+        recording: Option<RecordingLink>,
+    }
+
+    impl From<Data> for SaveData {
+        fn from(d: Data) -> Self {
+            SaveData {
+                config: d.config,
+                state: d.state,
+                view: d.view.map(Into::into),
+                recording: d.recording,
+            }
+        }
+    }
+}
+
 /// Formes de la version 1, pour relire les anciennes sauvegardes.
 mod v1 {
     use serde::Deserialize;
-    use stellar_application::{SaveData, SaveSummary, ViewState};
+    use stellar_application::{SaveData, SaveSummary};
     use stellar_domain::{BodySet, SimulationConfig, SimulationState};
 
     #[derive(Deserialize)]
@@ -136,7 +194,7 @@ mod v1 {
     pub struct Data {
         config: SimulationConfig,
         state: State,
-        view: Option<ViewState>,
+        view: Option<super::legacy::View>,
     }
 
     impl From<Data> for SaveData {
@@ -150,7 +208,7 @@ mod v1 {
                     initial_energy: d.state.initial_energy,
                     initial_mass: None,
                 },
-                view: d.view,
+                view: d.view.map(Into::into),
                 recording: None,
             }
         }
@@ -169,7 +227,7 @@ fn read_header(r: &mut impl Read) -> Result<(u32, SaveSummary), RepositoryError>
     let mut word = [0u8; 4];
     r.read_exact(&mut word).map_err(io)?;
     let version = u32::from_le_bytes(word);
-    if version != 1 && version != VERSION {
+    if !(1..=VERSION).contains(&version) {
         return Err(RepositoryError::UnsupportedVersion(version));
     }
     r.read_exact(&mut word).map_err(io)?;
@@ -237,6 +295,10 @@ impl SimulationRepository for FileRepository {
         let dec = zstd::stream::Decoder::with_buffer(r).map_err(io)?;
         let data: SaveData = if version == 1 {
             bincode::deserialize_from::<_, v1::Data>(dec)
+                .map_err(fmt)?
+                .into()
+        } else if version == 2 {
+            bincode::deserialize_from::<_, v2::Data>(dec)
                 .map_err(fmt)?
                 .into()
         } else {
@@ -314,6 +376,7 @@ mod tests {
                 position: [1.0, 2.0, 3.0],
                 yaw: 0.5,
                 pitch: -0.2,
+                roll: 0.3,
                 fov_y: 1.0,
                 followed: Some(7),
                 orbit_distance: 12.0,
@@ -351,7 +414,7 @@ mod tests {
         struct DataV1<'a> {
             config: &'a SimulationConfig,
             state: StateV1<'a>,
-            view: Option<ViewState>,
+            view: Option<legacy::View>,
         }
         let dir = temp_dir("v1");
         fs::create_dir_all(&dir).unwrap();
@@ -373,7 +436,14 @@ mod tests {
                 time: 1.5,
                 initial_energy: Some(-3.0),
             },
-            view: reference.view,
+            view: reference.view.map(|v| legacy::View {
+                position: v.position,
+                yaw: v.yaw,
+                pitch: v.pitch,
+                fov_y: v.fov_y,
+                followed: v.followed,
+                orbit_distance: v.orbit_distance,
+            }),
         })
         .unwrap();
         let mut bytes = Vec::new();
@@ -393,7 +463,73 @@ mod tests {
         assert_eq!(data.state.bodies, reference.state.bodies);
         assert_eq!(data.state.initial_mass, None);
         assert_eq!(data.recording, None);
+        let view = data.view.unwrap();
+        assert_eq!(view.roll, 0.0);
+        assert_eq!(view.yaw, 0.5);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_version_2_files() {
+        #[derive(serde::Serialize)]
+        struct DataV2<'a> {
+            config: &'a SimulationConfig,
+            state: &'a SimulationState,
+            view: Option<legacy::View>,
+            recording: &'a Option<stellar_application::RecordingLink>,
+        }
+        let dir = temp_dir("v2");
+        fs::create_dir_all(&dir).unwrap();
+        let reference = sample();
+        let mut summary = repo_summary(&reference);
+        summary.name = "v2".into();
+        let header = bincode::serialize(&summary).unwrap();
+        let v = reference.view.unwrap();
+        let body = bincode::serialize(&DataV2 {
+            config: &reference.config,
+            state: &reference.state,
+            view: Some(legacy::View {
+                position: v.position,
+                yaw: v.yaw,
+                pitch: v.pitch,
+                fov_y: v.fov_y,
+                followed: v.followed,
+                orbit_distance: v.orbit_distance,
+            }),
+            recording: &reference.recording,
+        })
+        .unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(&zstd::bulk::compress(&body, 3).unwrap());
+        let path = dir.join("v2.stellar");
+        fs::write(&path, bytes).unwrap();
+
+        let repo = FileRepository::new(&dir);
+        assert_eq!(repo.list().unwrap().len(), 1);
+        let data = repo.load(&path).unwrap();
+        assert_eq!(data.state, reference.state);
+        assert_eq!(data.recording, reference.recording);
+        let view = data.view.unwrap();
+        assert_eq!(view.roll, 0.0);
+        assert_eq!(view.orbit_distance, 12.0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn repo_summary(d: &SaveData) -> SaveSummary {
+        SaveSummary {
+            path: PathBuf::new(),
+            name: String::new(),
+            saved_at_unix: 1,
+            body_count: d.state.bodies.len(),
+            step: d.state.step,
+            time: d.state.time,
+            engine: d.config.engine.clone(),
+            recording: None,
+        }
     }
 
     #[test]

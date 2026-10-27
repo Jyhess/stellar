@@ -18,6 +18,26 @@ pub struct Kernel {
     pub pipeline: wgpu::ComputePipeline,
 }
 
+/// Carte graphique ouverte par l'interface, prêtée au moteur.
+#[derive(Clone)]
+pub struct SharedDevice {
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+fn check_adapter(adapter: &wgpu::Adapter) -> Result<(), String> {
+    if adapter
+        .get_downlevel_capabilities()
+        .flags
+        .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS | wgpu::DownlevelFlags::INDIRECT_EXECUTION)
+    {
+        Ok(())
+    } else {
+        Err("la carte graphique ne gère pas les shaders de calcul".to_owned())
+    }
+}
+
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -40,11 +60,7 @@ impl Gpu {
             compatible_surface: None,
         }))
         .ok_or_else(|| "aucune carte graphique compatible n'a été trouvée".to_owned())?;
-        if !adapter.get_downlevel_capabilities().flags.contains(
-            wgpu::DownlevelFlags::COMPUTE_SHADERS | wgpu::DownlevelFlags::INDIRECT_EXECUTION,
-        ) {
-            return Err("la carte graphique ne gère pas les shaders de calcul".to_owned());
-        }
+        check_adapter(&adapter)?;
         let info = adapter.get_info();
         let limits = adapter.limits();
         let (device, queue) = pollster::block_on(adapter.request_device(
@@ -63,6 +79,26 @@ impl Gpu {
             adapter_name: format!("{} ({:?})", info.name, info.backend),
             limits,
         })
+    }
+
+    /// Utilise une carte graphique déjà ouverte (celle de l'interface), pour
+    /// que ses tampons puissent être affichés sans copie.
+    pub fn shared(shared: &SharedDevice) -> Result<Self, String> {
+        check_adapter(&shared.adapter)?;
+        let info = shared.adapter.get_info();
+        Ok(Self {
+            device: shared.device.clone(),
+            queue: shared.queue.clone(),
+            adapter_name: format!("{} ({:?})", info.name, info.backend),
+            limits: shared.device.limits(),
+        })
+    }
+
+    /// La carte partagée convient-elle au calcul ? (shaders de calcul, et
+    /// pas d'OpenGL, dont les limites sont trop étroites.)
+    pub fn supports(shared: &SharedDevice) -> bool {
+        shared.adapter.get_info().backend != wgpu::Backend::Gl
+            && check_adapter(&shared.adapter).is_ok()
     }
 
     pub fn kernel(&self, name: &'static str, source: &str) -> Kernel {
@@ -90,6 +126,20 @@ impl Gpu {
             label: Some(label),
             size: size.max(16),
             usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Tampon de stockage également lisible comme tampon de sommets
+    /// (affichage direct des corps).
+    pub fn storage_vertex(&self, label: &str, size: u64) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: size.max(16),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::VERTEX
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -177,14 +227,29 @@ impl Gpu {
             })
     }
 
-    pub fn submit(&self, enc: wgpu::CommandEncoder) {
-        self.queue.submit(Some(enc.finish()));
+    pub fn submit(&self, enc: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        self.queue.submit(Some(enc.finish()))
     }
 
     /// Relit `size` octets de `buffer` (attend la fin des travaux en cours).
     pub fn read(&self, buffer: &wgpu::Buffer, offset: u64, size: u64) -> Vec<u8> {
+        self.read_with(buffer, offset, size, <[u8]>::to_vec)
+    }
+
+    /// Relit `size` octets de `buffer` et les passe à `f` directement depuis
+    /// la mémoire projetée (sans copie intermédiaire).
+    ///
+    /// N'attend que les travaux soumis jusqu'ici : quand la carte est
+    /// partagée avec l'interface, les images en cours ne sont pas attendues.
+    pub fn read_with<R>(
+        &self,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        size: u64,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> R {
         if size == 0 {
-            return Vec::new();
+            return f(&[]);
         }
         let size4 = size.div_ceil(4) * 4;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -195,19 +260,21 @@ impl Gpu {
         });
         let mut enc = self.encoder();
         enc.copy_buffer_to_buffer(buffer, offset, &staging, 0, size4);
-        self.submit(enc);
+        let index = self.submit(enc);
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        let _ = self.device.poll(wgpu::Maintain::Wait);
+        let _ = self
+            .device
+            .poll(wgpu::Maintain::WaitForSubmissionIndex(index));
         rx.recv()
             .expect("relecture GPU interrompue")
             .expect("relecture GPU impossible");
-        let data = slice.get_mapped_range()[..size as usize].to_vec();
+        let r = f(&slice.get_mapped_range()[..size as usize]);
         staging.unmap();
-        data
+        r
     }
 
     pub fn read_u32(&self, buffer: &wgpu::Buffer) -> u32 {

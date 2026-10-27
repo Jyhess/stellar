@@ -6,3 +6,6 @@
 *~
 *.stellarec
 stellar-crash.log
+*.exe
+*~
+

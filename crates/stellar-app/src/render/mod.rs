@@ -1,9 +1,13 @@
 //! Rendu GPU des corps, intégré à egui par un « paint callback » wgpu.
 //!
-//! Le GPU ne sert qu'à l'affichage : à chaque nouvel instantané, les
-//! positions (relatives à un point d'ancrage proche de la caméra, pour
-//! préserver la précision en `f32`) sont téléversées dans un tampon
-//! d'instances, puis dessinées en billboards avec mélange additif.
+//! Deux sources de corps, dessinés en billboards avec mélange additif :
+//! - **directe** : les tampons du moteur GPU, qui calcule sur la même carte
+//!   ([`BodiesView`]) ; position et masse sont lues telles quelles, couleur
+//!   et rayon sont déduits dans le shader. Aucune copie.
+//! - **instances** (moteur CPU, relecture) : à chaque nouvel instantané, les
+//!   positions (relatives à un point d'ancrage proche de la caméra, pour
+//!   préserver la précision en `f32`) sont téléversées dans un tampon
+//!   d'instances.
 
 use std::sync::Arc;
 
@@ -11,6 +15,7 @@ use bytemuck::{Pod, Zeroable};
 use eframe::egui;
 use eframe::egui_wgpu::wgpu::util::DeviceExt;
 use eframe::egui_wgpu::{self, wgpu};
+use stellar_engine_gpu::BodiesView;
 
 /// Une instance = un corps à l'écran (20 octets).
 #[repr(C)]
@@ -31,6 +36,11 @@ pub struct Uniforms {
     pub screen: [f32; 4],
     /// x : luminosité, y : plancher d'intensité.
     pub look: [f32; 4],
+    /// Source directe : ancre (xyz, retranchée aux positions) et rayon de
+    /// base r₀ (w).
+    pub anchor: [f32; 4],
+    /// Source directe : x = ln(masse maximale) (0 si ≤ 1), pour la couleur.
+    pub mass: [f32; 4],
 }
 
 /// Lot d'instances à téléverser, identifié par une génération.
@@ -43,6 +53,8 @@ pub struct InstanceBatch {
 /// Ressources GPU persistantes, stockées dans les `CallbackResources` d'egui.
 pub struct PointRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// Dessin direct depuis les tampons de corps du moteur GPU.
+    bodies_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     /// Tampons d'instances : un même tampon ne peut dépasser la limite
@@ -115,56 +127,85 @@ impl PointRenderer {
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("stellar-points-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Instance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Unorm8x4,
-                            offset: 16,
-                            shader_location: 1,
-                        },
-                    ],
-                }],
+        let make_pipeline = |label: &str, entry: &str, buffer: wgpu::VertexBufferLayout| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    buffers: &[buffer],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState {
+                            color: additive,
+                            alpha: additive,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline(
+            "stellar-points-pipeline",
+            "vs_main",
+            wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<Instance>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Unorm8x4,
+                        offset: 16,
+                        shader_location: 1,
+                    },
+                ],
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
+        );
+        // Corps du moteur GPU, lus en place : position (3 × f32) et masse.
+        let bodies_pipeline = make_pipeline(
+            "stellar-bodies-pipeline",
+            "vs_bodies",
+            wgpu::VertexBufferLayout {
+                array_stride: BodiesView::STRIDE,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x3,
+                        offset: BodiesView::POSITION_OFFSET,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: BodiesView::MASS_OFFSET,
+                        shader_location: 1,
+                    },
+                ],
             },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState {
-                        color: additive,
-                        alpha: additive,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
-        });
+        );
         let stride = std::mem::size_of::<Instance>() as u64;
         let by_limit = (device.limits().max_buffer_size / stride) as usize;
         Self {
             pipeline,
+            bodies_pipeline,
             uniform_buffer,
             bind_group,
             chunks: Vec::new(),
@@ -210,10 +251,18 @@ impl PointRenderer {
     }
 }
 
+/// Corps à dessiner.
+pub enum PointsSource {
+    /// Instances téléversées depuis un instantané.
+    Batch(Option<InstanceBatch>),
+    /// Tampons du moteur GPU, lus en place.
+    Direct(Arc<BodiesView>),
+}
+
 /// Commande de dessin d'une image.
 pub struct PointsCallback {
     pub uniforms: Uniforms,
-    pub batch: Option<InstanceBatch>,
+    pub source: PointsSource,
 }
 
 impl egui_wgpu::CallbackTrait for PointsCallback {
@@ -228,7 +277,7 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
         let Some(r) = resources.get_mut::<PointRenderer>() else {
             return Vec::new();
         };
-        if let Some(batch) = &self.batch {
+        if let PointsSource::Batch(Some(batch)) = &self.source {
             if batch.generation != r.generation {
                 r.upload(device, queue, &batch.instances);
                 r.generation = batch.generation;
@@ -247,6 +296,16 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
         let Some(r) = resources.get::<PointRenderer>() else {
             return;
         };
+        if let PointsSource::Direct(view) = &self.source {
+            let (buffer, count) = view.current();
+            if count > 0 {
+                pass.set_pipeline(&r.bodies_pipeline);
+                pass.set_bind_group(0, &r.bind_group, &[]);
+                pass.set_vertex_buffer(0, buffer.slice(..count as u64 * BodiesView::STRIDE));
+                pass.draw(0..4, 0..count);
+            }
+            return;
+        }
         if r.chunks.iter().all(|c| c.count == 0) {
             return;
         }
@@ -294,4 +353,33 @@ pub fn mass_color(mass: f64, max_mass: f64) -> [u8; 4] {
         (c[2] * 255.0) as u8,
         255,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Les shaders et les deux pipelines (instances, lecture directe des
+    /// corps) passent la validation de wgpu.
+    #[test]
+    fn pipelines_are_valid() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::from_env()
+                .unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
+            ..Default::default()
+        });
+        let Some(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("test ignoré : aucune carte graphique");
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&Default::default(), None))
+                .expect("ouverture de la carte graphique");
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _renderer = PointRenderer::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let error = pollster::block_on(device.pop_error_scope());
+        assert!(error.is_none(), "{error:?}");
+    }
 }

@@ -21,3 +21,6 @@ eframe.workspace = true
 rfd.workspace = true
 chrono.workspace = true
 rayon.workspace = true
+
+[dev-dependencies]
+pollster = "0.4"

@@ -15,14 +15,23 @@
 //! - **nettoyage** des corps éjectés et compaction sur le GPU.
 //!
 //! Les calculs sont en simple précision (f32) ; l'état est relu en double
-//! précision quand l'application le demande (affichage, sauvegarde…).
+//! précision quand l'application le demande (sauvegarde, enregistrement…).
+//!
+//! Construit sur la carte graphique de l'interface ([`GpuEngineFactory::attach`]),
+//! le moteur expose ses tampons de corps ([`BodiesView`]) : l'affichage les
+//! lit directement, sans aller-retour par la mémoire centrale.
 
 mod gpu;
 
+use std::any::Any;
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
 use glam::DVec3;
+use rayon::prelude::*;
 use stellar_domain::physics::{merge, MergeInput};
 use stellar_domain::{
     BodyId, BodySet, Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, PhysicsParams,
@@ -31,7 +40,7 @@ use stellar_domain::{
 
 use crate::gpu::{groups, Gpu, Kernel};
 
-pub use crate::gpu::WG;
+pub use crate::gpu::{SharedDevice, WG};
 
 pub const ENGINE_ID: &str = "gpu-barnes-hut";
 
@@ -117,13 +126,29 @@ fn f3(v: DVec3) -> [f32; 3] {
 // ----------------------------------------------------------------------
 
 /// Fabrique du moteur GPU.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct GpuEngineFactory;
+///
+/// Par défaut, chaque moteur ouvre sa propre carte graphique. Une fois
+/// [`attach`](Self::attach) appelé avec celle de l'interface, les moteurs
+/// créés la partagent et exposent leurs corps pour un affichage sans copie.
+#[derive(Default)]
+pub struct GpuEngineFactory {
+    shared: OnceLock<SharedDevice>,
+}
 
 impl GpuEngineFactory {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Vérifie qu'une carte graphique utilisable est présente ; renvoie son nom.
     pub fn probe() -> Result<String, String> {
         Gpu::open().map(|g| g.adapter_name)
+    }
+
+    /// Partage la carte graphique de l'interface avec les moteurs créés
+    /// ensuite (sans effet si une carte est déjà attachée).
+    pub fn attach(&self, shared: SharedDevice) {
+        let _ = self.shared.set(shared);
     }
 }
 
@@ -141,7 +166,14 @@ impl EngineFactory for GpuEngineFactory {
         state: SimulationState,
         params: PhysicsParams,
     ) -> Result<Box<dyn PhysicsEngine>, String> {
-        Ok(Box::new(GpuEngine::new(state, params)?))
+        // Carte de l'interface inadaptée au calcul (OpenGL, par exemple) :
+        // le moteur ouvre sa propre carte, sans affichage direct.
+        let shared = self.shared.get().filter(|s| Gpu::supports(s));
+        let engine = match shared {
+            Some(shared) => GpuEngine::with_device(state, params, shared)?,
+            None => GpuEngine::new(state, params)?,
+        };
+        Ok(Box::new(engine))
     }
 }
 
@@ -241,6 +273,41 @@ struct Buffers {
     params: wgpu::Buffer,
 }
 
+/// Accès direct aux corps du moteur, pour les dessiner sans copie.
+///
+/// Le moteur alterne entre deux tampons (tri, compaction) : [`current`](Self::current)
+/// désigne celui qui contient l'état publié en dernier. Comme le calcul et
+/// l'affichage partagent la même file de commandes, un dessin soumis après
+/// la lecture voit toujours un ensemble complet de corps. Seule exception,
+/// sans conséquence : pendant une image, un pas qui élimine des corps peut
+/// faire apparaître quelques doublons.
+///
+/// Chaque corps occupe [`STRIDE`](Self::STRIDE) octets ; position (3 × f32)
+/// et masse (f32) sont aux décalages [`POSITION_OFFSET`](Self::POSITION_OFFSET)
+/// et [`MASS_OFFSET`](Self::MASS_OFFSET). Un corps de masse nulle est mort.
+pub struct BodiesView {
+    buffers: [wgpu::Buffer; 2],
+    /// Indice du tampon courant (bit 32) et nombre de corps (32 bits bas).
+    current: AtomicU64,
+}
+
+impl BodiesView {
+    pub const STRIDE: u64 = std::mem::size_of::<GpuBody>() as u64;
+    pub const POSITION_OFFSET: u64 = 0;
+    pub const MASS_OFFSET: u64 = 12;
+
+    /// Tampon courant et nombre de corps qu'il contient.
+    pub fn current(&self) -> (&wgpu::Buffer, u32) {
+        let v = self.current.load(Ordering::Acquire);
+        (&self.buffers[(v >> 32) as usize & 1], v as u32)
+    }
+
+    fn publish(&self, cur: usize, n: usize) {
+        self.current
+            .store(((cur as u64) << 32) | n as u64, Ordering::Release);
+    }
+}
+
 /// Moteur Barnes-Hut sur GPU.
 pub struct GpuEngine {
     gpu: Gpu,
@@ -254,10 +321,35 @@ pub struct GpuEngine {
     n: usize,
     step: u64,
     time: f64,
+    /// Tampons exposés à l'affichage (carte partagée uniquement).
+    view: Option<Arc<BodiesView>>,
+    /// Moments globaux du dernier pas (évite de les recalculer quand
+    /// énergies et centre de masse sont demandés ensemble).
+    moments: Cell<Option<(u64, [[f32; 4]; 3])>>,
 }
 
 impl GpuEngine {
-    pub fn new(state: SimulationState, mut params: PhysicsParams) -> Result<Self, String> {
+    /// Moteur sur sa propre carte graphique (banc d'essai, tests, sans fenêtre).
+    pub fn new(state: SimulationState, params: PhysicsParams) -> Result<Self, String> {
+        Self::build(Gpu::open()?, state, params, false)
+    }
+
+    /// Moteur sur la carte graphique de l'interface : ses corps peuvent être
+    /// dessinés directement ([`PhysicsEngine::live_view`]).
+    pub fn with_device(
+        state: SimulationState,
+        params: PhysicsParams,
+        shared: &SharedDevice,
+    ) -> Result<Self, String> {
+        Self::build(Gpu::shared(shared)?, state, params, true)
+    }
+
+    fn build(
+        gpu: Gpu,
+        state: SimulationState,
+        mut params: PhysicsParams,
+        expose: bool,
+    ) -> Result<Self, String> {
         params.theta = params.theta.clamp(0.05, 1.0);
         let n = state.bodies.len();
         if n > MAX_BODIES {
@@ -268,7 +360,6 @@ impl GpuEngine {
         if state.bodies.ids.iter().any(|&id| id > u32::MAX as u64) {
             return Err("identifiants de corps trop grands pour le moteur GPU".to_owned());
         }
-        let gpu = Gpu::open()?;
         let capacity = n.max(2);
         let body_bytes = (capacity * std::mem::size_of::<GpuBody>()) as u64;
         let node_bytes = (capacity * 64) as u64;
@@ -318,8 +409,8 @@ impl GpuEngine {
         let cap = capacity as u64;
         let b = Buffers {
             bodies: [
-                gpu.storage("bodies-a", body_bytes),
-                gpu.storage("bodies-b", body_bytes),
+                gpu.storage_vertex("bodies-a", body_bytes),
+                gpu.storage_vertex("bodies-b", body_bytes),
             ],
             keys: [
                 gpu.storage("keys-a", cap * 4),
@@ -379,6 +470,12 @@ impl GpuEngine {
                 .write_buffer(&b.bodies[0], 0, bytemuck::cast_slice(&bodies));
         }
 
+        let view = expose.then(|| {
+            Arc::new(BodiesView {
+                buffers: b.bodies.clone(),
+                current: AtomicU64::new(0),
+            })
+        });
         let mut engine = Self {
             gpu,
             k,
@@ -390,12 +487,22 @@ impl GpuEngine {
             n,
             step: state.step,
             time: state.time,
+            view,
+            moments: Cell::new(None),
         };
         engine.write_params(0);
         let mut enc = engine.gpu.encoder();
         engine.encode_tree_and_forces(&mut enc);
         engine.gpu.submit(enc);
+        engine.publish_view();
         Ok(engine)
+    }
+
+    /// Désigne à l'affichage le tampon courant (après soumission des travaux).
+    fn publish_view(&self) {
+        if let Some(v) = &self.view {
+            v.publish(self.cur, self.n);
+        }
     }
 
     /// Nom de la carte graphique utilisée.
@@ -594,16 +701,23 @@ impl GpuEngine {
     }
 
     fn read_moments(&self) -> [[f32; 4]; 3] {
+        if let Some((step, m)) = self.moments.get() {
+            if step == self.step {
+                return m;
+            }
+        }
         let mut enc = self.gpu.encoder();
         self.encode_moments(&mut enc);
         self.gpu.submit(enc);
         let raw = self.gpu.read(&self.b.moments, 0, 48);
         let f: &[f32] = bytemuck::cast_slice(&raw);
-        [
+        let m = [
             [f[0], f[1], f[2], f[3]],
             [f[4], f[5], f[6], f[7]],
             [f[8], f[9], f[10], f[11]],
-        ]
+        ];
+        self.moments.set(Some((self.step, m)));
+        m
     }
 
     /// Supprime les corps de masse nulle (compaction par scan).
@@ -840,6 +954,7 @@ impl GpuEngine {
         self.gpu.submit(enc);
         self.n -= dead.min(self.n);
         self.write_params(0);
+        self.publish_view();
         report
     }
 
@@ -869,17 +984,54 @@ impl PhysicsEngine for GpuEngine {
     }
 
     fn write_state(&self, out: &mut SimulationState) {
-        let bodies = self.read_bodies();
+        // Conversion directe depuis la mémoire projetée, en parallèle, dans
+        // les tableaux existants de `out` (pas de copie intermédiaire).
         let b: &mut BodySet = &mut out.bodies;
-        b.ids.clear();
-        b.positions.clear();
-        b.velocities.clear();
-        b.masses.clear();
-        for g in &bodies {
-            b.ids.push(g.id as u64);
-            b.positions.push(v3(g.pos));
-            b.velocities.push(v3(g.vel));
-            b.masses.push(g.mass as f64);
+        let n = self.n;
+        b.ids.resize(n, 0);
+        b.positions.resize(n, DVec3::ZERO);
+        b.velocities.resize(n, DVec3::ZERO);
+        b.masses.resize(n, 0.0);
+        if n > 0 {
+            let size = (n * std::mem::size_of::<GpuBody>()) as u64;
+            self.gpu
+                .read_with(&self.b.bodies[self.cur], 0, size, |raw| {
+                    let bodies: &[GpuBody] = bytemuck::cast_slice(raw);
+                    rayon::join(
+                        || {
+                            rayon::join(
+                                || {
+                                    b.ids
+                                        .par_iter_mut()
+                                        .zip(bodies.par_iter())
+                                        .for_each(|(d, g)| *d = g.id as u64)
+                                },
+                                || {
+                                    b.masses
+                                        .par_iter_mut()
+                                        .zip(bodies.par_iter())
+                                        .for_each(|(d, g)| *d = g.mass as f64)
+                                },
+                            )
+                        },
+                        || {
+                            rayon::join(
+                                || {
+                                    b.positions
+                                        .par_iter_mut()
+                                        .zip(bodies.par_iter())
+                                        .for_each(|(d, g)| *d = v3(g.pos))
+                                },
+                                || {
+                                    b.velocities
+                                        .par_iter_mut()
+                                        .zip(bodies.par_iter())
+                                        .for_each(|(d, g)| *d = v3(g.vel))
+                                },
+                            )
+                        },
+                    );
+                });
         }
         out.step = self.step;
         out.time = self.time;
@@ -937,5 +1089,11 @@ impl PhysicsEngine for GpuEngine {
             kinetic_energy: m[1][3] as f64,
             potential_energy: m[2][0] as f64,
         }
+    }
+
+    fn live_view(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.view
+            .as_ref()
+            .map(|v| Arc::clone(v) as Arc<dyn Any + Send + Sync>)
     }
 }

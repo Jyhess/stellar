@@ -51,7 +51,9 @@ impl Replay {
         while self.recent.len() > 2 {
             if let Some(old) = self.recent.pop_front() {
                 if let Ok(s) = Arc::try_unwrap(old) {
-                    self.spare = Some(s.state);
+                    if let Ok(state) = Arc::try_unwrap(s.state) {
+                        self.spare = Some(state);
+                    }
                 }
             }
         }
@@ -109,8 +111,14 @@ impl Replay {
         self.sequence += 1;
         let snapshot = Arc::new(Snapshot {
             phase: Phase::Ready,
-            state,
+            step: state.step,
+            time: state.time,
+            body_count: state.bodies.len(),
+            state: Arc::new(state),
             diagnostics: Diagnostics::default(),
+            // Déduit de l'état par l'interface (pondération de la poussière).
+            center_of_mass: None,
+            watched: Vec::new(),
             top: self.player.top().to_vec(),
             total_mass,
             steps_per_second: 0.0,
@@ -160,8 +168,13 @@ pub fn angular_momentum(bodies: &BodySet, dust_weight: f64, center: Vec3) -> Vec
 fn empty_snapshot() -> Snapshot {
     Snapshot {
         phase: Phase::Initialising,
-        state: SimulationState::default(),
+        state: Arc::new(SimulationState::default()),
+        step: 0,
+        time: 0.0,
+        body_count: 0,
         diagnostics: Diagnostics::default(),
+        center_of_mass: None,
+        watched: Vec::new(),
         top: Vec::new(),
         total_mass: 0.0,
         steps_per_second: 0.0,
