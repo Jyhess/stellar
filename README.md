@@ -120,6 +120,12 @@ Une simulation lourde peut être enregistrée puis rejouée de façon fluide, à
   - la simulation est alors sauvegardée automatiquement (« <enregistrement>_reprise ») et liée à l'enregistrement ;
   - recharger cette sauvegarde, ou cliquer « Reprendre » dans la liste des enregistrements, poursuit l'enregistrement dans le même fichier dès que le calcul est relancé, sans trou ni doublon ;
   - recharger une sauvegarde de reprise plus ancienne tronque l'enregistrement à ce point : les instantanés postérieurs sont supprimés.
+- **Sauvegarde F5 pendant un enregistrement :** la sauvegarde mémorise l'enregistrement en cours ; la recharger le poursuit au pas de la sauvegarde, en supprimant les instantanés postérieurs.
+- **Poursuivre un enregistrement depuis n'importe quelle sauvegarde :**
+  - le bouton « Poursuivre un enregistrement… » d'une sauvegarde liste les enregistrements compatibles (mêmes conditions initiales, au moins un instantané antérieur à la sauvegarde) et le nombre d'instantanés qui seront supprimés ;
+  - un instantané est écrit aussitôt au pas de la sauvegarde, puis l'enregistrement continue à son intervalle d'origine ;
+  - les corps disparus entre le dernier instantané conservé et la sauvegarde reçoivent leur devenir réel s'il figure dans l'instantané suivant de l'ancien enregistrement, sinon ils sont marqués « éliminés » ;
+  - un enregistrement d'une autre simulation est refusé (corps massif de la sauvegarde absent de l'enregistrement).
 - **Après un plantage :** un enregistrement interrompu reste lisible, car son index est reconstruit à l'ouverture.
 
 ### Moteur GPU

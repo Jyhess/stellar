@@ -520,14 +520,20 @@ impl Worker {
             .store(link.interval.max(1) as u64, Ordering::Relaxed);
         *status.error.lock().expect("verrou empoisonné") = None;
         let recorder = Recorder::start(writer, Arc::clone(status), link.dust_budget);
-        self.recording = Some(ActiveRecording {
+        let mut rec = ActiveRecording {
             recorder,
             interval: link.interval.max(1) as u64,
             next_step: link.next_step,
             pending: link.pending,
             dust_budget: link.dust_budget,
             last_frame_step: link.last_frame_step,
-        });
+        };
+        // Poursuite d'un enregistrement depuis une sauvegarde non liée : un
+        // instantané est écrit aussitôt, au pas de la sauvegarde.
+        if rec.next_step <= self.step {
+            self.record_keyframe(&mut rec);
+        }
+        self.recording = Some(rec);
     }
 
     fn suspend_recording(&mut self) -> Option<(RecordingLink, SimulationState)> {
@@ -957,6 +963,9 @@ mod tests {
     #[derive(Clone, Default)]
     struct MemWriter(Arc<Mutex<Vec<Keyframe>>>);
     impl RecordingWriter for MemWriter {
+        fn path(&self) -> PathBuf {
+            PathBuf::from("mem.stellarec")
+        }
         fn write_frame(&mut self, frame: &Keyframe) -> Result<u64, RepositoryError> {
             self.0.lock().unwrap().push(frame.clone());
             Ok(1)

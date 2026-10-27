@@ -193,6 +193,7 @@ impl SimScreen {
             Some(v) => Camera::from_view(v, speed),
             None => Camera::looking_at(DVec3::new(0.0, -2.6 * r, 0.9 * r), DVec3::ZERO, speed),
         };
+        let bary_selected = matches!(camera.mode, Mode::Barycenter { .. });
         let selected = camera.followed();
         let snapshot = source.latest();
         let paused = !snapshot.running;
@@ -217,7 +218,7 @@ impl SimScreen {
             capture_applied: None,
             menu_open: false,
             selected,
-            bary_selected: false,
+            bary_selected,
             paused,
             seen_sequence: u64::MAX,
             snapshot,
@@ -1039,10 +1040,18 @@ impl SimScreen {
         let config = self.source.config().clone();
         let snapshot = Arc::clone(&self.snapshot);
         let view = self.camera.to_view();
+        // Enregistrement en cours : la sauvegarde le mémorise pour le poursuivre.
+        let recording = self.source.live().and_then(|h| {
+            h.recording_status()
+                .current_path
+                .lock()
+                .ok()
+                .and_then(|p| p.clone())
+        });
         let name = format!("sim_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
         std::thread::spawn(move || {
             let r = service
-                .save(&name, &config, &snapshot, Some(view))
+                .save(&name, &config, &snapshot, Some(view), recording)
                 .map_err(|e| e.to_string());
             let _ = tx.send(r);
         });

@@ -291,6 +291,10 @@ pub struct FileRecordingWriter {
 }
 
 impl RecordingWriter for FileRecordingWriter {
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
     fn write_frame(&mut self, frame: &Keyframe) -> Result<u64, RepositoryError> {
         let payload = zstd::bulk::compress(&encode_frame(frame), ZSTD_LEVEL).map_err(io)?;
         let meta = FrameMeta {

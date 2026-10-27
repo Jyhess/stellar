@@ -26,5 +26,5 @@ pub use recording::{
 pub use registry::EngineRegistry;
 pub use replay::{PlaybackClock, ReplayPlayer};
 pub use runner::{Phase, SimulationHandle, Snapshot};
-pub use service::{AppError, LoadedSimulation, SimulatorService};
+pub use service::{AppError, Continuation, LoadedSimulation, SimulatorService};
 pub use trace::{Trace, TraceReference, TraceSet};

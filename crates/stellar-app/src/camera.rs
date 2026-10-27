@@ -64,21 +64,25 @@ impl Camera {
             position: DVec3::from_array(v.position),
             orientation: DQuat::from_euler(EulerRot::ZYX, v.yaw, -v.pitch, v.roll).normalize(),
             fov_y: v.fov_y.clamp(MIN_FOV, MAX_FOV),
-            mode: match v.followed {
-                Some(target) => Mode::Orbit {
+            mode: match (v.followed, v.barycenter) {
+                (Some(target), _) => Mode::Orbit {
                     target,
                     distance: v.orbit_distance,
                 },
-                None => Mode::Free,
+                (None, true) => Mode::Barycenter {
+                    distance: v.orbit_distance,
+                },
+                (None, false) => Mode::Free,
             },
             speed,
         }
     }
 
     pub fn to_view(&self) -> ViewState {
-        let (followed, orbit_distance) = match self.mode {
-            Mode::Orbit { target, distance } => (Some(target), distance),
-            Mode::Free | Mode::Barycenter { .. } => (None, 0.0),
+        let (followed, barycenter, orbit_distance) = match self.mode {
+            Mode::Orbit { target, distance } => (Some(target), false, distance),
+            Mode::Barycenter { distance } => (None, true, distance),
+            Mode::Free => (None, false, 0.0),
         };
         let (yaw, neg_pitch, roll) = self.orientation.to_euler(EulerRot::ZYX);
         ViewState {
@@ -88,6 +92,7 @@ impl Camera {
             roll,
             fov_y: self.fov_y,
             followed,
+            barycenter,
             orbit_distance,
         }
     }
@@ -320,5 +325,17 @@ mod tests {
         c.rotate(0.7, 0.3);
         c.place_in_orbit(DVec3::new(1.0, 1.0, 1.0));
         assert!(((c.position - DVec3::ONE).length() - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn view_state_keeps_barycenter_follow_and_roll() {
+        let mut c = Camera::looking_at(DVec3::new(1.0, 2.0, 3.0), DVec3::new(-4.0, 0.5, 1.0), 1.0);
+        c.mode = Mode::Barycenter { distance: 7.0 };
+        let v = c.to_view();
+        assert!(v.barycenter && v.followed.is_none());
+        let back = Camera::from_view(&v, 1.0);
+        assert_eq!(back.mode, c.mode);
+        assert!((back.forward() - c.forward()).length() < 1e-9);
+        assert!((back.up() - c.up()).length() < 1e-9);
     }
 }

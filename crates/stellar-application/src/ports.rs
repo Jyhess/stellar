@@ -15,13 +15,15 @@ pub struct ViewState {
     pub yaw: f64,
     /// Élévation (radians).
     pub pitch: f64,
-    /// Bascule autour de l'axe de visée (radians, > 0 : haut de l'écran vers la droite).
+    /// Bascule sur l'axe de visée (radians, positive vers la droite).
     pub roll: f64,
     /// Champ de vision vertical (radians).
     pub fov_y: f64,
     /// Corps suivi, le cas échéant.
     pub followed: Option<BodyId>,
-    /// Distance au corps suivi (mode orbite).
+    /// Suivi du barycentre (si aucun corps n'est suivi).
+    pub barycenter: bool,
+    /// Distance au corps ou au barycentre suivi (mode orbite).
     pub orbit_distance: f64,
 }
 
@@ -33,6 +35,9 @@ pub struct SaveData {
     pub view: Option<ViewState>,
     /// Enregistrement suspendu à reprendre au chargement.
     pub recording: Option<RecordingLink>,
+    /// Enregistrement en cours au moment d'une sauvegarde F5 : il est
+    /// poursuivi au chargement (instantanés postérieurs supprimés).
+    pub continue_recording: Option<PathBuf>,
 }
 
 /// Résumé d'une sauvegarde, lisible sans charger tout le fichier.

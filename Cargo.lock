@@ -3055,6 +3055,7 @@ dependencies = [
  "serde",
  "stellar-application",
  "stellar-domain",
+ "stellar-engine-cpu",
  "zstd",
 ]
 

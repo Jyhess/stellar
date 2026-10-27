@@ -30,7 +30,9 @@
 - Accueil : nouvelle simulation (formulaire) ; **liste des sauvegardes** du dossier `saves/` (date, nb de corps, pas) + « Parcourir… ».
 - Navigation : souris **capturée en permanence** (style FPS) ; Z/S avancer/reculer, Q/D gauche/droite, molette = zoom ; Échap/Tab libère le curseur.
 - Sélection : **réticule + clic** en mode capturé, **clic libre** en mode curseur.
-- Corps sélectionné : **orbite + suivi** (souris tourne autour, molette = distance) ; ZQSD rend la main en vol libre.
+- Corps sélectionné (ou barycentre) : **orbite + suivi** — la cible reste au centre, la souris tourne autour d'elle, Z/S règlent la distance, Q/D sont inactives, A/E font basculer la vue sur l'axe de visée ; F cesse ou reprend le suivi sans changer la vue.
+- Orientation libre (quaternion) : rotations dans le repère de l'écran, sans limite aux pôles ; H redresse l'horizon vers la normale au disque.
+- Vol libre : vitesse proportionnelle à la distance au corps sélectionné (sinon au barycentre) ; repères à l'écran : trièdre (X, Y, Z, normale N), flèches vers les cibles hors champ, grille du plan du disque (G).
 - Raccourcis : **Origine** = plus gros corps, **PgDn** = suivant (masse inférieure), **PgUp** = précédent.
 - Rendu : billboards lumineux, taille réelle (min. 1 px), couleur selon la masse, mélange additif.
 - HUD : statistiques globales (corps, pas, temps simulé, pas/s, i/s, dérive d'énergie), corps sélectionné, top 10 cliquable.
@@ -41,7 +43,7 @@
 
 ## Décisions complémentaires (v1)
 - E / A : monter / descendre ; Maj / Ctrl : déplacement ×5 / ×0,2 ; + / − : vitesse de déplacement.
-- Molette : zoom optique (champ de vision) en vol libre, distance au corps suivi en orbite.
+- Molette : zoom optique (champ de vision) dans tous les modes ; la sensibilité de la souris suit le zoom.
 - Rotation initiale (modes circulaires) autour de l'axe vertical Oz, sens trigonométrique.
 - Espace : pause / reprise ; P : pas à pas ; « multiplicateur de vitesse » réalisé par une limite de cadence (pas/s), le calcul allant sinon au plus vite.
 - Échap ouvre un menu (reprendre, sauvegarder, accueil, quitter, aide des touches) ; Tab bascule la capture de la souris.
@@ -54,7 +56,7 @@
 - Affichage plafonné à 120 images par seconde.
 - Mode trace (T) : trajectoires des 10 corps les plus massifs visibles à l'écran (dans le champ de la caméra) à l'activation, un point par pas (enregistré par le thread de calcul) ; historique complet décimé ou queue glissante de N pas, au choix ; une trace se poursuit sur le corps issu d'une fusion ; traces non sauvegardées.
 - Traces en référentiel relatif (R) : affichage p(t) − r(t) + r(maintenant) par rapport au corps sélectionné (orbites autour de ce corps) ; trajectoire de référence issue de sa trace, ou d'une piste dédiée enregistrée depuis sa sélection.
-- Enregistrement (F9 ou case à la création) : instantané tous les N pas (positions 21 bits, vitesses 16 bits, masses, fusions ; zstd), écrit par un thread dédié ; budget de poussière optionnel (au plus B particules de masse 1 par instantané, sélection stable par identifiant, luminosité compensée) ; fichier lisible même s'il n'a pas été clos.
+- Enregistrement (F9 ou case à la création) : instantané tous les N pas (positions 21 bits, vitesses 16 bits, masses, fusions ; zstd), écrit par un thread dédié ; budget de poussière optionnel (au plus B particules de masse 1 par instantané, sélection stable par identifiant, luminosité compensée) ; fichier lisible même s'il n'a pas été clos. Une sauvegarde F5 faite pendant un enregistrement le mémorise et le poursuit au chargement ; depuis l'accueil, on peut poursuivre n'importe quel enregistrement compatible à partir d'une sauvegarde (instantanés postérieurs supprimés, corps disparus entre-temps marqués « éliminés » faute de mieux).
 - Relecture : interpolation cubique d'Hermite entre instantanés, chargement anticipé en arrière-plan ; lecture / pause, vitesse, sens, barre de temps ; navigation, sélection et traces identiques au direct ; pas de reprise du calcul depuis un enregistrement (utiliser les sauvegardes F5).
 - Suspension / reprise d'enregistrement : à la sortie (ou au retour à l'accueil) pendant un enregistrement, sauvegarde automatique liée ; son rechargement poursuit l'enregistrement dans le même fichier (reprise automatique dès la relance du calcul) ; une sauvegarde plus ancienne tronque l'enregistrement à son point de reprise. Format de sauvegarde v2 (v1 toujours lisible).
 - Panneaux : masse présente et masse éjectée (part de la masse initiale) ; part de la masse présente pour chacun des corps les plus massifs.

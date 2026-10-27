@@ -200,7 +200,13 @@ impl eframe::App for StellarApp {
                     }
                     Err(e) => home.message = Some(e.to_string()),
                 },
-                HomeAction::Load(path) => match self.service.load_simulation(&path) {
+                a @ (HomeAction::Load(_) | HomeAction::LoadContinuing(..)) => match match a {
+                    HomeAction::LoadContinuing(data, path) => {
+                        self.service.start_loaded(*data, Some(&path))
+                    }
+                    HomeAction::Load(path) => self.service.load_simulation(&path),
+                    _ => unreachable!(),
+                } {
                     Ok(loaded) => {
                         let mut sim = SimScreen::new(
                             Source::Live(loaded.handle),
@@ -209,7 +215,7 @@ impl eframe::App for StellarApp {
                         );
                         match loaded.recording {
                             Some(Ok(p)) => sim.notify(format!(
-                                "Enregistrement « {} » repris : il se poursuit dès la reprise du calcul (Espace).",
+                                "Enregistrement « {} » poursuivi : il reprend dès la relance du calcul (Espace).",
                                 p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
                             )),
                             Some(Err(e)) => sim.notify(format!("Reprise de l'enregistrement impossible : {e}")),

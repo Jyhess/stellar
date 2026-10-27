@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
-use stellar_application::{RecordingSummary, SaveSummary, SimulatorService};
+use stellar_application::{Continuation, RecordingSummary, SaveData, SaveSummary, SimulatorService};
 use stellar_domain::{
     DensityProfile, Distribution, InitialConditions, PhysicsParams, SimulationConfig, VelocityMode,
 };
@@ -21,6 +21,8 @@ pub enum HomeAction {
     None,
     Start(SimulationConfig, Option<RecordOptions>),
     Load(PathBuf),
+    /// Charge une sauvegarde déjà lue et poursuit l'enregistrement indiqué.
+    LoadContinuing(Box<SaveData>, PathBuf),
     Replay(PathBuf),
     Quit,
 }
@@ -78,6 +80,14 @@ pub struct HomeScreen {
     record_budget_enabled: bool,
     record_budget: u64,
     pub message: Option<String>,
+    continue_dialog: Option<ContinueDialog>,
+}
+
+/// Choix de l'enregistrement à poursuivre depuis une sauvegarde.
+struct ContinueDialog {
+    save_name: String,
+    data: Box<SaveData>,
+    options: Vec<Continuation>,
 }
 
 impl HomeScreen {
@@ -107,6 +117,7 @@ impl HomeScreen {
             record_budget_enabled: true,
             record_budget: 1_000_000,
             message: None,
+            continue_dialog: None,
         };
         s.refresh(service);
         s
@@ -212,7 +223,105 @@ impl HomeScreen {
                     });
             });
         });
+        if let Some(a) = self.continue_window(ctx) {
+            action = a;
+        }
         action
+    }
+
+    /// Fenêtre de choix de l'enregistrement à poursuivre.
+    fn continue_window(&mut self, ctx: &egui::Context) -> Option<HomeAction> {
+        let dialog = self.continue_dialog.as_ref()?;
+        let mut chosen = None;
+        let mut close = false;
+        egui::Window::new("Poursuivre un enregistrement")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(560.0);
+                ui.label(format!(
+                    "Sauvegarde « {} » (pas {}). L'enregistrement choisi reprend à ce pas ; ses instantanés postérieurs sont supprimés.",
+                    dialog.save_name,
+                    format::count(dialog.data.state.step)
+                ));
+                ui.add_space(6.0);
+                if dialog.options.is_empty() {
+                    ui.label(
+                        RichText::new("Aucun enregistrement compatible : il faut les mêmes conditions initiales et un instantané antérieur à la sauvegarde.")
+                            .weak(),
+                    );
+                }
+                for c in &dialog.options {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                let mut title = RichText::new(&c.summary.name).strong();
+                                if !c.summary.complete {
+                                    title = title.color(egui::Color32::from_rgb(255, 170, 90));
+                                }
+                                ui.label(title);
+                                let date = chrono::DateTime::from_timestamp(c.summary.created_at_unix, 0)
+                                    .map(|d| d.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M").to_string())
+                                    .unwrap_or_default();
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{date} · {} instantanés{} · reprise après le pas {}",
+                                        format::count(c.summary.frame_count as u64),
+                                        if c.summary.complete { "" } else { " · non clos" },
+                                        format::count(c.resume_step),
+                                    ))
+                                    .weak(),
+                                );
+                                if c.dropped_frames > 0 {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} instantanés postérieurs seront supprimés",
+                                            format::count(c.dropped_frames as u64)
+                                        ))
+                                        .small()
+                                        .color(egui::Color32::from_rgb(255, 120, 120)),
+                                    );
+                                }
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("Poursuivre").clicked() {
+                                    chosen = Some(c.summary.path.clone());
+                                }
+                            });
+                        });
+                    });
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Annuler").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if let Some(path) = chosen {
+            let d = self.continue_dialog.take()?;
+            return Some(HomeAction::LoadContinuing(d.data, path));
+        }
+        if close {
+            self.continue_dialog = None;
+        }
+        None
+    }
+
+    fn open_continue_dialog(&mut self, service: &SimulatorService, save: &SaveSummary) {
+        match service.read_save(&save.path) {
+            Ok(data) => {
+                let options = service.continuable_recordings(&data);
+                self.continue_dialog = Some(ContinueDialog {
+                    save_name: save.name.clone(),
+                    data: Box::new(data),
+                    options,
+                });
+            }
+            Err(e) => self.message = Some(format!("Lecture de la sauvegarde impossible : {e}")),
+        }
     }
 
     fn new_simulation_form(
@@ -563,6 +672,7 @@ impl HomeScreen {
         if self.saves.is_empty() {
             ui.label(RichText::new("Aucune sauvegarde dans le dossier « saves ». Appuyez sur F5 pendant une simulation.").weak());
         }
+        let mut to_continue = None;
         for s in &self.saves {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -597,9 +707,19 @@ impl HomeScreen {
                         if ui.button("Charger").clicked() {
                             action = Some(HomeAction::Load(s.path.clone()));
                         }
+                        if ui
+                            .button("Poursuivre un enregistrement…")
+                            .on_hover_text("Charger cette sauvegarde et prolonger un enregistrement existant à partir de son pas")
+                            .clicked()
+                        {
+                            to_continue = Some(s.clone());
+                        }
                     });
                 });
             });
+        }
+        if let Some(s) = to_continue {
+            self.open_continue_dialog(service, &s);
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {

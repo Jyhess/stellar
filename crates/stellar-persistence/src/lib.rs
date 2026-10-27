@@ -2,7 +2,7 @@
 //!
 //! Implémentation de [`SimulationRepository`] sur le système de fichiers.
 //!
-//! ## Format `.stellar` (version 3)
+//! ## Format `.stellar` (version 3 ; versions 1 et 2 toujours lues)
 //!
 //! | Octets      | Contenu                                         |
 //! |-------------|-------------------------------------------------|
@@ -28,7 +28,7 @@ use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepo
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
 /// Version 2 : lien vers un enregistrement suspendu, masse initiale.
-/// Version 3 : bascule de la caméra (`ViewState::roll`).
+/// Version 3 : roulis de la caméra, suivi du barycentre.
 const VERSION: u32 = 3;
 const MAX_HEADER: u32 = 1 << 20;
 const ZSTD_LEVEL: i32 = 3;
@@ -94,20 +94,20 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Point de vue des versions 1 et 2, sans bascule.
-mod legacy {
-    use serde::{Deserialize, Serialize};
+/// Point de vue des versions 1 et 2 (sans roulis ni suivi du barycentre).
+mod legacy_view {
+    use serde::Deserialize;
     use stellar_application::ViewState;
     use stellar_domain::BodyId;
 
-    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[derive(Deserialize)]
     pub struct View {
-        pub position: [f64; 3],
-        pub yaw: f64,
-        pub pitch: f64,
-        pub fov_y: f64,
-        pub followed: Option<BodyId>,
-        pub orbit_distance: f64,
+        position: [f64; 3],
+        yaw: f64,
+        pitch: f64,
+        fov_y: f64,
+        followed: Option<BodyId>,
+        orbit_distance: f64,
     }
 
     impl From<View> for ViewState {
@@ -119,13 +119,14 @@ mod legacy {
                 roll: 0.0,
                 fov_y: v.fov_y,
                 followed: v.followed,
+                barycenter: false,
                 orbit_distance: v.orbit_distance,
             }
         }
     }
 }
 
-/// Formes de la version 2.
+/// Forme de la version 2.
 mod v2 {
     use serde::Deserialize;
     use stellar_application::{RecordingLink, SaveData};
@@ -135,7 +136,7 @@ mod v2 {
     pub struct Data {
         config: SimulationConfig,
         state: SimulationState,
-        view: Option<super::legacy::View>,
+        view: Option<super::legacy_view::View>,
         recording: Option<RecordingLink>,
     }
 
@@ -146,6 +147,7 @@ mod v2 {
                 state: d.state,
                 view: d.view.map(Into::into),
                 recording: d.recording,
+                continue_recording: None,
             }
         }
     }
@@ -194,7 +196,7 @@ mod v1 {
     pub struct Data {
         config: SimulationConfig,
         state: State,
-        view: Option<super::legacy::View>,
+        view: Option<super::legacy_view::View>,
     }
 
     impl From<Data> for SaveData {
@@ -210,6 +212,7 @@ mod v1 {
                 },
                 view: d.view.map(Into::into),
                 recording: None,
+                continue_recording: None,
             }
         }
     }
@@ -265,7 +268,9 @@ impl SimulationRepository for FileRepository {
             recording: data
                 .recording
                 .as_ref()
-                .and_then(|l| l.path.file_name())
+                .map(|l| l.path.as_path())
+                .or(data.continue_recording.as_deref())
+                .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned()),
         };
         let header = bincode::serialize(&summary).map_err(fmt)?;
@@ -379,6 +384,7 @@ mod tests {
                 roll: 0.3,
                 fov_y: 1.0,
                 followed: Some(7),
+                barycenter: false,
                 orbit_distance: 12.0,
             }),
             recording: Some(stellar_application::RecordingLink {
@@ -389,6 +395,7 @@ mod tests {
                 next_step: 50,
                 pending: vec![(3, stellar_application::BodyFate::MergedInto(1))],
             }),
+            continue_recording: None,
         }
     }
 
@@ -414,7 +421,7 @@ mod tests {
         struct DataV1<'a> {
             config: &'a SimulationConfig,
             state: StateV1<'a>,
-            view: Option<legacy::View>,
+            view: Option<LegacyView>,
         }
         let dir = temp_dir("v1");
         fs::create_dir_all(&dir).unwrap();
@@ -436,14 +443,7 @@ mod tests {
                 time: 1.5,
                 initial_energy: Some(-3.0),
             },
-            view: reference.view.map(|v| legacy::View {
-                position: v.position,
-                yaw: v.yaw,
-                pitch: v.pitch,
-                fov_y: v.fov_y,
-                followed: v.followed,
-                orbit_distance: v.orbit_distance,
-            }),
+            view: Some(legacy_view()),
         })
         .unwrap();
         let mut bytes = Vec::new();
@@ -463,10 +463,43 @@ mod tests {
         assert_eq!(data.state.bodies, reference.state.bodies);
         assert_eq!(data.state.initial_mass, None);
         assert_eq!(data.recording, None);
-        let view = data.view.unwrap();
-        assert_eq!(view.roll, 0.0);
-        assert_eq!(view.yaw, 0.5);
+        assert_eq!(data.view, Some(expected_legacy_view()));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Point de vue tel que l'écrivaient les versions 1 et 2.
+    #[derive(serde::Serialize)]
+    struct LegacyView {
+        position: [f64; 3],
+        yaw: f64,
+        pitch: f64,
+        fov_y: f64,
+        followed: Option<u64>,
+        orbit_distance: f64,
+    }
+
+    fn legacy_view() -> LegacyView {
+        LegacyView {
+            position: [1.0, 2.0, 3.0],
+            yaw: 0.5,
+            pitch: -0.2,
+            fov_y: 1.0,
+            followed: Some(7),
+            orbit_distance: 12.0,
+        }
+    }
+
+    fn expected_legacy_view() -> ViewState {
+        ViewState {
+            position: [1.0, 2.0, 3.0],
+            yaw: 0.5,
+            pitch: -0.2,
+            roll: 0.0,
+            fov_y: 1.0,
+            followed: Some(7),
+            barycenter: false,
+            orbit_distance: 12.0,
+        }
     }
 
     #[test]
@@ -475,27 +508,27 @@ mod tests {
         struct DataV2<'a> {
             config: &'a SimulationConfig,
             state: &'a SimulationState,
-            view: Option<legacy::View>,
+            view: Option<LegacyView>,
             recording: &'a Option<stellar_application::RecordingLink>,
         }
         let dir = temp_dir("v2");
         fs::create_dir_all(&dir).unwrap();
         let reference = sample();
-        let mut summary = repo_summary(&reference);
-        summary.name = "v2".into();
+        let summary = SaveSummary {
+            path: PathBuf::new(),
+            name: "v2".into(),
+            saved_at_unix: 7,
+            body_count: reference.state.bodies.len(),
+            step: 42,
+            time: 1.5,
+            engine: "cpu-barnes-hut".into(),
+            recording: None,
+        };
         let header = bincode::serialize(&summary).unwrap();
-        let v = reference.view.unwrap();
         let body = bincode::serialize(&DataV2 {
             config: &reference.config,
             state: &reference.state,
-            view: Some(legacy::View {
-                position: v.position,
-                yaw: v.yaw,
-                pitch: v.pitch,
-                fov_y: v.fov_y,
-                followed: v.followed,
-                orbit_distance: v.orbit_distance,
-            }),
+            view: Some(legacy_view()),
             recording: &reference.recording,
         })
         .unwrap();
@@ -507,29 +540,11 @@ mod tests {
         bytes.extend_from_slice(&zstd::bulk::compress(&body, 3).unwrap());
         let path = dir.join("v2.stellar");
         fs::write(&path, bytes).unwrap();
-
-        let repo = FileRepository::new(&dir);
-        assert_eq!(repo.list().unwrap().len(), 1);
-        let data = repo.load(&path).unwrap();
+        let data = FileRepository::new(&dir).load(&path).unwrap();
         assert_eq!(data.state, reference.state);
         assert_eq!(data.recording, reference.recording);
-        let view = data.view.unwrap();
-        assert_eq!(view.roll, 0.0);
-        assert_eq!(view.orbit_distance, 12.0);
+        assert_eq!(data.view, Some(expected_legacy_view()));
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    fn repo_summary(d: &SaveData) -> SaveSummary {
-        SaveSummary {
-            path: PathBuf::new(),
-            name: String::new(),
-            saved_at_unix: 1,
-            body_count: d.state.bodies.len(),
-            step: d.state.step,
-            time: d.state.time,
-            engine: d.config.engine.clone(),
-            recording: None,
-        }
     }
 
     #[test]

@@ -11,3 +11,6 @@ stellar-application.workspace = true
 serde.workspace = true
 bincode.workspace = true
 zstd.workspace = true
+
+[dev-dependencies]
+stellar-engine-cpu.workspace = true

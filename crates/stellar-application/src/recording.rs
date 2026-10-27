@@ -158,6 +158,8 @@ pub struct RecordingSummary {
 
 /// Port d'écriture d'un enregistrement.
 pub trait RecordingWriter: Send {
+    /// Fichier écrit.
+    fn path(&self) -> PathBuf;
     fn write_frame(&mut self, frame: &Keyframe) -> Result<u64, RepositoryError>;
     /// Clôt le fichier (écriture de l'index) et renvoie son chemin.
     fn finish(self: Box<Self>) -> Result<PathBuf, RepositoryError>;
@@ -197,6 +199,8 @@ pub struct RecordingStatus {
     pub interval: AtomicU64,
     pub error: Mutex<Option<String>>,
     pub last_path: Mutex<Option<PathBuf>>,
+    /// Fichier de l'enregistrement en cours.
+    pub current_path: Mutex<Option<PathBuf>>,
 }
 
 enum Msg {
@@ -220,6 +224,7 @@ impl Recorder {
         dust_budget: Option<u64>,
     ) -> Self {
         let (tx, rx) = mpsc::sync_channel::<Msg>(QUEUE);
+        *status.current_path.lock().expect("verrou") = Some(writer.path());
         let st = Arc::clone(&status);
         let thread = std::thread::Builder::new()
             .name("stellar-recorder".into())
@@ -280,6 +285,7 @@ impl Recorder {
             None => Err(RepositoryError::Io("enregistrement déjà clos".into())),
         };
         self.status.active.store(false, Ordering::Release);
+        *self.status.current_path.lock().expect("verrou") = None;
         match &result {
             Ok(p) => *self.status.last_path.lock().expect("verrou") = Some(p.clone()),
             Err(e) => *self.status.error.lock().expect("verrou") = Some(e.to_string()),
