@@ -1,0 +1,7 @@
+# Fins de ligne LF dans le dépôt, quel que soit le poste (Windows compris).
+* text=auto eol=lf
+
+*.exe binary
+*.stellar binary
+*.stellarec binary
+*.png binary

@@ -3,7 +3,7 @@
 ## Cadre
 - Simulateur N-corps **3D**, particules initiales de masse 1, fusion au contact.
 - **Rust + wgpu + egui**, Windows uniquement (exécutable natif).
-- Calcul **100 % CPU** (rayon) ; GPU réservé au rendu.
+- Calcul sur le **CPU** (rayon) à l'origine ; un moteur **GPU** (shaders de calcul wgpu) est venu s'y ajouter et devient le moteur par défaut quand une carte compatible est présente (voir « Évolutions »).
 - Cible : **1 million de particules et plus**.
 
 ## Architecture
@@ -28,7 +28,7 @@
 
 ## Interface
 - Accueil : nouvelle simulation (formulaire) ; **liste des sauvegardes** du dossier `saves/` (date, nb de corps, pas) + « Parcourir… ».
-- Navigation : souris **capturée en permanence** (style FPS) ; Z/S avancer/reculer, Q/D gauche/droite, molette = zoom ; Échap/Tab libère le curseur.
+- Navigation : souris **capturée en permanence** (style FPS) ; Z/S avancer/reculer, Q/D gauche/droite, molette = zoom ; Tab libère le curseur (Échap ouvre le menu).
 - Sélection : **réticule + clic** en mode capturé, **clic libre** en mode curseur.
 - Corps sélectionné (ou barycentre) : **orbite + suivi** — la cible reste au centre, la souris tourne autour d'elle, Z/S règlent la distance, Q/D sont inactives, A/E font basculer la vue sur l'axe de visée ; F cesse ou reprend le suivi sans changer la vue.
 - Orientation libre (quaternion) : rotations dans le repère de l'écran, sans limite aux pôles ; H redresse l'horizon vers la normale au disque.
@@ -58,7 +58,7 @@
 - Traces en référentiel relatif (R) : affichage p(t) − r(t) + r(maintenant) par rapport au corps sélectionné (orbites autour de ce corps) ; trajectoire de référence issue de sa trace, ou d'une piste dédiée enregistrée depuis sa sélection.
 - Enregistrement (F9 ou case à la création) : instantané tous les N pas (positions 21 bits, vitesses 16 bits, masses, fusions ; zstd), écrit par un thread dédié ; budget de poussière optionnel (au plus B particules de masse 1 par instantané, sélection stable par identifiant, luminosité compensée) ; fichier lisible même s'il n'a pas été clos. Une sauvegarde F5 faite pendant un enregistrement le mémorise et le poursuit au chargement ; depuis l'accueil, on peut poursuivre n'importe quel enregistrement compatible à partir d'une sauvegarde (instantanés postérieurs supprimés, corps disparus entre-temps marqués « éliminés » faute de mieux).
 - Relecture : interpolation cubique d'Hermite entre instantanés, chargement anticipé en arrière-plan ; lecture / pause, vitesse, sens, barre de temps ; navigation, sélection et traces identiques au direct ; pas de reprise du calcul depuis un enregistrement (utiliser les sauvegardes F5).
-- Suspension / reprise d'enregistrement : à la sortie (ou au retour à l'accueil) pendant un enregistrement, sauvegarde automatique liée ; son rechargement poursuit l'enregistrement dans le même fichier (reprise automatique dès la relance du calcul) ; une sauvegarde plus ancienne tronque l'enregistrement à son point de reprise. Format de sauvegarde v2 (v1 toujours lisible).
+- Suspension / reprise d'enregistrement : à la sortie (ou au retour à l'accueil) pendant un enregistrement, sauvegarde automatique liée ; son rechargement poursuit l'enregistrement dans le même fichier (reprise automatique dès la relance du calcul) ; une sauvegarde plus ancienne tronque l'enregistrement à son point de reprise. Format de sauvegarde v2, puis v3 (roulis de la caméra, suivi du barycentre, poursuite d'enregistrement) ; les versions antérieures restent lisibles.
 - Panneaux : masse présente et masse éjectée (part de la masse initiale) ; part de la masse présente pour chacun des corps les plus massifs.
 - B : sélection du barycentre (réticule doré à la place du repère du corps), vue perpendiculaire au disque selon l'axe du moment cinétique total (Oz à défaut de rotation), distance conservée, orbite autour du barycentre ; panneau dédié ; référentiel des traces « Barycentre » (trajectoire du barycentre enregistrée dès l'activation des traces).
 - Moteur GPU (wgpu, shaders de calcul) : Barnes-Hut sur LBVH, Leapfrog, fusions balayées et nettoyage sur la carte, simple précision ; moteur par défaut si une carte compatible est présente ; repli sur le CPU au chargement sinon ; banc d'essai CPU/GPU.
