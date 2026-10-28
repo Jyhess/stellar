@@ -24,7 +24,27 @@ struct Params {
     g: f32,
     limit2: f32,
     pad: f32,
+    // Champ extérieur (sous-systèmes) du premier et du second demi-kick.
+    field_prev: Field,
+    field_next: Field,
 };
+
+// Champ linéaire a(x) = acc + T·(x − center) ; center.w = 0 : aucun champ.
+struct Field {
+    center: vec4<f32>,
+    acc: vec4<f32>,
+    t0: vec4<f32>,
+    t1: vec4<f32>,
+    t2: vec4<f32>,
+};
+
+fn field_at(f: Field, x: vec3<f32>) -> vec3<f32> {
+    if (f.center.w == 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let d = x - f.center.xyz;
+    return f.acc.xyz + vec3<f32>(dot(f.t0.xyz, d), dot(f.t1.xyz, d), dot(f.t2.xyz, d));
+}
 
 // Paramètres propres à une passe (tri, scan, niveau d'arbre).
 struct Pass {

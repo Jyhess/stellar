@@ -72,7 +72,7 @@ impl StellarApp {
         if let Ok(path) = std::env::var("STELLAR_LOAD") {
             if let Ok(loaded) = self.service.load_simulation(std::path::Path::new(&path)) {
                 self.screen = Screen::sim(SimScreen::new(
-                    Source::Live(loaded.handle),
+                    Source::Live(Box::new(loaded.handle)),
                     self.service.clone(),
                     loaded.view,
                 ));
@@ -121,7 +121,7 @@ impl StellarApp {
                         .start_recording("autorecord", &handle, interval, Some(1_000_000));
             }
             self.screen = Screen::sim(SimScreen::new(
-                Source::Live(handle),
+                Source::Live(Box::new(handle)),
                 self.service.clone(),
                 None,
             ));
@@ -201,7 +201,7 @@ impl eframe::App for StellarApp {
                             }
                         }
                         self.screen = Screen::sim(SimScreen::new(
-                            Source::Live(handle),
+                            Source::Live(Box::new(handle)),
                             self.service.clone(),
                             None,
                         ));
@@ -217,7 +217,7 @@ impl eframe::App for StellarApp {
                 } {
                     Ok(loaded) => {
                         let mut sim = SimScreen::new(
-                            Source::Live(loaded.handle),
+                            Source::Live(Box::new(loaded.handle)),
                             self.service.clone(),
                             loaded.view,
                         );

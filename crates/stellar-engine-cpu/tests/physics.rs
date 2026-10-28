@@ -18,6 +18,9 @@ fn params() -> PhysicsParams {
         cleanup_period: 0,
         cleanup_distance_factor: 10.0,
         reference_radius: 1.0,
+        cluster_link_length: 1.0,
+        cluster_min_bodies: 10,
+        cluster_min_mass: 0.0,
     }
 }
 
@@ -240,4 +243,65 @@ fn collapse_conserves_mass_through_merges() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), s.bodies.len());
+}
+
+/// Système central, amas compact éjecté (lié à lui-même, pas au système) et
+/// corps isolé éjecté.
+fn ejection_scene(cluster: u64) -> BodySet {
+    let mut b = BodySet::default();
+    for i in 0..50 {
+        let a = i as f64 * 0.7;
+        b.push(
+            i,
+            DVec3::new(a.cos(), a.sin(), (a * 0.3).sin()) * 0.5,
+            DVec3::ZERO,
+            1.0,
+        );
+    }
+    for k in 0..cluster {
+        let a = k as f64 * 2.3;
+        b.push(
+            1_000 + k,
+            DVec3::new(0.0, 30.0, 0.0) + DVec3::new(a.cos(), a.sin(), (a * 0.5).cos()) * 0.2,
+            DVec3::new(0.0, 50.0, 0.0),
+            1.0,
+        );
+    }
+    b.push(
+        200,
+        DVec3::new(-30.0, 0.0, 0.0),
+        DVec3::new(-50.0, 0.0, 0.0),
+        1.0,
+    );
+    b
+}
+
+fn ejection_params() -> PhysicsParams {
+    let mut p = params();
+    p.softening = 0.01;
+    p.cleanup_period = 1;
+    p
+}
+
+#[test]
+fn cleanup_keeps_bound_ejected_cluster() {
+    let mut e = CpuEngine::new(state(ejection_scene(20)), ejection_params());
+    let r = e.step();
+    assert_eq!(r.removed, vec![200]);
+    assert_eq!(e.body_count(), 70);
+    let clusters = r.clusters.expect("amas décrits au nettoyage");
+    assert_eq!(clusters.len(), 1);
+    assert_eq!(clusters[0].bodies, 20);
+    assert!((clusters[0].mass - 20.0).abs() < 1e-9);
+    assert!((clusters[0].center.y - 30.05).abs() < 0.1);
+}
+
+#[test]
+fn cleanup_removes_small_ejected_groups() {
+    let mut e = CpuEngine::new(state(ejection_scene(5)), ejection_params());
+    let r = e.step();
+    let mut removed = r.removed.clone();
+    removed.sort_unstable();
+    assert_eq!(removed, vec![200, 1_000, 1_001, 1_002, 1_003, 1_004]);
+    assert_eq!(r.clusters, Some(Vec::new()));
 }

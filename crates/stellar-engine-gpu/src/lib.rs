@@ -14,7 +14,10 @@
 //!   (même arbre, boîtes balayées) ; le regroupement (union-find, rarement
 //!   plus de quelques milliers de paires) est fait sur le CPU, puis appliqué
 //!   sur le GPU ;
-//! - **nettoyage** des corps éjectés et compaction sur le GPU.
+//! - **nettoyage** des corps éjectés : les corps lointains sont repérés sur
+//!   le GPU et relus ; la règle du domaine ([`stellar_domain::ejection`])
+//!   désigne ceux à éliminer en préservant les amas liés ; élimination et
+//!   compaction sur le GPU.
 //!
 //! Un pas ne coûte qu'**une soumission et une attente** : tout ce que
 //! l'application lit ensuite (paires de contact, éliminés, moments globaux,
@@ -42,9 +45,10 @@ use std::sync::{Arc, OnceLock};
 use bytemuck::{Pod, Zeroable};
 use glam::DVec3;
 use rayon::prelude::*;
+use stellar_domain::ejection::{sort_out, Candidate, EjectionRules};
 use stellar_domain::physics::{merge, MergeInput};
 use stellar_domain::{
-    BodyId, BodySet, Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, PhysicsParams,
+    BodyId, BodySet, Diagnostics, EjectedCluster, EngineDescriptor, ExternalField, Moments as SystemMoments, EngineFactory, PhysicsEngine, PhysicsParams,
     SimulationState, StepReport,
 };
 
@@ -73,10 +77,12 @@ pub const MAX_BODIES: usize = 65_535 * WG as usize;
 const QUERY_CAP: usize = 1024;
 /// Listes d'identifiants suivies à chaque pas (les plus récemment demandées).
 const QUERY_LISTS: usize = 4;
-/// Paires de contact et éliminés relus avec chaque pas ; au-delà (rare),
-/// une relecture complémentaire.
+/// Paires de contact et corps lointains (aux pas de nettoyage) relus avec
+/// chaque pas ; au-delà, une relecture complémentaire.
 const PAIR_PREFIX: usize = 1024;
-const REMOVED_PREFIX: usize = 1024;
+const FAR_PREFIX: usize = 1024;
+/// Capacité initiale du tampon des corps lointains (agrandi au besoin).
+const FAR_INITIAL: usize = 1 << 14;
 
 // ----------------------------------------------------------------------
 // Structures partagées avec les shaders (disposition identique)
@@ -108,6 +114,33 @@ struct Params {
     g: f32,
     limit2: f32,
     pad: f32,
+    field_prev: GpuField,
+    field_next: GpuField,
+}
+
+/// Champ extérieur linéaire (`common.wgsl`) ; `center[3] = 0` : aucun.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+struct GpuField {
+    center: [f32; 4],
+    acc: [f32; 4],
+    tidal: [[f32; 4]; 3],
+}
+
+impl GpuField {
+    fn of(field: Option<ExternalField>) -> Self {
+        let Some(f) = field else {
+            return Self::default();
+        };
+        let row = |r: [f64; 3]| [r[0] as f32, r[1] as f32, r[2] as f32, 0.0];
+        let c = f.center;
+        let a = f.acceleration;
+        Self {
+            center: [c.x as f32, c.y as f32, c.z as f32, 1.0],
+            acc: [a.x as f32, a.y as f32, a.z as f32, 0.0],
+            tidal: [row(f.tidal[0]), row(f.tidal[1]), row(f.tidal[2])],
+        }
+    }
 }
 
 #[repr(C)]
@@ -139,19 +172,23 @@ struct MergeOp {
 }
 
 const PAIR_BYTES: usize = std::mem::size_of::<PairRec>();
+const BODY_BYTES: usize = std::mem::size_of::<GpuBody>();
+const OP_BYTES: u64 = std::mem::size_of::<MergeOp>() as u64;
 
 /// Disposition du tampon de relecture d'un pas (octets).
 mod readback {
     use super::*;
-    /// Nombre de paires de contact, nombre d'éliminés (u32).
+    /// Nombre de paires de contact, nombre de corps lointains (u32).
     pub const COUNTERS: u64 = 0;
     /// Moments globaux : 3 × vec4<f32>.
     pub const MOMENTS: u64 = 16;
     /// Positions des corps suivis : QUERY_CAP × vec4<f32>.
     pub const QUERY: u64 = 64;
     pub const PAIRS: u64 = QUERY + 16 * QUERY_CAP as u64;
-    pub const REMOVED: u64 = PAIRS + (PAIR_PREFIX * PAIR_BYTES) as u64;
-    pub const SIZE: u64 = REMOVED + 4 * REMOVED_PREFIX as u64;
+    /// Premiers corps lointains (indices, puis enregistrements).
+    pub const FAR_INDEX: u64 = PAIRS + (PAIR_PREFIX * PAIR_BYTES) as u64;
+    pub const FAR: u64 = FAR_INDEX + 4 * FAR_PREFIX as u64;
+    pub const SIZE: u64 = FAR + (FAR_PREFIX * BODY_BYTES) as u64;
 }
 
 fn v3(a: [f32; 3]) -> DVec3 {
@@ -371,9 +408,14 @@ struct Buffers {
     pairs: wgpu::Buffer,
     pair_counter: wgpu::Buffer,
     ops: wgpu::Buffer,
-    removed: wgpu::Buffer,
-    removed_counter: wgpu::Buffer,
+    /// Corps lointains repérés au nettoyage : indices, enregistrements
+    /// (`far_cap` au plus), compteur.
+    far_index: wgpu::Buffer,
+    far: wgpu::Buffer,
+    far_counter: wgpu::Buffer,
     index_of: wgpu::Buffer,
+    /// Identifiants couverts par `index_of`.
+    id_cap: u64,
     query_ids: wgpu::Buffer,
     query_results: wgpu::Buffer,
     params: wgpu::Buffer,
@@ -472,6 +514,14 @@ pub struct GpuEngine {
     params: PhysicsParams,
     capacity: usize,
     pair_cap: usize,
+    /// Capacités courantes des tampons `far` et `ops` (en éléments).
+    far_cap: usize,
+    ops_cap: usize,
+    /// Masse totale initiale (seuil de masse des amas éjectés).
+    initial_mass: f64,
+    /// Champ extérieur du premier demi-kick et de la fin du pas.
+    field_prev: Option<ExternalField>,
+    field_next: Option<ExternalField>,
     /// Indice du tampon de corps courant (double tampon).
     cur: usize,
     n: usize,
@@ -521,10 +571,19 @@ impl GpuEngine {
         if max_id >= u32::MAX as u64 {
             return Err("identifiants de corps trop grands pour le moteur GPU".to_owned());
         }
-        let capacity = n.max(2);
+        // Marge pour les corps confiés par d'autres sous-systèmes
+        // ([`PhysicsEngine::insert`]), si la carte le permet.
+        let limit = (gpu.limits.max_storage_buffer_binding_size as u64).min(gpu.limits.max_buffer_size);
+        let largest_for = |capacity: usize| {
+            let body_bytes = (capacity * std::mem::size_of::<GpuBody>()) as u64;
+            let node_bytes = (capacity * NODE_BYTES) as u64;
+            body_bytes.max(node_bytes).max((max_id + 1) * 4)
+        };
+        let roomy = (n + (n / 8).max(1024)).min(MAX_BODIES);
+        let capacity = if largest_for(roomy) <= limit { roomy } else { n.max(2) };
         let body_bytes = (capacity * std::mem::size_of::<GpuBody>()) as u64;
         let node_bytes = (capacity * NODE_BYTES) as u64;
-        let largest = body_bytes.max(node_bytes).max((max_id + 1) * 4);
+        let largest = largest_for(capacity);
         if largest > gpu.limits.max_storage_buffer_binding_size as u64
             || largest > gpu.limits.max_buffer_size
         {
@@ -602,13 +661,12 @@ impl GpuEngine {
             swept: gpu.storage("swept", cap * 32),
             pairs: gpu.storage("pairs", pair_cap as u64 * PAIR_BYTES as u64),
             pair_counter: gpu.storage("pair-counter", 16),
-            ops: gpu.storage(
-                "ops",
-                2 * pair_cap as u64 * std::mem::size_of::<MergeOp>() as u64,
-            ),
-            removed: gpu.storage("removed", cap * 4),
-            removed_counter: gpu.storage("removed-counter", 16),
+            ops: gpu.storage("ops", 2 * pair_cap as u64 * OP_BYTES),
+            far_index: gpu.storage("far-index", cap * 4),
+            far: gpu.storage("far", (FAR_INITIAL.min(capacity) * BODY_BYTES) as u64),
+            far_counter: gpu.storage("far-counter", 16),
             index_of: gpu.storage("index-of", (max_id + 1) * 4),
+            id_cap: max_id + 1,
             query_ids: gpu.storage("query-ids", QUERY_CAP as u64 * 4),
             query_results: gpu.storage("query-results", QUERY_CAP as u64 * 16),
             params: gpu.uniform("params", bytemuck::bytes_of(&Params::default())),
@@ -647,6 +705,13 @@ impl GpuEngine {
             params,
             capacity,
             pair_cap,
+            far_cap: FAR_INITIAL.min(capacity),
+            ops_cap: 2 * pair_cap,
+            initial_mass: state
+                .initial_mass
+                .unwrap_or_else(|| state.bodies.masses.iter().sum::<f64>()),
+            field_prev: None,
+            field_next: None,
             cur: 0,
             n,
             step: state.step,
@@ -719,6 +784,8 @@ impl GpuEngine {
             g: p.g as f32,
             limit2: (limit * limit).min(f32::MAX as f64) as f32,
             pad: 0.0,
+            field_prev: GpuField::of(self.field_prev.or(self.field_next)),
+            field_next: GpuField::of(self.field_next),
         };
         self.gpu
             .queue
@@ -1138,23 +1205,8 @@ impl GpuEngine {
                 1,
             );
         }
-        enc.clear_buffer(&self.b.removed_counter, 0, None);
         if cleanup {
-            let b = &self.b;
-            self.gpu.run(
-                &mut enc,
-                &self.k.cleanup,
-                &[
-                    &b.params,
-                    &b.bodies[self.cur],
-                    &b.moments,
-                    &b.removed,
-                    &b.removed_counter,
-                ],
-                wg,
-            );
-            // Moments sans les corps éliminés.
-            self.encode_moments(&mut enc);
+            self.encode_far(&mut enc);
         }
         let query_count = self.queries.borrow().total();
         self.encode_queries(&mut enc, query_count);
@@ -1162,7 +1214,7 @@ impl GpuEngine {
             let b = &self.b;
             let rb = &b.readback;
             enc.copy_buffer_to_buffer(&b.pair_counter, 0, rb, readback::COUNTERS, 4);
-            enc.copy_buffer_to_buffer(&b.removed_counter, 0, rb, readback::COUNTERS + 4, 4);
+            enc.copy_buffer_to_buffer(&b.far_counter, 0, rb, readback::COUNTERS + 4, 4);
             enc.copy_buffer_to_buffer(&b.moments, 0, rb, readback::MOMENTS, 48);
             if query_count > 0 {
                 enc.copy_buffer_to_buffer(
@@ -1176,8 +1228,9 @@ impl GpuEngine {
             let pairs = (PAIR_PREFIX.min(self.pair_cap) * PAIR_BYTES) as u64;
             enc.copy_buffer_to_buffer(&b.pairs, 0, rb, readback::PAIRS, pairs);
             if cleanup {
-                let removed = 4 * REMOVED_PREFIX.min(self.capacity) as u64;
-                enc.copy_buffer_to_buffer(&b.removed, 0, rb, readback::REMOVED, removed);
+                let k = FAR_PREFIX.min(self.far_cap) as u64;
+                enc.copy_buffer_to_buffer(&b.far_index, 0, rb, readback::FAR_INDEX, 4 * k);
+                enc.copy_buffer_to_buffer(&b.far, 0, rb, readback::FAR, k * BODY_BYTES as u64);
             }
             self.gpu.submit(enc)
         };
@@ -1185,15 +1238,16 @@ impl GpuEngine {
 
         // 2. Relecture : compteurs, moments, positions, premières paires.
         let mut found = 0usize;
-        let mut removed_count = 0usize;
+        let mut far_count = 0usize;
         let mut pairs: Vec<PairRec> = Vec::new();
-        let mut removed_ids: Vec<u32> = Vec::new();
+        let mut far_index: Vec<u32> = Vec::new();
+        let mut far: Vec<GpuBody> = Vec::new();
         let mut query_raw: Vec<[f32; 4]> = Vec::new();
         let mut moments = [[0f32; 4]; 3];
         self.gpu
             .map_read(&self.b.readback, index, readback::SIZE, |raw| {
                 found = u32_at(raw, readback::COUNTERS as usize) as usize;
-                removed_count = u32_at(raw, readback::COUNTERS as usize + 4) as usize;
+                far_count = u32_at(raw, readback::COUNTERS as usize + 4) as usize;
                 moments = read_moments(raw);
                 let q = readback::QUERY as usize;
                 query_raw = bytemuck::cast_slice(&raw[q..q + 16 * query_count]).to_vec();
@@ -1201,9 +1255,11 @@ impl GpuEngine {
                 let p = readback::PAIRS as usize;
                 pairs = bytemuck::cast_slice(&raw[p..p + count * PAIR_BYTES]).to_vec();
                 if cleanup {
-                    let count = removed_count.min(REMOVED_PREFIX);
-                    let r = readback::REMOVED as usize;
-                    removed_ids = bytemuck::cast_slice(&raw[r..r + 4 * count]).to_vec();
+                    let count = far_count.min(FAR_PREFIX).min(self.far_cap);
+                    let r = readback::FAR_INDEX as usize;
+                    far_index = bytemuck::cast_slice(&raw[r..r + 4 * count]).to_vec();
+                    let r = readback::FAR as usize;
+                    far = bytemuck::cast_slice(&raw[r..r + BODY_BYTES * count]).to_vec();
                 }
             });
         // Au-delà des premiers enregistrements (rare) : relecture du reste.
@@ -1217,20 +1273,28 @@ impl GpuEngine {
             );
             pairs.extend_from_slice(bytemuck::cast_slice(&raw));
         }
-        if removed_count > removed_ids.len() {
-            let start = removed_ids.len();
-            let raw = self.gpu.read(
-                &self.b.removed,
-                start as u64 * 4,
-                (removed_count - start) as u64 * 4,
-            );
-            removed_ids.extend_from_slice(bytemuck::cast_slice(&raw));
-        }
-        report.removed = removed_ids.iter().map(|&i| i as u64).collect();
         self.moments = Moments { raw: moments };
 
-        // 3. Fusions : regroupement sur le CPU, application sans attente.
-        let mut dead = report.removed.len();
+        // 3. Nettoyage : la règle du domaine trie les corps lointains.
+        let mut kills = Vec::new();
+        if cleanup {
+            if far_count > far.len() {
+                self.read_far(far_count, &mut far_index, &mut far);
+            }
+            let (ops, clusters) = self.sort_out_far(&far_index, &far);
+            report.removed = ops.iter().map(|op| op.body.id as u64).collect();
+            for op in &ops {
+                let b = &op.body;
+                report
+                    .removed_bodies
+                    .push(b.id as u64, v3(b.pos), v3(b.vel), b.mass as f64);
+            }
+            report.clusters = Some(clusters);
+            kills = ops;
+        }
+
+        // 4. Fusions : regroupement sur le CPU, application sans attente.
+        let mut dead = kills.len();
         let mut survivors = Vec::new();
         let mut ops = Vec::new();
         if !pairs.is_empty() {
@@ -1241,7 +1305,13 @@ impl GpuEngine {
             ops = plan.ops;
             survivors = plan.survivors;
         }
+        ops.extend(kills);
         if dead > 0 {
+            if ops.len() > self.ops_cap {
+                self.gpu.forget(&self.b.ops);
+                self.ops_cap = ops.len().next_power_of_two();
+                self.b.ops = self.gpu.storage("ops", self.ops_cap as u64 * OP_BYTES);
+            }
             self.write_params(ops.len());
             let mut enc = self.gpu.encoder();
             if !ops.is_empty() {
@@ -1267,7 +1337,7 @@ impl GpuEngine {
             self.publish_view();
         }
 
-        // 4. Positions suivies, corrigées des fusions et éliminations du pas.
+        // 5. Positions suivies, corrigées des fusions et éliminations du pas.
         let gone: HashSet<BodyId> = report
             .merges
             .iter()
@@ -1291,7 +1361,97 @@ impl GpuEngine {
             })
             .collect();
         q.step = Some(self.step);
+        self.field_prev = self.field_next;
         report
+    }
+
+    /// Repère les corps lointains (au-delà de k × R du barycentre) : indices
+    /// et enregistrements (dans la limite de `far_cap`), sans rien éliminer.
+    fn encode_far(&self, enc: &mut gpu::Encoder) {
+        let b = &self.b;
+        enc.clear_buffer(&b.far_counter, 0, None);
+        self.gpu.run(
+            enc,
+            &self.k.cleanup,
+            &[
+                &b.params,
+                &b.bodies[self.cur],
+                &b.moments,
+                &b.far_index,
+                &b.far,
+                &b.far_counter,
+            ],
+            groups(self.n),
+        );
+    }
+
+    /// Relit tous les corps lointains quand la relecture du pas n'en
+    /// contenait qu'une partie ; agrandit leur tampon au besoin (les corps
+    /// n'ont pas bougé depuis : le repérage est simplement refait).
+    fn read_far(&mut self, count: usize, index: &mut Vec<u32>, far: &mut Vec<GpuBody>) {
+        if count > self.far_cap {
+            self.gpu.forget(&self.b.far);
+            self.far_cap = count.next_power_of_two().min(self.capacity);
+            self.b.far = self.gpu.storage("far", (self.far_cap * BODY_BYTES) as u64);
+            let mut enc = self.gpu.encoder();
+            self.encode_far(&mut enc);
+            self.gpu.submit(enc);
+        }
+        let raw = self.gpu.read(&self.b.far_index, 0, 4 * count as u64);
+        *index = bytemuck::cast_slice(&raw).to_vec();
+        let raw = self.gpu.read(&self.b.far, 0, (count * BODY_BYTES) as u64);
+        *far = bytemuck::cast_slice(&raw).to_vec();
+    }
+
+    /// Applique la règle du domaine aux corps lointains ; renvoie les
+    /// opérations d'élimination (masse nulle) et les amas conservés. Les
+    /// moments relus sont corrigés des corps éliminés.
+    fn sort_out_far(
+        &mut self,
+        index: &[u32],
+        far: &[GpuBody],
+    ) -> (Vec<MergeOp>, Vec<EjectedCluster>) {
+        let mut raw = self.moments.raw;
+        let mass = raw[0][0] as f64;
+        if far.is_empty() || mass <= 0.0 {
+            return (Vec::new(), Vec::new());
+        }
+        let velocity = DVec3::new(raw[1][0] as f64, raw[1][1] as f64, raw[1][2] as f64) / mass;
+        let candidates: Vec<Candidate> = far
+            .iter()
+            .map(|b| Candidate {
+                id: b.id as u64,
+                position: v3(b.pos),
+                velocity: v3(b.vel),
+                mass: b.mass as f64,
+                potential: b.pot as f64,
+            })
+            .collect();
+        let rules = EjectionRules::new(&self.params, self.initial_mass);
+        let ejection = sort_out(&candidates, velocity, &rules);
+        let ops = ejection
+            .removed
+            .iter()
+            .map(|&k| {
+                let body = far[k];
+                let (mb, v) = (body.mass, body.vel);
+                raw[0][0] -= mb;
+                for a in 0..3 {
+                    raw[0][a + 1] -= mb * body.pos[a];
+                    raw[1][a] -= mb * v[a];
+                }
+                raw[1][3] -= 0.5 * mb * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+                raw[2][0] -= mb * body.pot;
+                MergeOp {
+                    index: index[k],
+                    kind: 1,
+                    pad: [0; 2],
+                    body,
+                }
+            })
+            .collect();
+        self.moments = Moments { raw };
+        (ops, ejection.clusters)
     }
 
     /// Relit sur-le-champ les positions de toutes les listes suivies.
@@ -1455,6 +1615,82 @@ impl PhysicsEngine for GpuEngine {
         let mass = m[0][0] as f64;
         (self.n > 0 && mass > 0.0)
             .then(|| DVec3::new(m[0][1] as f64, m[0][2] as f64, m[0][3] as f64) / mass)
+    }
+
+    fn moments(&self) -> SystemMoments {
+        let m = self.moments.raw;
+        let mass = m[0][0] as f64;
+        if self.n == 0 || mass <= 0.0 {
+            return SystemMoments::default();
+        }
+        SystemMoments {
+            mass,
+            center: DVec3::new(m[0][1] as f64, m[0][2] as f64, m[0][3] as f64) / mass,
+            velocity: DVec3::new(m[1][0] as f64, m[1][1] as f64, m[1][2] as f64) / mass,
+        }
+    }
+
+    fn set_external_field(&mut self, field: ExternalField) -> bool {
+        self.field_next = Some(field);
+        true
+    }
+
+    fn insert(&mut self, bodies: &BodySet) -> bool {
+        let k = bodies.len();
+        if k == 0 {
+            return true;
+        }
+        if self.n + k > self.capacity {
+            return false;
+        }
+        let max_id = bodies.ids.iter().copied().max().unwrap_or(0);
+        if max_id >= u32::MAX as u64 {
+            return false;
+        }
+        if max_id >= self.b.id_cap {
+            let cap = (max_id + 1).max(self.b.id_cap * 2);
+            if cap * 4 > self.gpu.limits.max_storage_buffer_binding_size as u64 {
+                return false;
+            }
+            self.gpu.forget(&self.b.index_of);
+            self.b.index_of = self.gpu.storage("index-of", cap * 4);
+            self.b.id_cap = cap;
+        }
+        let mut raw = self.moments.raw;
+        let records: Vec<GpuBody> = (0..k)
+            .map(|i| {
+                let (m, p, v) = (
+                    bodies.masses[i] as f32,
+                    f3(bodies.positions[i]),
+                    f3(bodies.velocities[i]),
+                );
+                raw[0][0] += m;
+                for a in 0..3 {
+                    raw[0][a + 1] += m * p[a];
+                    raw[1][a] += m * v[a];
+                }
+                raw[1][3] += 0.5 * m * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+                GpuBody {
+                    pos: p,
+                    mass: m,
+                    vel: v,
+                    id: bodies.ids[i] as u32,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        self.gpu.queue.write_buffer(
+            &self.b.bodies[self.cur],
+            (self.n * BODY_BYTES) as u64,
+            bytemuck::cast_slice(&records),
+        );
+        self.moments = Moments { raw };
+        self.n += k;
+        self.write_params(0);
+        self.map_stale.set(true);
+        self.tree_age = u32::MAX;
+        self.publish_view();
+        true
     }
 
     fn diagnostics(&self) -> Diagnostics {

@@ -3009,6 +3009,7 @@ dependencies = [
  "rayon",
  "serde",
  "stellar-domain",
+ "stellar-engine-cpu",
  "thiserror 1.0.69",
 ]
 
@@ -3052,6 +3053,7 @@ name = "stellar-persistence"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "serde",
  "stellar-application",
  "stellar-domain",
  "stellar-engine-cpu",

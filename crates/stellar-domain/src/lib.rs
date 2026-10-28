@@ -11,16 +11,20 @@
 pub mod body;
 pub mod config;
 pub mod engine;
+pub mod ejection;
 pub mod physics;
 pub mod ranking;
 pub mod state;
+pub mod systems;
 
 pub use body::{BodyId, BodySet};
 pub use config::{
     DensityProfile, Distribution, InitialConditions, PhysicsParams, SimulationConfig, VelocityMode,
 };
+pub use ejection::EjectedCluster;
 pub use engine::{Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, StepReport};
 pub use state::SimulationState;
+pub use systems::{ExternalField, Moments, SystemSpan, SystemSummary, SystemsView};
 
 /// Vecteur 3D double précision utilisé pour toute grandeur physique.
 pub type Vec3 = glam::DVec3;

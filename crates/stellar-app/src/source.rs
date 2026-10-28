@@ -121,6 +121,10 @@ impl Replay {
             watched: Vec::new(),
             top: self.player.top().to_vec(),
             total_mass,
+            // Les amas éjectés ne sont pas enregistrés.
+            clusters: Arc::default(),
+            clusters_step: None,
+            systems: Vec::new(),
             steps_per_second: 0.0,
             last_step_ms: 0.0,
             running: self.player.clock.playing,
@@ -177,6 +181,9 @@ fn empty_snapshot() -> Snapshot {
         watched: Vec::new(),
         top: Vec::new(),
         total_mass: 0.0,
+        clusters: Arc::default(),
+        clusters_step: None,
+        systems: Vec::new(),
         steps_per_second: 0.0,
         last_step_ms: 0.0,
         running: false,
@@ -186,7 +193,7 @@ fn empty_snapshot() -> Snapshot {
 }
 
 pub enum Source {
-    Live(SimulationHandle),
+    Live(Box<SimulationHandle>),
     Replay(Box<Replay>),
 }
 

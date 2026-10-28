@@ -46,10 +46,11 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 ### Écran d'accueil
 
 - **Nouvelle simulation** : nombre de particules, rayon du nuage, graine aléatoire, répartition (sphère ou disque, avec épaisseur et profil de densité), vitesse initiale (repos, aléatoire, circulaire imposée, circulaire orbitale ± dispersion, radiale).
-- **Paramètres avancés** : G, dt, adoucissement ε, rayon r₀ d'une particule de masse 1, précision θ, période et distance du nettoyage, moteur de calcul. Par défaut, dt, ε et r₀ sont déduits des conditions initiales :
+- **Paramètres avancés** : G, dt, adoucissement ε, rayon r₀ d'une particule de masse 1, précision θ, période et distance du nettoyage, seuils des amas éjectés (distance de liaison, nombre de corps, part de la masse), moteur de calcul. Par défaut, dt, ε, r₀ et la liaison sont déduits des conditions initiales :
   - dt = temps de chute libre / 500 ;
   - ε = 0,3 × distance moyenne entre voisins ;
-  - r₀ = 1 % de cette distance.
+  - r₀ = 1 % de cette distance ;
+  - liaison des amas = distance moyenne entre voisins ; un amas est conservé à partir de 10 corps ou de 0,1 % de la masse initiale.
 - **Simulations sauvegardées** : la liste du dossier `saves\`, avec un bouton « Parcourir… » pour ouvrir un fichier situé ailleurs. Une simulation chargée redémarre en pause.
 
 ### Commandes
@@ -91,6 +92,8 @@ En **référentiel relatif** (touche R), chaque point devient p(t) − r(t) + r(
 Les traces ne sont pas sauvegardées.
 
 Le panneau « Simulation » indique la masse présente et la masse éjectée, c'est-à-dire sortie de la simulation par le nettoyage, avec sa part de la masse initiale. Le classement des corps les plus massifs donne la part de chacun dans la masse présente.
+
+Le panneau « Corps » liste aussi les **sous-simulations** et les **amas éjectés** que le nettoyage a conservés (voir plus bas) : corps repère (le plus massif), nombre de corps, masse et distance au barycentre ; un clic sélectionne le repère pour le suivre. La liste des amas est mise à jour à chaque nettoyage ; ces listes n'existent pas en relecture.
 
 En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la direction de visée, le zoom et la distance à la cible sont conservés.
 
@@ -176,7 +179,7 @@ stellar-app (présentation + racine de composition : egui, wgpu)
 | `stellar-application` | Génération des conditions initiales, thread de simulation découplé (`SimulationHandle`, instantanés publiés à ≤ 60 Hz ; copie complète de l'état espacée quand le moteur est affiché directement), registre des moteurs, ports `SimulationRepository`, façade `SimulatorService`. |
 | `stellar-engine-cpu` | Moteur de calcul CPU. Optimisé librement, comme prévu par la spécification (voir ci-dessous). |
 | `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau et réajusté entre deux constructions, parcours de Barnes-Hut par groupes de 128 corps, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. Sur la carte de l'interface, expose ses tampons de corps (`BodiesView`) pour l'affichage. |
-| `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. Seule la version courante du format est lue. |
+| `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. Versions lues : 5 (courante, sous-systèmes), 4 et 3 ; enregistrements `.stellarec` : 3 (une boîte de quantification par sous-système), 2 et 1 (`legacy.rs`). Un enregistrement repris garde la version de son fichier. |
 | `stellar-app` | Écrans egui, caméra, sélection, rendu GPU des corps (billboards additifs, positions relatives à une ancre pour garder la précision en `f32`), lus directement dans les tampons du moteur GPU ou téléversés depuis les instantanés. |
 
 ### Moteur CPU
@@ -197,7 +200,24 @@ stellar-app (présentation + racine de composition : egui, wgpu)
    - critère d'ouverture `d > s/θ + δ` et adoucissement de Plummer ;
    - **parcours par groupes** de 32 corps voisins au plus : l'arbre est descendu une fois par groupe, avec la boîte du groupe pour le critère, puis la liste d'interactions est évaluée pour chaque corps (AVX2 et FMA quand le processeur les a : quatre corps par instruction, inverse de la racine par estimation affinée de Newton).
 6. **Kick ½ dt**.
-7. **Nettoyage, tous les N pas** : suppression des corps **non liés** (énergie spécifique > 0 relativement au barycentre) **et** situés au-delà de k × R.
+7. **Nettoyage, tous les N pas** : suppression des corps **non liés** (énergie spécifique > 0 relativement au barycentre) **et** situés au-delà de k × R, **sauf les amas éjectés**. Règle commune aux deux moteurs (`stellar-domain/src/ejection.rs`) :
+   - les corps lointains sont regroupés par « amis d'amis » (distance de liaison) ;
+   - chaque groupe est épuré : les membres non liés au groupe (énergie dans son référentiel, sous son seul potentiel, exact jusqu'à 2 048 membres, à symétrie sphérique au-delà) en sont retirés, les plus énergiques d'abord ;
+   - un groupe lié d'au moins n corps, ou d'au moins une part donnée de la masse initiale (un corps isolé très massif compte), est conservé en entier, même s'il s'éloigne indéfiniment.
+
+   Le moteur GPU repère les corps lointains sur la carte et ne relit qu'eux, aux seuls pas de nettoyage.
+
+### Sous-simulations
+
+Un amas éjecté et détaché devient une **sous-simulation** : son propre moteur (même type que la simulation), son propre repère (origine à son barycentre, d'où une précision intacte même très loin), son propre arbre. Le moteur composite (`stellar-application/src/systems.rs`) les fait avancer au même pas ; le reste de l'application ne voit qu'un moteur.
+
+- **Couplage** : chaque sous-système ressent les autres par un champ linéaire a₀ + T·(x − x_c) (accélération au barycentre et tenseur de marée de masses ponctuelles), calculé sur les barycentres extrapolés à la fin du pas ; le premier demi-kick reprend le champ du pas précédent (Leapfrog). Les marées étirent et arrachent donc bien les membres d'un amas ; deux amas s'attirent et peuvent orbiter l'un autour de l'autre.
+- **Séparation** : au nettoyage, un amas éjecté (voir ci-dessus) devient un sous-système si (taille de l'amas + taille du système) < 0,3 × distance ; taille d'un amas : deux fois son rayon de demi-masse.
+- **Réunion** : deux sous-systèmes sont réunis quand (somme des tailles) > 0,6 × distance (hystérésis) ; collisions et échanges de corps redeviennent alors possibles.
+- **Évadés** : un sous-système secondaire nettoie son voisinage comme la simulation principale (k × sa taille) ; les corps qu'il élimine rejoignent le système principal (le plus massif), dont le nettoyage décide ensuite.
+- **Recentrage** : un sous-système dont le barycentre s'écarte de son origine de plus de la moitié de sa taille est reconstruit autour de lui.
+- **Affichage** : chaque sous-système est dessiné depuis son propre tampon, l'ancre de la caméra étant rapportée à son origine.
+- **Fichiers** : l'état sauvegardé range les corps par sous-système (plages et tailles) ; chaque instantané d'un enregistrement a une boîte de quantification par sous-système.
 
 Le calcul utilise tous les cœurs moins un, laissé libre pour l'interface.
 
@@ -246,4 +266,5 @@ Les tests physiques (`crates/stellar-engine-cpu/tests/physics.rs`) vérifient no
 - la conservation de la masse et de la quantité de mouvement lors des fusions ;
 - la détection des croisements rapides ;
 - les fusions en chaîne ;
-- le critère d'éjection.
+- le critère d'éjection, la conservation des amas liés éjectés et l'élimination des petits groupes ;
+- la relecture des sauvegardes version 3 et des enregistrements version 1.

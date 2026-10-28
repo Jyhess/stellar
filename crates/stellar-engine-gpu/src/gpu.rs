@@ -307,6 +307,14 @@ impl Gpu {
             })
     }
 
+    /// Oublie les groupes de liaisons qui référencent `buffer` (tampon
+    /// remplacé par un plus grand) : sans quoi ils le garderaient en vie.
+    pub fn forget(&self, buffer: &wgpu::Buffer) {
+        self.bind_groups
+            .borrow_mut()
+            .retain(|(_, buffers), _| !buffers.contains(buffer));
+    }
+
     fn bind_group(&self, k: &Kernel, buffers: &[&wgpu::Buffer]) -> wgpu::BindGroup {
         let key = (k.name, buffers.iter().map(|&b| b.clone()).collect::<Vec<_>>());
         if let Some(bg) = self.bind_groups.borrow().get(&key) {

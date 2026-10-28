@@ -1,7 +1,7 @@
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read_write> bodies: array<Body>;
 
-// Kick ½ dt puis drift dt.
+// Kick ½ dt (champ extérieur compris) puis drift dt.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -9,7 +9,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     var b = bodies[i];
-    b.vel = b.vel + b.acc * P.half_dt;
+    b.vel = b.vel + (b.acc + field_at(P.field_prev, b.pos)) * P.half_dt;
     b.pos = b.pos + b.vel * P.dt;
     bodies[i] = b;
 }

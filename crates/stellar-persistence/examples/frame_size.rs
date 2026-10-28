@@ -5,7 +5,7 @@ use std::time::Instant;
 use stellar_application::generator::generate_state;
 use stellar_application::recording::Keyframe;
 use stellar_domain::{InitialConditions, VelocityMode};
-use stellar_persistence::recording::{decode_frame, encode_frame};
+use stellar_persistence::recording::{decode_frame, encode_frame, VERSION};
 
 fn main() {
     let n: usize = std::env::args()
@@ -24,9 +24,10 @@ fn main() {
         bodies: s.bodies,
         fates: vec![],
         dust_weight: 1.0,
+        groups: Vec::new(),
     };
     let t = Instant::now();
-    let raw = encode_frame(&frame);
+    let raw = encode_frame(&frame, VERSION);
     let packed = zstd::bulk::compress(&raw, 3).unwrap();
     println!("codage + compression : {:?}", t.elapsed());
     println!(
@@ -42,7 +43,7 @@ fn main() {
         time: 0.0,
         count: n as u32,
     };
-    let d = decode_frame(meta, &unpacked).unwrap();
+    let d = decode_frame(meta, &unpacked, VERSION).unwrap();
     println!(
         "décompression + décodage : {:?} ({} corps)",
         t.elapsed(),

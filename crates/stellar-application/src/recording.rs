@@ -35,6 +35,10 @@ pub struct Keyframe {
     /// Nombre de particules de poussière représentées par chaque particule de
     /// poussière enregistrée (1 sans sous-échantillonnage).
     pub dust_weight: f32,
+    /// Sous-système de chaque corps (vide : un seul) ; chaque sous-système a
+    /// sa propre boîte de quantification, pour garder la précision d'un amas
+    /// parti très loin.
+    pub groups: Vec<u16>,
 }
 
 /// Vrai pour une particule de poussière (masse initiale 1, jamais fusionnée).
@@ -70,12 +74,17 @@ pub fn apply_dust_budget(frame: &mut Keyframe, budget: u64) {
         .map(|i| !is_dust(b.masses[i]) || id_hash(b.ids[i]) <= threshold)
         .collect();
     let mut out = BodySet::with_capacity(budget as usize + 1024);
+    let mut groups = Vec::new();
     for (i, &k) in keep.iter().enumerate() {
         if k {
             out.push(b.ids[i], b.positions[i], b.velocities[i], b.masses[i]);
+            if let Some(&g) = frame.groups.get(i) {
+                groups.push(g);
+            }
         }
     }
     frame.bodies = out;
+    frame.groups = groups;
     frame.dust_weight = (1.0 / fraction) as f32;
 }
 
@@ -95,6 +104,9 @@ impl Keyframe {
             velocities: order.iter().map(|i| b.velocities[pick(i)]).collect(),
             masses: order.iter().map(|i| b.masses[pick(i)]).collect(),
         };
+        if !self.groups.is_empty() {
+            self.groups = order.iter().map(|i| self.groups[pick(i)]).collect();
+        }
         self.bodies = sorted;
     }
 }

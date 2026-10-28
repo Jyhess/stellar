@@ -16,6 +16,7 @@ pub mod registry;
 pub mod replay;
 pub mod runner;
 pub mod service;
+pub mod systems;
 pub mod trace;
 
 pub use ports::{RepositoryError, SaveData, SaveSummary, SimulationRepository, ViewState};
@@ -26,5 +27,6 @@ pub use recording::{
 pub use registry::EngineRegistry;
 pub use replay::{PlaybackClock, ReplayPlayer};
 pub use runner::{Phase, SimulationHandle, Snapshot};
+pub use systems::MultiSystem;
 pub use service::{AppError, Continuation, LoadedSimulation, SimulatorService};
 pub use trace::{Trace, TraceReference, TraceSet};

@@ -16,4 +16,7 @@ pub struct SimulationState {
     pub initial_energy: Option<f64>,
     /// Masse totale initiale (référence pour la masse éjectée).
     pub initial_mass: Option<f64>,
+    /// Sous-systèmes (voir [`crate::systems`]) : plages des corps, rangés
+    /// par sous-système. Vide : un seul système.
+    pub systems: Vec<crate::SystemSpan>,
 }

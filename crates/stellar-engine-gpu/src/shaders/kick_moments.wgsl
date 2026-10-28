@@ -19,7 +19,7 @@ fn main(
     var c = vec4<f32>(0.0);
     if (gid.x < P.n) {
         var body = bodies[gid.x];
-        body.vel = body.vel + body.acc * P.half_dt;
+        body.vel = body.vel + (body.acc + field_at(P.field_next, body.pos)) * P.half_dt;
         bodies[gid.x].vel = body.vel;
         let m = body.mass;
         a = vec4<f32>(m, body.pos * m);

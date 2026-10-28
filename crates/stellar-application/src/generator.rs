@@ -18,6 +18,7 @@ pub fn generate_state(ic: &InitialConditions, g: f64) -> SimulationState {
         time: 0.0,
         initial_energy: None,
         initial_mass,
+        systems: Vec::new(),
     }
 }
 

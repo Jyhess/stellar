@@ -3,7 +3,10 @@
 //! Deux sources de corps, dessinés en billboards avec mélange additif :
 //! - **directe** : les tampons du moteur GPU, qui calcule sur la même carte
 //!   ([`BodiesView`]) ; position et masse sont lues telles quelles, couleur
-//!   et rayon sont déduits dans le shader. Aucune copie.
+//!   et rayon sont déduits dans le shader. Aucune copie. Une simulation
+//!   découpée en sous-systèmes ([`SystemsView`]) a un tampon par
+//!   sous-système, chacun dans son repère : l'ancre de chaque dessin est
+//!   celle de la caméra, rapportée à l'origine du sous-système.
 //! - **instances** (moteur CPU, relecture) : à chaque nouvel instantané, les
 //!   positions (relatives à un point d'ancrage proche de la caméra, pour
 //!   préserver la précision en `f32`) sont téléversées dans un tampon
@@ -15,6 +18,9 @@ use bytemuck::{Pod, Zeroable};
 use eframe::egui;
 use eframe::egui_wgpu::wgpu::util::DeviceExt;
 use eframe::egui_wgpu::{self, wgpu};
+use glam::DVec3;
+use stellar_domain::systems::ViewPart;
+use stellar_domain::SystemsView;
 use stellar_engine_gpu::BodiesView;
 
 /// Une instance = un corps à l'écran (20 octets).
@@ -57,6 +63,11 @@ pub struct PointRenderer {
     bodies_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
+    /// Affichage direct : un jeu d'uniformes par sous-système, et les
+    /// sous-systèmes de l'image en cours.
+    part_uniforms: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    parts: Arc<Vec<ViewPart>>,
     /// Tampons d'instances : un même tampon ne peut dépasser la limite
     /// `max_buffer_size` du GPU (256 Mo par défaut, soit ~13 millions de
     /// corps), d'où un découpage en tronçons.
@@ -208,6 +219,9 @@ impl PointRenderer {
             bodies_pipeline,
             uniform_buffer,
             bind_group,
+            bind_group_layout,
+            part_uniforms: Vec::new(),
+            parts: Arc::default(),
             chunks: Vec::new(),
             chunk_capacity: by_limit.clamp(1024, MAX_CHUNK_INSTANCES),
             generation: u64::MAX,
@@ -255,8 +269,8 @@ impl PointRenderer {
 pub enum PointsSource {
     /// Instances téléversées depuis un instantané.
     Batch(Option<InstanceBatch>),
-    /// Tampons du moteur GPU, lus en place.
-    Direct(Arc<BodiesView>),
+    /// Tampons du moteur GPU, lus en place ; ancre : position de la caméra.
+    Direct { view: Arc<SystemsView>, anchor: DVec3 },
 }
 
 /// Commande de dessin d'une image.
@@ -284,6 +298,32 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
             }
         }
         queue.write_buffer(&r.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
+        if let PointsSource::Direct { view, anchor } = &self.source {
+            r.parts = view.parts();
+            while r.part_uniforms.len() < r.parts.len() {
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("stellar-uniforms-part"),
+                    size: std::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("stellar-uniforms-part-group"),
+                    layout: &r.bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                });
+                r.part_uniforms.push((buffer, group));
+            }
+            for (part, (buffer, _)) in r.parts.iter().zip(&r.part_uniforms) {
+                let a = (*anchor - part.origin).as_vec3();
+                let mut u = self.uniforms;
+                u.anchor = [a.x, a.y, a.z, u.anchor[3]];
+                queue.write_buffer(buffer, 0, bytemuck::bytes_of(&u));
+            }
+        }
         Vec::new()
     }
 
@@ -296,13 +336,18 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
         let Some(r) = resources.get::<PointRenderer>() else {
             return;
         };
-        if let PointsSource::Direct(view) = &self.source {
-            let (buffer, count) = view.current();
-            if count > 0 {
-                pass.set_pipeline(&r.bodies_pipeline);
-                pass.set_bind_group(0, &r.bind_group, &[]);
-                pass.set_vertex_buffer(0, buffer.slice(..count as u64 * BodiesView::STRIDE));
-                pass.draw(0..4, 0..count);
+        if let PointsSource::Direct { .. } = &self.source {
+            pass.set_pipeline(&r.bodies_pipeline);
+            for (part, (_, group)) in r.parts.iter().zip(&r.part_uniforms) {
+                let Some(view) = part.view.downcast_ref::<BodiesView>() else {
+                    continue;
+                };
+                let (buffer, count) = view.current();
+                if count > 0 {
+                    pass.set_bind_group(0, group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..count as u64 * BodiesView::STRIDE));
+                    pass.draw(0..4, 0..count);
+                }
             }
             return;
         }

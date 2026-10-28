@@ -1,4 +1,7 @@
-//! Format d'enregistrement `.stellarec` (version 1).
+//! Format d'enregistrement `.stellarec` (version 3 ; versions 1 et 2
+//! relues : en-tête de la version 1 dans [`crate::legacy`], instantanés des
+//! versions 1 et 2 sans sous-systèmes ; un enregistrement repris garde la
+//! version de son fichier).
 //!
 //! ```text
 //! signature « STELREC\0 » · version (u32) · taille L (u32) · en-tête bincode (L octets)
@@ -14,10 +17,14 @@
 //!
 //! Charge utile d'un instantané (avant compression) :
 //! - poids de la poussière (f32), nombre de corps n (u32) ;
-//! - boîte de quantification (min x, y, z, côté) et vitesse maximale (f64) ;
+//! - nombre G de sous-systèmes (u32, version 3), puis G boîtes de
+//!   quantification (min x, y, z, côté, f64) et la vitesse maximale (f64) ;
+//!   versions 1 et 2 : une boîte, puis la vitesse maximale ;
 //! - identifiants croissants, en écarts codés en varint ;
 //! - masses : entières en varint (cas usuel), sinon en f64 ;
-//! - positions : 21 bits par axe, rangées par plans d'octets (meilleure compression) ;
+//! - si G > 1 : sous-système de chaque corps (u16, deux plans d'octets) ;
+//! - positions : 21 bits par axe, dans la boîte de leur sous-système,
+//!   rangées par plans d'octets (meilleure compression) ;
 //! - vitesses : 16 bits signés par axe, rapportées à la vitesse maximale, par plans d'octets ;
 //! - devenirs : (absorbé, résultant) ou (éliminé).
 
@@ -35,7 +42,9 @@ pub const EXTENSION: &str = "stellarec";
 const MAGIC: &[u8; 8] = b"STELREC\0";
 const INDEX_MAGIC: &[u8; 8] = b"STLRIDX\0";
 const FRAME_MAGIC: u32 = u32::from_le_bytes(*b"FRAM");
-const VERSION: u32 = 1;
+/// Version écrite ; les versions 1 (paramètres sans les amas éjectés) et 2
+/// (instantanés sans sous-systèmes) sont lues.
+pub const VERSION: u32 = 3;
 const ZSTD_LEVEL: i32 = 3;
 const POS_BITS: u32 = 21;
 const POS_MAX: f64 = ((1u32 << POS_BITS) - 1) as f64;
@@ -112,33 +121,60 @@ impl<'a> Cursor<'a> {
 }
 
 /// Encode un instantané (corps triés par identifiant) avant compression.
-pub fn encode_frame(frame: &Keyframe) -> Vec<u8> {
+/// Boîtes de quantification (coin, côté) des `count` groupes.
+fn boxes(positions: &[Vec3], group: impl Fn(usize) -> usize, count: usize) -> Vec<(Vec3, f64)> {
+    let mut lo = vec![Vec3::splat(f64::INFINITY); count];
+    let mut hi = vec![Vec3::splat(f64::NEG_INFINITY); count];
+    for (i, p) in positions.iter().enumerate() {
+        let g = group(i);
+        lo[g] = lo[g].min(*p);
+        hi[g] = hi[g].max(*p);
+    }
+    lo.into_iter()
+        .zip(hi)
+        .map(|(lo, hi)| {
+            if lo.x.is_finite() {
+                (lo, (hi - lo).max_element().max(1e-12))
+            } else {
+                (Vec3::ZERO, 1.0)
+            }
+        })
+        .collect()
+}
+
+/// Code un instantané dans la disposition de la version `version` du
+/// fichier (un enregistrement repris garde la sienne).
+pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
     let b = &frame.bodies;
     let n = b.len();
     let mut out = Vec::with_capacity(n * 16 + 64);
     out.extend_from_slice(&frame.dust_weight.to_le_bytes());
     out.extend_from_slice(&(n as u32).to_le_bytes());
 
-    // Boîte de quantification.
-    let (mut lo, mut hi) = (Vec3::splat(f64::INFINITY), Vec3::splat(f64::NEG_INFINITY));
-    for p in &b.positions {
-        lo = lo.min(*p);
-        hi = hi.max(*p);
-    }
-    if n == 0 {
-        lo = Vec3::ZERO;
-        hi = Vec3::ONE;
-    }
-    let size = (hi - lo).max_element().max(1e-12);
+    // Boîtes de quantification : une par sous-système (version 3).
+    let grouped = version >= 3 && frame.groups.len() == n && n > 0;
+    let count = if grouped {
+        frame.groups.iter().copied().max().unwrap_or(0) as usize + 1
+    } else {
+        1
+    };
+    let group = |i: usize| if grouped { frame.groups[i] as usize } else { 0 };
+    let boxes = boxes(&b.positions, group, count);
     let vmax = b
         .velocities
         .iter()
         .map(|v| v.abs().max_element())
         .fold(0.0f64, f64::max)
         .max(1e-300);
-    for x in [lo.x, lo.y, lo.z, size, vmax] {
-        out.extend_from_slice(&x.to_le_bytes());
+    if version >= 3 {
+        out.extend_from_slice(&(count as u32).to_le_bytes());
     }
+    for (lo, size) in &boxes {
+        for x in [lo.x, lo.y, lo.z, *size] {
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&vmax.to_le_bytes());
 
     // Identifiants (écarts).
     let mut prev = 0u64;
@@ -161,12 +197,21 @@ pub fn encode_frame(frame: &Keyframe) -> Vec<u8> {
         }
     }
 
+    // Sous-systèmes : 2 plans d'octets.
+    if count > 1 {
+        for plane in 0..2 {
+            out.extend(frame.groups.iter().map(|g| (g >> (8 * plane)) as u8));
+        }
+    }
+
     // Positions : 3 axes × 3 plans d'octets.
     for axis in 0..3 {
         let q: Vec<u32> = b
             .positions
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(i, p)| {
+                let (lo, size) = boxes[group(i)];
                 ((((p[axis] - lo[axis]) / size) * POS_MAX)
                     .round()
                     .clamp(0.0, POS_MAX)) as u32
@@ -208,16 +253,23 @@ pub fn encode_frame(frame: &Keyframe) -> Vec<u8> {
     out
 }
 
-/// Décode une charge utile (non compressée).
-pub fn decode_frame(meta: FrameMeta, buf: &[u8]) -> Result<Keyframe, RepositoryError> {
+/// Décode une charge utile (non compressée) d'un fichier de version
+/// `version`.
+pub fn decode_frame(meta: FrameMeta, buf: &[u8], version: u32) -> Result<Keyframe, RepositoryError> {
     let mut c = Cursor { buf, pos: 0 };
     let dust_weight = c.f32()?;
     let n = c.u32()? as usize;
     if n != meta.count as usize {
         return Err(fmt("nombre de corps incohérent"));
     }
-    let lo = Vec3::new(c.f64()?, c.f64()?, c.f64()?);
-    let size = c.f64()?;
+    let count = if version >= 3 { c.u32()? as usize } else { 1 };
+    if count == 0 || count > (1 << 16) {
+        return Err(fmt("nombre de sous-systèmes invalide"));
+    }
+    let mut boxes = Vec::with_capacity(count);
+    for _ in 0..count {
+        boxes.push((Vec3::new(c.f64()?, c.f64()?, c.f64()?), c.f64()?));
+    }
     let vmax = c.f64()?;
 
     let mut ids = Vec::with_capacity(n);
@@ -237,10 +289,22 @@ pub fn decode_frame(meta: FrameMeta, buf: &[u8]) -> Result<Keyframe, RepositoryE
         });
     }
 
+    let mut groups = Vec::new();
+    if count > 1 {
+        let planes = [c.take(n)?, c.take(n)?];
+        groups = (0..n)
+            .map(|i| planes[0][i] as u16 | (planes[1][i] as u16) << 8)
+            .collect();
+        if groups.iter().any(|&g| g as usize >= count) {
+            return Err(fmt("sous-système inconnu"));
+        }
+    }
+
     let mut positions = vec![Vec3::ZERO; n];
     for axis in 0..3 {
         let planes = [c.take(n)?, c.take(n)?, c.take(n)?];
         for (i, p) in positions.iter_mut().enumerate() {
+            let (lo, size) = boxes[groups.get(i).copied().unwrap_or(0) as usize];
             let q = planes[0][i] as u32 | (planes[1][i] as u32) << 8 | (planes[2][i] as u32) << 16;
             p[axis] = lo[axis] + q as f64 / POS_MAX * size;
         }
@@ -276,6 +340,7 @@ pub fn decode_frame(meta: FrameMeta, buf: &[u8]) -> Result<Keyframe, RepositoryE
         },
         fates,
         dust_weight,
+        groups,
     })
 }
 
@@ -285,6 +350,8 @@ pub fn decode_frame(meta: FrameMeta, buf: &[u8]) -> Result<Keyframe, RepositoryE
 
 pub struct FileRecordingWriter {
     path: PathBuf,
+    /// Version du fichier (celle d'un enregistrement repris est conservée).
+    version: u32,
     out: BufWriter<File>,
     offset: u64,
     index: Vec<(u64, FrameMeta)>,
@@ -296,7 +363,8 @@ impl RecordingWriter for FileRecordingWriter {
     }
 
     fn write_frame(&mut self, frame: &Keyframe) -> Result<u64, RepositoryError> {
-        let payload = zstd::bulk::compress(&encode_frame(frame), ZSTD_LEVEL).map_err(io)?;
+        let payload =
+            zstd::bulk::compress(&encode_frame(frame, self.version), ZSTD_LEVEL).map_err(io)?;
         let meta = FrameMeta {
             step: frame.step,
             time: frame.time,
@@ -333,6 +401,7 @@ impl RecordingWriter for FileRecordingWriter {
 
 pub struct FileRecordingReader {
     file: BufReader<File>,
+    version: u32,
     info: RecordingInfo,
     offsets: Vec<u64>,
     complete: bool,
@@ -351,7 +420,7 @@ impl FileRecordingReader {
             return Err(fmt("ce n'est pas un enregistrement Stellar"));
         }
         let version = u32::from_le_bytes(read_exact::<4>(&mut file)?);
-        if version != VERSION {
+        if !(1..=VERSION).contains(&version) {
             return Err(RepositoryError::UnsupportedVersion(version));
         }
         let len = u32::from_le_bytes(read_exact::<4>(&mut file)?);
@@ -360,7 +429,13 @@ impl FileRecordingReader {
         }
         let mut hb = vec![0u8; len as usize];
         file.read_exact(&mut hb).map_err(io)?;
-        let header: RecordingHeader = bincode::deserialize(&hb).map_err(fmt)?;
+        let header: RecordingHeader = if version == 1 {
+            bincode::deserialize::<crate::legacy::RecordingHeaderV1>(&hb)
+                .map_err(fmt)?
+                .into()
+        } else {
+            bincode::deserialize(&hb).map_err(fmt)?
+        };
         let data_start = 16 + len as u64;
         let file_len = file.get_ref().metadata().map_err(io)?.len();
 
@@ -372,6 +447,7 @@ impl FileRecordingReader {
         let frames = index.into_iter().map(|e| e.1).collect();
         Ok(Self {
             file,
+            version,
             info: RecordingInfo { header, frames },
             offsets,
             complete,
@@ -444,7 +520,7 @@ impl RecordingReader for FileRecordingReader {
         // Taille décompressée bornée : ≈ 30 octets par corps au plus.
         let cap = meta.count as usize * 40 + (1 << 20);
         let raw = zstd::bulk::decompress(&payload, cap).map_err(fmt)?;
-        decode_frame(meta, &raw)
+        decode_frame(meta, &raw, self.version)
     }
 }
 
@@ -507,6 +583,7 @@ impl RecordingRepository for FileRecordingRepository {
         let offset = 16 + hb.len() as u64;
         Ok(Box::new(FileRecordingWriter {
             path,
+            version: VERSION,
             out,
             offset,
             index: Vec::new(),
@@ -534,6 +611,7 @@ impl RecordingRepository for FileRecordingRepository {
         // Fin du dernier instantané conservé : tout ce qui suit (instantanés
         // postérieurs, ancien index) est tronqué.
         let last = reader.offsets[keep - 1];
+        let version = reader.version;
         reader
             .file
             .seek(SeekFrom::Start(last + FRAME_HEAD - 4))
@@ -555,6 +633,7 @@ impl RecordingRepository for FileRecordingRepository {
         out.seek(SeekFrom::Start(end)).map_err(io)?;
         Ok(Box::new(FileRecordingWriter {
             path: path.to_path_buf(),
+            version,
             out,
             offset: end,
             index,
@@ -642,6 +721,7 @@ mod tests {
             bodies: b,
             fates,
             dust_weight: 1.5,
+            groups: Vec::new(),
         }
     }
 
@@ -663,7 +743,7 @@ mod tests {
             time: f.time,
             count: f.bodies.len() as u32,
         };
-        let d = decode_frame(meta, &encode_frame(&f)).unwrap();
+        let d = decode_frame(meta, &encode_frame(&f, VERSION), VERSION).unwrap();
         assert_eq!(d.bodies.ids, f.bodies.ids);
         assert_eq!(d.bodies.masses, f.bodies.masses);
         assert_eq!(d.fates, f.fates);
@@ -681,6 +761,35 @@ mod tests {
         for (a, b) in d.bodies.velocities.iter().zip(&f.bodies.velocities) {
             assert!((*a - *b).abs().max_element() <= vmax / VEL_MAX);
         }
+    }
+
+    #[test]
+    fn subsystems_keep_their_own_precision() {
+        // Un amas compact parti très loin : avec une boîte par sous-système,
+        // ni lui ni le système principal ne perdent en précision.
+        let mut f = frame(0);
+        let n = f.bodies.len();
+        f.groups = vec![0; n];
+        for i in (0..n).step_by(50) {
+            f.bodies.positions[i] = Vec3::new(1e7, 0.0, 0.0) + f.bodies.positions[i] * 1e-3;
+            f.groups[i] = 1;
+        }
+        let meta = FrameMeta {
+            step: f.step,
+            time: f.time,
+            count: n as u32,
+        };
+        let d = decode_frame(meta, &encode_frame(&f, VERSION), VERSION).unwrap();
+        assert_eq!(d.groups, f.groups);
+        for (i, (a, b)) in d.bodies.positions.iter().zip(&f.bodies.positions).enumerate() {
+            let tol = if f.groups[i] == 1 { 0.2 } else { 100.0 } / POS_MAX;
+            assert!((*a - *b).abs().max_element() <= tol, "{a} ≠ {b}");
+        }
+        // Disposition des versions antérieures : une seule boîte, pas de
+        // sous-systèmes relus.
+        let old = decode_frame(meta, &encode_frame(&f, 2), 2).unwrap();
+        assert!(old.groups.is_empty());
+        assert_eq!(old.bodies.ids, f.bodies.ids);
     }
 
     #[test]
@@ -703,6 +812,63 @@ mod tests {
         let f2 = r.read_frame(2).unwrap();
         assert_eq!(f2.step, 20);
         assert_eq!(f2.bodies.len(), frame(2).bodies.len());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_version_1() {
+        let dir = temp_dir("v1");
+        let repo = FileRecordingRepository::new(&dir);
+        // Fichier version 1 : ancien en-tête, instantanés dans l'ancienne
+        // disposition, sans index (reconstruit à l'ouverture).
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ancien.stellarec");
+        let mut frames = Vec::new();
+        for k in 0..3 {
+            let f = frame(k);
+            let payload = zstd::bulk::compress(&encode_frame(&f, 1), ZSTD_LEVEL).unwrap();
+            frames.extend_from_slice(&FRAME_MAGIC.to_le_bytes());
+            frames.extend_from_slice(&f.step.to_le_bytes());
+            frames.extend_from_slice(&f.time.to_le_bytes());
+            frames.extend_from_slice(&(f.bodies.len() as u32).to_le_bytes());
+            frames.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            frames.extend_from_slice(&payload);
+        }
+        let h = header();
+        let p = h.config.physics;
+        let old = crate::legacy::RecordingHeaderV1 {
+            config: crate::legacy::SimulationConfigV3 {
+                initial: h.config.initial,
+                physics: crate::legacy::PhysicsParamsV3 {
+                    g: p.g,
+                    dt: p.dt,
+                    softening: p.softening,
+                    theta: p.theta,
+                    base_radius: p.base_radius,
+                    cleanup_period: p.cleanup_period,
+                    cleanup_distance_factor: p.cleanup_distance_factor,
+                    reference_radius: p.reference_radius,
+                },
+                engine: h.config.engine.clone(),
+            },
+            interval: h.interval,
+            start_step: h.start_step,
+            created_at_unix: h.created_at_unix,
+            dust_budget: h.dust_budget,
+        };
+        let hb = bincode::serialize(&old).unwrap();
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(MAGIC);
+        v1.extend_from_slice(&1u32.to_le_bytes());
+        v1.extend_from_slice(&(hb.len() as u32).to_le_bytes());
+        v1.extend_from_slice(&hb);
+        v1.extend_from_slice(&frames);
+        fs::write(&path, v1).unwrap();
+
+        let mut r = repo.open(&path).unwrap();
+        assert_eq!(r.info().header, header());
+        assert_eq!(r.info().frames.len(), 3);
+        assert_eq!(r.read_frame(2).unwrap().step, 20);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -734,7 +900,8 @@ mod tests {
                     time: 1.0,
                     count: f.bodies.len() as u32,
                 },
-                &encode_frame(&f),
+                &encode_frame(&f, VERSION),
+                VERSION,
             )
             .unwrap();
             f.bodies = d.bodies;

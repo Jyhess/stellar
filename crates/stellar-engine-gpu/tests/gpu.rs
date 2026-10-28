@@ -23,6 +23,9 @@ fn params() -> PhysicsParams {
         cleanup_period: 0,
         cleanup_distance_factor: 10.0,
         reference_radius: 1.0,
+        cluster_link_length: 1.0,
+        cluster_min_bodies: 10,
+        cluster_min_mass: 0.0,
     }
 }
 
@@ -467,3 +470,154 @@ fn shared_device_exposes_current_bodies() {
     let own = GpuEngine::new(sphere(100, 3), params()).expect("carte graphique");
     assert!(own.live_view().is_none());
 }
+
+/// Système central, amas compact éjecté (lié à lui-même, pas au système) et
+/// corps isolé éjecté.
+fn ejection_scene(cluster: u64) -> BodySet {
+    let mut b = BodySet::default();
+    for i in 0..50 {
+        let a = i as f64 * 0.7;
+        b.push(
+            i,
+            DVec3::new(a.cos(), a.sin(), (a * 0.3).sin()) * 0.5,
+            DVec3::ZERO,
+            1.0,
+        );
+    }
+    for k in 0..cluster {
+        let a = k as f64 * 2.3;
+        b.push(
+            1_000 + k,
+            DVec3::new(0.0, 30.0, 0.0) + DVec3::new(a.cos(), a.sin(), (a * 0.5).cos()) * 0.2,
+            DVec3::new(0.0, 50.0, 0.0),
+            1.0,
+        );
+    }
+    b.push(
+        200,
+        DVec3::new(-30.0, 0.0, 0.0),
+        DVec3::new(-50.0, 0.0, 0.0),
+        1.0,
+    );
+    b
+}
+
+fn ejection_params() -> PhysicsParams {
+    let mut p = params();
+    p.softening = 0.01;
+    p.cleanup_period = 1;
+    p
+}
+
+#[test]
+fn cleanup_keeps_bound_ejected_cluster() {
+    let Some(mut e) = engine(state(ejection_scene(20)), ejection_params()) else {
+        return;
+    };
+    let r = e.step();
+    assert_eq!(r.removed, vec![200]);
+    assert_eq!(e.body_count(), 70);
+    let clusters = r.clusters.expect("amas décrits au nettoyage");
+    assert_eq!(clusters.len(), 1);
+    assert_eq!(clusters[0].bodies, 20);
+    assert!((clusters[0].mass - 20.0).abs() < 1e-4);
+    let ids = e.state().bodies.ids;
+    assert!(ids.contains(&1_019) && !ids.contains(&200));
+    // Les moments relus sont corrigés du corps éliminé.
+    let com = e.center_of_mass().expect("barycentre");
+    let expected = e.state().bodies.center_of_mass().expect("barycentre");
+    assert!((com - expected).length() < 1e-2, "{com} ≠ {expected}");
+}
+
+#[test]
+fn cleanup_removes_small_ejected_groups() {
+    let Some(mut e) = engine(state(ejection_scene(5)), ejection_params()) else {
+        return;
+    };
+    let r = e.step();
+    let mut removed = r.removed.clone();
+    removed.sort_unstable();
+    assert_eq!(removed, vec![200, 1_000, 1_001, 1_002, 1_003, 1_004]);
+    assert_eq!(e.body_count(), 50);
+}
+
+/// Champ de marée et insertion : le moteur GPU suit le moteur CPU.
+#[test]
+fn external_field_and_insertion_match_cpu() {
+    use stellar_domain::ExternalField;
+    let mut b = BodySet::default();
+    for i in 0..200u64 {
+        let a = i as f64 * 2.399_963;
+        let z = 1.0 - 2.0 * (i as f64 + 0.5) / 200.0;
+        let s = (1.0 - z * z).sqrt();
+        b.push(i, DVec3::new(a.cos() * s, a.sin() * s, z), DVec3::ZERO, 1.0);
+    }
+    let mut p = params();
+    p.softening = 0.5;
+    let Some(mut gpu) = engine(state(b.clone()), p) else {
+        return;
+    };
+    let mut cpu = CpuEngine::new(state(b), p);
+    let field = ExternalField::of_point_mass(1.0, 5_000.0, DVec3::new(30.0, 0.0, 0.0), DVec3::ZERO, 0.0);
+    let mut extra = BodySet::default();
+    extra.push(900, DVec3::new(0.0, 3.0, 0.0), DVec3::new(0.5, 0.0, 0.0), 2.0);
+    extra.push(901, DVec3::new(0.0, -3.0, 0.0), DVec3::new(-0.5, 0.0, 0.0), 2.0);
+    for k in 0..300 {
+        if k == 100 {
+            assert!(gpu.insert(&extra) && cpu.insert(&extra));
+        }
+        assert!(gpu.set_external_field(field) && cpu.set_external_field(field));
+        gpu.step();
+        cpu.step();
+    }
+    assert_eq!(gpu.body_count(), 202);
+    let (mg, mc) = (gpu.moments(), cpu.moments());
+    assert!((mg.mass - mc.mass).abs() < 1e-3);
+    // Le champ accélère tout le système vers la source.
+    // Le champ accélère tout le système vers la source (≈ 1,67 en x) ; la
+    // dérive propre du moteur GPU (simple précision, parcours par groupes)
+    // reste de l'ordre du centième.
+    assert!(mc.velocity.x > 1.5);
+    assert!(
+        (mg.velocity - mc.velocity).length() < 3e-2,
+        "{} ≠ {}",
+        mg.velocity,
+        mc.velocity
+    );
+    assert!((mg.center - mc.center).length() < 1e-2, "{} ≠ {}", mg.center, mc.center);
+    let ids = [900, 901, 17];
+    for (a, c) in gpu.positions_of(&ids).iter().zip(cpu.positions_of(&ids)) {
+        let (a, c) = (a.expect("présent"), c.expect("présent"));
+        assert!((a - c).length() < 5e-2, "{a} ≠ {c}");
+    }
+}
+
+/// Séparation d'un amas éjecté avec le moteur GPU.
+#[test]
+fn composite_split_on_gpu() {
+    use stellar_application::MultiSystem;
+    use stellar_engine_gpu::GpuEngineFactory;
+    if GpuEngineFactory::probe().is_err() {
+        return;
+    }
+    let mut p = ejection_params();
+    p.softening = 0.05;
+    let s = SimulationState {
+        initial_mass: Some(71.0),
+        ..state(ejection_scene(20))
+    };
+    let mut e = MultiSystem::new(std::sync::Arc::new(GpuEngineFactory::new()), s, p)
+        .expect("moteur composite");
+    let r = e.step();
+    assert_eq!(r.removed, vec![200]);
+    let systems = e.systems();
+    assert_eq!(systems.len(), 2);
+    assert_eq!(systems[1].bodies, 20);
+    for _ in 0..20 {
+        e.step();
+    }
+    let st = e.state();
+    assert_eq!(st.systems.len(), 2);
+    assert!(st.bodies.ids.contains(&1_019));
+}
+

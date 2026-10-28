@@ -28,6 +28,7 @@ fn main() {
             bodies: b,
             fates: vec![],
             dust_weight: 1.0,
+            groups: Vec::new(),
         }
     };
     let (a, b) = (mk(0.0), mk(1.0));

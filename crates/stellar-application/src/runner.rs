@@ -23,7 +23,7 @@ use crate::recording::{
 };
 use crate::trace::{TraceReference, TraceSet};
 use stellar_domain::{
-    ranking, BodyId, Diagnostics, EngineFactory, PhysicsEngine, SimulationConfig, SimulationState,
+    ranking, BodyId, Diagnostics, EjectedCluster, EngineFactory, SystemSummary, PhysicsEngine, SimulationConfig, SimulationState,
     Vec3,
 };
 
@@ -75,6 +75,13 @@ pub struct Snapshot {
     pub top: Vec<(BodyId, f64)>,
     /// Masse totale des corps présents dans la simulation.
     pub total_mass: f64,
+    /// Amas éjectés conservés, décrits au dernier nettoyage.
+    pub clusters: Arc<Vec<EjectedCluster>>,
+    /// Pas de ce nettoyage (`None` : aucun depuis le démarrage).
+    pub clusters_step: Option<u64>,
+    /// Sous-systèmes calculés séparément (vide ou un seul : simulation
+    /// d'un seul tenant).
+    pub systems: Vec<SystemSummary>,
     /// Cadence de calcul (moyenne glissante).
     pub steps_per_second: f64,
     /// Durée du dernier pas, en millisecondes.
@@ -99,6 +106,9 @@ impl Snapshot {
             watched: Vec::new(),
             top: Vec::new(),
             total_mass: 0.0,
+            clusters: Arc::default(),
+            clusters_step: None,
+            systems: Vec::new(),
             steps_per_second: 0.0,
             last_step_ms: 0.0,
             running,
@@ -228,7 +238,9 @@ impl SimulationHandle {
                 // Sauvegardes antérieures : masse initiale déduite des conditions initiales.
                 let initial_mass = state.initial_mass.or(Some(initial_count as f64));
                 let step = state.step;
-                let engine = match factory.create(state, params) {
+                let engine = match crate::MultiSystem::new(factory, state, params)
+                    .map(|e| Box::new(e) as Box<dyn PhysicsEngine>)
+                {
                     Ok(e) => e,
                     Err(message) => {
                         let mut s = Snapshot::initialising(false);
@@ -268,6 +280,8 @@ impl SimulationHandle {
                     full: Arc::new(SimulationState::default()),
                     top: Vec::new(),
                     total_mass: 0.0,
+                    clusters: Arc::default(),
+                    clusters_step: None,
                     recent: VecDeque::new(),
                     spare: None,
                     step,
@@ -454,6 +468,8 @@ struct Worker {
     full: Arc<SimulationState>,
     top: Vec<(BodyId, f64)>,
     total_mass: f64,
+    clusters: Arc<Vec<EjectedCluster>>,
+    clusters_step: Option<u64>,
     /// Copies récentes, dont les tableaux sont recyclés quand l'interface
     /// les a lâchées (évite de réallouer des centaines de mégaoctets).
     recent: VecDeque<Arc<SimulationState>>,
@@ -572,12 +588,23 @@ impl Worker {
     fn record_keyframe(&self, rec: &mut ActiveRecording) {
         let mut s = SimulationState::default();
         self.engine.write_state(&mut s);
+        let mut groups = Vec::new();
+        if s.systems.len() > 1 {
+            groups = vec![0u16; s.bodies.len()];
+            for (k, span) in s.systems.iter().enumerate() {
+                let end = (span.start + span.len).min(groups.len());
+                for g in &mut groups[span.start.min(end)..end] {
+                    *g = k.min(u16::MAX as usize) as u16;
+                }
+            }
+        }
         rec.recorder.push(Keyframe {
             step: self.step,
             time: s.time,
             bodies: s.bodies,
             fates: std::mem::take(&mut rec.pending),
             dust_weight: 1.0,
+            groups,
         });
         rec.last_frame_step = self.step;
         rec.next_step = self.step + rec.interval;
@@ -698,8 +725,12 @@ impl Worker {
 
     fn step(&mut self) {
         let t0 = Instant::now();
-        let report = self.engine.step();
+        let mut report = self.engine.step();
         self.step += 1;
+        if let Some(clusters) = report.clusters.take() {
+            self.clusters = Arc::new(clusters);
+            self.clusters_step = Some(self.step);
+        }
         let dt = t0.elapsed().as_secs_f64();
         self.last_step_ms = dt * 1e3;
         let inst = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -805,6 +836,9 @@ impl Worker {
             watched,
             top: self.top.clone(),
             total_mass: self.total_mass,
+            clusters: Arc::clone(&self.clusters),
+            clusters_step: self.clusters_step,
+            systems: self.engine.systems(),
             steps_per_second: self.steps_per_second,
             last_step_ms: self.last_step_ms,
             running: self.running,

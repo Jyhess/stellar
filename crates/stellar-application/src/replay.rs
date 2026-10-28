@@ -496,6 +496,7 @@ mod tests {
             bodies: b,
             fates,
             dust_weight: 1.0,
+            groups: Vec::new(),
         }
     }
 

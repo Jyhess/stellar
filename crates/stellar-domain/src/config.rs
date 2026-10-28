@@ -113,24 +113,40 @@ pub struct PhysicsParams {
     pub cleanup_distance_factor: f64,
     /// Rayon de référence (rayon du nuage initial).
     pub reference_radius: f64,
+    /// Amas éjectés (voir [`crate::ejection`]) : distance de liaison des
+    /// groupes « amis d'amis ».
+    pub cluster_link_length: f64,
+    /// Un amas lié d'au moins ce nombre de corps est conservé (0 = critère
+    /// ignoré).
+    pub cluster_min_bodies: u32,
+    /// … ou d'au moins cette part de la masse initiale (0 = critère ignoré).
+    pub cluster_min_mass: f64,
 }
+
+/// ε suggéré, rapporté à la distance moyenne entre voisins.
+pub const SOFTENING_PER_SPACING: f64 = 0.3;
 
 impl PhysicsParams {
     /// Valeurs par défaut déduites des conditions initiales :
     /// - ε = 0,3 × distance moyenne entre voisins ;
     /// - r₀ = 1 % de cette distance ;
-    /// - dt = t_ff / 500 (temps de chute libre).
+    /// - dt = t_ff / 500 (temps de chute libre) ;
+    /// - amas éjectés : liaison à la distance moyenne entre voisins, au moins
+    ///   10 corps ou 0,1 % de la masse initiale.
     pub fn suggested(initial: &InitialConditions, g: f64) -> Self {
         let spacing = initial.mean_spacing();
         Self {
             g,
             dt: initial.free_fall_time(g) / 500.0,
-            softening: 0.3 * spacing,
+            softening: SOFTENING_PER_SPACING * spacing,
             theta: 0.7,
             base_radius: 0.01 * spacing,
             cleanup_period: 100,
             cleanup_distance_factor: 10.0,
             reference_radius: initial.radius,
+            cluster_link_length: spacing,
+            cluster_min_bodies: 10,
+            cluster_min_mass: 1e-3,
         }
     }
 }

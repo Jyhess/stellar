@@ -2,7 +2,7 @@
 //!
 //! Implémentation de [`SimulationRepository`] sur le système de fichiers.
 //!
-//! ## Format `.stellar` (version 3)
+//! ## Format `.stellar` (version 5)
 //!
 //! | Octets      | Contenu                                         |
 //! |-------------|-------------------------------------------------|
@@ -15,9 +15,15 @@
 //! L'en-tête permet de lister les sauvegardes sans tout décompresser.
 //!
 //! bincode n'étant pas auto-descriptif, tout changement de [`SaveData`] ou
-//! de [`SaveSummary`] impose une nouvelle version ; les fichiers d'une autre
-//! version sont refusés.
+//! de [`SaveSummary`] impose une nouvelle version. Versions lues :
+//! - 5 : sous-systèmes (plages de corps) dans l'état ;
+//! - 4 : relue par [`legacy`] (un seul système) ;
+//! - 3 : relue par [`legacy`] (seuils des amas complétés par les valeurs
+//!   suggérées, un seul système).
+//!
+//! Les autres versions sont refusées.
 
+pub mod legacy;
 pub mod recording;
 
 pub use recording::FileRecordingRepository;
@@ -31,8 +37,10 @@ use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepo
 
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
-/// Version du format : seule celle-ci est lue.
-const VERSION: u32 = 3;
+/// Version écrite.
+const VERSION: u32 = 5;
+/// Plus ancienne version lue ([`legacy`]).
+const OLDEST: u32 = 3;
 const MAX_HEADER: u32 = 1 << 20;
 const ZSTD_LEVEL: i32 = 3;
 
@@ -97,7 +105,8 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-fn read_header(r: &mut impl Read) -> Result<SaveSummary, RepositoryError> {
+/// Lit l'en-tête ; renvoie aussi la version du fichier.
+fn read_header(r: &mut impl Read) -> Result<(SaveSummary, u32), RepositoryError> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)
         .map_err(|_| fmt("fichier tronqué"))?;
@@ -109,7 +118,7 @@ fn read_header(r: &mut impl Read) -> Result<SaveSummary, RepositoryError> {
     let mut word = [0u8; 4];
     r.read_exact(&mut word).map_err(io)?;
     let version = u32::from_le_bytes(word);
-    if version != VERSION {
+    if !(OLDEST..=VERSION).contains(&version) {
         return Err(RepositoryError::UnsupportedVersion(version));
     }
     r.read_exact(&mut word).map_err(io)?;
@@ -119,7 +128,7 @@ fn read_header(r: &mut impl Read) -> Result<SaveSummary, RepositoryError> {
     }
     let mut buf = vec![0u8; len as usize];
     r.read_exact(&mut buf).map_err(io)?;
-    bincode::deserialize(&buf).map_err(fmt)
+    Ok((bincode::deserialize(&buf).map_err(fmt)?, version))
 }
 
 impl SimulationRepository for FileRepository {
@@ -168,9 +177,19 @@ impl SimulationRepository for FileRepository {
 
     fn load(&self, path: &Path) -> Result<SaveData, RepositoryError> {
         let mut r = BufReader::new(File::open(path).map_err(io)?);
-        read_header(&mut r)?;
+        let (_, version) = read_header(&mut r)?;
         let dec = zstd::stream::Decoder::with_buffer(r).map_err(io)?;
-        let data: SaveData = bincode::deserialize_from(dec).map_err(fmt)?;
+        let data: SaveData = if version == 3 {
+            bincode::deserialize_from::<_, legacy::SaveDataV3>(dec)
+                .map_err(fmt)?
+                .into()
+        } else if version == 4 {
+            bincode::deserialize_from::<_, legacy::SaveDataV4>(dec)
+                .map_err(fmt)?
+                .into()
+        } else {
+            bincode::deserialize_from(dec).map_err(fmt)?
+        };
         if !data.state.bodies.is_consistent() {
             return Err(fmt("tableaux de corps incohérents"));
         }
@@ -193,7 +212,7 @@ impl SimulationRepository for FileRepository {
                 continue;
             };
             // Les fichiers illisibles sont ignorés plutôt que de bloquer la liste.
-            if let Ok(mut s) = read_header(&mut BufReader::new(file)) {
+            if let Ok((mut s, _)) = read_header(&mut BufReader::new(file)) {
                 s.path = path;
                 out.push(s);
             }
@@ -238,6 +257,18 @@ mod tests {
                 time: 1.5,
                 initial_energy: Some(-3.0),
                 initial_mass: Some(1_000.0),
+                systems: vec![
+                    stellar_domain::SystemSpan {
+                        start: 0,
+                        len: 900,
+                        size: 100.0,
+                    },
+                    stellar_domain::SystemSpan {
+                        start: 900,
+                        len: 100,
+                        size: 3.5,
+                    },
+                ],
             },
             view: Some(ViewState {
                 position: [1.0, 2.0, 3.0],
@@ -287,14 +318,96 @@ mod tests {
         let repo = FileRepository::new(&dir);
         let path = repo.save("autre", &sample()).unwrap();
         let mut bytes = fs::read(&path).unwrap();
-        bytes[8..12].copy_from_slice(&(VERSION - 1).to_le_bytes());
+        bytes[8..12].copy_from_slice(&(OLDEST - 1).to_le_bytes());
         fs::write(&path, bytes).unwrap();
         assert!(matches!(
             repo.load(&path),
-            Err(RepositoryError::UnsupportedVersion(v)) if v == VERSION - 1
+            Err(RepositoryError::UnsupportedVersion(v)) if v == OLDEST - 1
         ));
         assert!(repo.list().unwrap().is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Écrit une sauvegarde d'une version antérieure telle que l'ancien
+    /// programme la produisait.
+    fn write_old(path: &Path, version: u32, summary: &SaveSummary, data: &impl serde::Serialize) {
+        let mut w = Vec::new();
+        w.extend_from_slice(MAGIC);
+        w.extend_from_slice(&version.to_le_bytes());
+        let header = bincode::serialize(summary).unwrap();
+        w.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        w.extend_from_slice(&header);
+        let body = bincode::serialize(data).unwrap();
+        w.extend_from_slice(&zstd::encode_all(&body[..], ZSTD_LEVEL).unwrap());
+        fs::write(path, w).unwrap();
+    }
+
+    #[test]
+    fn reads_versions_3_and_4() {
+        let dir = temp_dir("v3");
+        fs::create_dir_all(&dir).unwrap();
+        let data = sample();
+        let p = data.config.physics;
+        let old = legacy::SaveDataV3 {
+            config: legacy::SimulationConfigV3 {
+                initial: data.config.initial,
+                physics: legacy::PhysicsParamsV3 {
+                    g: p.g,
+                    dt: p.dt,
+                    softening: p.softening,
+                    theta: p.theta,
+                    base_radius: p.base_radius,
+                    cleanup_period: p.cleanup_period,
+                    cleanup_distance_factor: p.cleanup_distance_factor,
+                    reference_radius: p.reference_radius,
+                },
+                engine: data.config.engine.clone(),
+            },
+            state: old_state(&data.state),
+            view: data.view,
+            recording: data.recording.clone(),
+            continue_recording: None,
+        };
+        let summary = SaveSummary {
+            path: PathBuf::new(),
+            name: "ancienne".to_owned(),
+            saved_at_unix: 1,
+            body_count: 1_000,
+            step: 42,
+            time: 1.5,
+            engine: data.config.engine.clone(),
+            recording: None,
+        };
+        let path = dir.join("ancienne.stellar");
+        write_old(&path, 3, &summary, &old);
+        let repo = FileRepository::new(&dir);
+        assert_eq!(repo.list().unwrap().len(), 1);
+        // Les seuils absents prennent les valeurs suggérées : on retrouve la
+        // configuration par défaut ; un seul système.
+        let mut expected = data.clone();
+        expected.state.systems.clear();
+        assert_eq!(repo.load(&path).unwrap(), expected);
+
+        let v4 = legacy::SaveDataV4 {
+            config: data.config.clone(),
+            state: old_state(&data.state),
+            view: data.view,
+            recording: data.recording.clone(),
+            continue_recording: None,
+        };
+        write_old(&path, 4, &summary, &v4);
+        assert_eq!(repo.load(&path).unwrap(), expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn old_state(s: &SimulationState) -> legacy::SimulationStateV4 {
+        legacy::SimulationStateV4 {
+            bodies: s.bodies.clone(),
+            step: s.step,
+            time: s.time,
+            initial_energy: s.initial_energy,
+            initial_mass: s.initial_mass,
+        }
     }
 
     #[test]

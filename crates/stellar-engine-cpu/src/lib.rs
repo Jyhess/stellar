@@ -5,7 +5,8 @@
 //!   d'ouverture θ, adoucissement de Plummer ε), parallélisées avec `rayon` ;
 //! - intégration **Leapfrog KDK** à pas fixe ;
 //! - **fusions** sur contact balayé, regroupées par union-find ;
-//! - **nettoyage** périodique des corps éjectés (non liés et lointains).
+//! - **nettoyage** périodique des corps éjectés (non liés et lointains),
+//!   amas liés préservés (règle du domaine, [`stellar_domain::ejection`]).
 //!
 //! Conformément à l'architecture retenue, ce module privilégie la
 //! performance (structure de tableaux, réordonnancement de Morton à chaque
@@ -20,10 +21,11 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use rayon::prelude::*;
+use stellar_domain::ejection::{sort_out, Candidate, EjectionRules};
 use stellar_domain::physics::{body_radius, merge, MergeInput};
 use stellar_domain::{
-    BodyId, BodySet, Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, PhysicsParams,
-    SimulationState, StepReport,
+    BodyId, BodySet, Diagnostics, EjectedCluster, EngineDescriptor, EngineFactory, ExternalField,
+    Moments, PhysicsEngine, PhysicsParams, SimulationState, StepReport,
 };
 
 use crate::collisions::{find_contacts, DisjointSets};
@@ -71,6 +73,13 @@ pub struct CpuEngine {
     step: u64,
     time: f64,
     diagnostics: Diagnostics,
+    /// Masse totale initiale (seuil de masse des amas éjectés).
+    initial_mass: f64,
+    moments: Moments,
+    /// Champ extérieur (sous-systèmes) : celui du premier demi-kick, et
+    /// celui de la fin du pas.
+    field_prev: Option<ExternalField>,
+    field_next: Option<ExternalField>,
 }
 
 impl CpuEngine {
@@ -94,6 +103,9 @@ impl CpuEngine {
             masses,
         } = state.bodies;
         let n = ids.len();
+        let initial_mass = state
+            .initial_mass
+            .unwrap_or_else(|| masses.iter().sum::<f64>());
         let mut engine = Self {
             params,
             pool,
@@ -108,6 +120,10 @@ impl CpuEngine {
             step: state.step,
             time: state.time,
             diagnostics: Diagnostics::default(),
+            initial_mass,
+            moments: Moments::default(),
+            field_prev: None,
+            field_next: None,
         };
         engine.pool_install(|e| e.compute_forces());
         engine
@@ -205,17 +221,47 @@ impl CpuEngine {
     }
 
     fn update_diagnostics(&mut self) {
-        let (kin, pot) = self
+        let (kin, pot, m, mx, mv) = self
             .mass
             .par_iter()
             .zip(self.vel.par_iter())
-            .zip(self.pot.par_iter())
-            .map(|((&m, v), &phi)| (0.5 * m * v.length_squared(), 0.5 * m * phi))
-            .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+            .zip(self.pot.par_iter().zip(self.pos.par_iter()))
+            .map(|((&m, v), (&phi, &x))| {
+                (0.5 * m * v.length_squared(), 0.5 * m * phi, m, x * m, *v * m)
+            })
+            .reduce(
+                || (0.0, 0.0, 0.0, DVec3::ZERO, DVec3::ZERO),
+                |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3, a.4 + b.4),
+            );
         self.diagnostics = Diagnostics {
             kinetic_energy: kin,
             potential_energy: pot,
         };
+        self.moments = if m > 0.0 {
+            Moments {
+                mass: m,
+                center: mx / m,
+                velocity: mv / m,
+            }
+        } else {
+            Moments::default()
+        };
+    }
+
+    /// Demi-kick, champ extérieur compris.
+    fn kick(&mut self, field: Option<ExternalField>, half: f64) {
+        match field {
+            Some(f) => self
+                .vel
+                .par_iter_mut()
+                .zip(self.acc.par_iter().zip(self.pos.par_iter()))
+                .for_each(|(v, (a, x))| *v += (*a + f.at(*x)) * half),
+            None => self
+                .vel
+                .par_iter_mut()
+                .zip(self.acc.par_iter())
+                .for_each(|(v, a)| *v += *a * half),
+        }
     }
 
     /// Fusionne les corps entrés en contact durant la phase de dérive.
@@ -277,11 +323,12 @@ impl CpuEngine {
         merges
     }
 
-    /// Supprime les corps éjectés : non liés ET au-delà de k × R du barycentre.
-    fn cleanup(&mut self) -> Vec<BodyId> {
+    /// Supprime les corps éjectés : non liés ET au-delà de k × R du
+    /// barycentre, sauf s'ils appartiennent à un amas lié significatif.
+    fn cleanup(&mut self) -> (BodySet, Vec<EjectedCluster>) {
         let n = self.pos.len();
         if n < 2 {
-            return Vec::new();
+            return (BodySet::default(), Vec::new());
         }
         let (m, mx, mv) = self
             .mass
@@ -294,25 +341,41 @@ impl CpuEngine {
                 |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2),
             );
         if m <= 0.0 {
-            return Vec::new();
+            return (BodySet::default(), Vec::new());
         }
         let (x_cm, v_cm) = (mx / m, mv / m);
         let limit = self.params.cleanup_distance_factor * self.params.reference_radius;
         let limit2 = limit * limit;
-        let alive: Vec<bool> = (0..n)
+        let far: Vec<usize> = (0..n)
             .into_par_iter()
-            .map(|i| {
-                let far = (self.pos[i] - x_cm).length_squared() > limit2;
-                let unbound = 0.5 * (self.vel[i] - v_cm).length_squared() + self.pot[i] > 0.0;
-                !(far && unbound)
+            .filter(|&i| (self.pos[i] - x_cm).length_squared() > limit2)
+            .collect();
+        let candidates: Vec<Candidate> = far
+            .iter()
+            .map(|&i| Candidate {
+                id: self.ids[i],
+                position: self.pos[i],
+                velocity: self.vel[i],
+                mass: self.mass[i],
+                potential: self.pot[i],
             })
             .collect();
-        let removed: Vec<BodyId> = (0..n).filter(|&i| !alive[i]).map(|i| self.ids[i]).collect();
+        let rules = EjectionRules::new(&self.params, self.initial_mass);
+        let ejection = sort_out(&candidates, v_cm, &rules);
+        let mut removed = BodySet::with_capacity(ejection.removed.len());
+        for &k in &ejection.removed {
+            let c = &candidates[k];
+            removed.push(c.id, c.position, c.velocity, c.mass);
+        }
         if !removed.is_empty() {
+            let mut alive = vec![true; n];
+            for &k in &ejection.removed {
+                alive[far[k]] = false;
+            }
             self.retain(&alive);
             self.update_diagnostics();
         }
-        removed
+        (removed, ejection.clusters)
     }
 
     /// Compacte tous les tableaux en ne gardant que les corps vivants.
@@ -345,10 +408,7 @@ impl CpuEngine {
         let half = 0.5 * dt;
 
         // Kick (½ dt)
-        self.vel
-            .par_iter_mut()
-            .zip(self.acc.par_iter())
-            .for_each(|(v, a)| *v += *a * half);
+        self.kick(self.field_prev.or(self.field_next), half);
 
         // Drift (dt), en mémorisant les positions de départ pour le balayage.
         self.old_pos.clear();
@@ -363,23 +423,27 @@ impl CpuEngine {
 
         // Forces au nouvel instant, puis Kick (½ dt)
         self.compute_forces();
-        self.vel
-            .par_iter_mut()
-            .zip(self.acc.par_iter())
-            .for_each(|(v, a)| *v += *a * half);
+        self.kick(self.field_next, half);
+        self.field_prev = self.field_next;
         self.update_diagnostics();
 
         self.step += 1;
         self.time += dt;
 
         let period = self.params.cleanup_period as u64;
-        let removed = if period > 0 && self.step.is_multiple_of(period) {
-            self.cleanup()
+        let (removed_bodies, clusters) = if period > 0 && self.step.is_multiple_of(period) {
+            let (removed, clusters) = self.cleanup();
+            (removed, Some(clusters))
         } else {
-            Vec::new()
+            (BodySet::default(), None)
         };
 
-        StepReport { merges, removed }
+        StepReport {
+            merges,
+            removed: removed_bodies.ids.clone(),
+            removed_bodies,
+            clusters,
+        }
     }
 }
 
@@ -438,6 +502,26 @@ impl PhysicsEngine for CpuEngine {
             }
         }
         out
+    }
+
+    fn moments(&self) -> Moments {
+        self.moments
+    }
+
+    fn set_external_field(&mut self, field: ExternalField) -> bool {
+        self.field_next = Some(field);
+        true
+    }
+
+    fn insert(&mut self, bodies: &BodySet) -> bool {
+        self.ids.extend_from_slice(&bodies.ids);
+        self.pos.extend_from_slice(&bodies.positions);
+        self.vel.extend_from_slice(&bodies.velocities);
+        self.mass.extend_from_slice(&bodies.masses);
+        self.acc.resize(self.ids.len(), DVec3::ZERO);
+        self.pot.resize(self.ids.len(), 0.0);
+        self.update_diagnostics();
+        true
     }
 
     fn diagnostics(&self) -> Diagnostics {

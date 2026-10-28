@@ -8,7 +8,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{BodyId, PhysicsParams, SimulationState, Vec3};
+use crate::{
+    BodyId, BodySet, EjectedCluster, ExternalField, Moments, PhysicsParams, SimulationState,
+    SystemSummary, Vec3,
+};
 
 /// Description d'un moteur, affichée dans l'interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +30,13 @@ pub struct StepReport {
     pub merges: Vec<(BodyId, BodyId)>,
     /// Corps éliminés par le nettoyage des éjectés.
     pub removed: Vec<BodyId>,
+    /// Les mêmes corps, tels qu'au moment de leur élimination (mêmes
+    /// identifiants, même ordre) : un système composite peut les confier à
+    /// un autre sous-système.
+    pub removed_bodies: BodySet,
+    /// Amas éjectés conservés, décrits à chaque nettoyage (`None` hors
+    /// nettoyage).
+    pub clusters: Option<Vec<EjectedCluster>>,
 }
 
 /// Grandeurs globales calculées par le moteur à l'issue d'un pas.
@@ -85,6 +95,39 @@ pub trait PhysicsEngine: Send {
     /// passe alors par les copies de l'état ([`Self::write_state`]).
     fn live_view(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         None
+    }
+
+    /// Masse, barycentre et vitesse du barycentre au dernier pas.
+    fn moments(&self) -> Moments {
+        let b = self.state().bodies;
+        let mass = b.total_mass();
+        Moments {
+            mass,
+            center: b.center_of_mass().unwrap_or_default(),
+            velocity: if mass > 0.0 { b.momentum() / mass } else { Vec3::ZERO },
+        }
+    }
+
+    /// Champ extérieur valable à la fin du prochain pas (voir
+    /// [`crate::systems`]) ; le premier demi-kick du pas utilise le champ
+    /// fixé au pas précédent (ou celui-ci, la première fois). Renvoie
+    /// `false` si le moteur ne sait pas en tenir compte.
+    fn set_external_field(&mut self, field: ExternalField) -> bool {
+        let _ = field;
+        false
+    }
+
+    /// Ajoute des corps (vitesses synchronisées ; leur accélération propre
+    /// n'est connue qu'au pas suivant). Renvoie `false` si le moteur ne le
+    /// permet pas, ou plus (capacité atteinte) : l'appelant le reconstruit.
+    fn insert(&mut self, bodies: &BodySet) -> bool {
+        let _ = bodies;
+        false
+    }
+
+    /// Sous-systèmes calculés séparément (vide pour un moteur simple).
+    fn systems(&self) -> Vec<SystemSummary> {
+        Vec::new()
     }
 }
 

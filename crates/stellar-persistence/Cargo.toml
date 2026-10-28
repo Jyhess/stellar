@@ -9,6 +9,7 @@ license.workspace = true
 stellar-domain.workspace = true
 stellar-application.workspace = true
 bincode.workspace = true
+serde.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]

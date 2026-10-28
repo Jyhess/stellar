@@ -18,7 +18,7 @@
 - Corps sphériques, **r = r₀ · m^(1/3)** ; r₀ réglable (défaut déduit de la densité du nuage).
 - Contact : **détection balayée** (distance minimale sur le pas, grille spatiale) ; fusions en chaîne via union-find.
 - Fusion : masses additionnées, position au barycentre, quantité de mouvement conservée ; le corps résultant hérite d'un identifiant stable (le suivi caméra s'y reporte).
-- Espace ouvert. **Nettoyage périodique** (tous les N pas) : suppression des corps **non liés (énergie > 0) ET au-delà de k × rayon initial** du barycentre.
+- Espace ouvert. **Nettoyage périodique** (tous les N pas) : suppression des corps **non liés (énergie > 0) ET au-delà de k × rayon initial** du barycentre, sauf s'ils appartiennent à un amas éjecté lié et significatif (voir v1.3).
 
 ## Création d'une simulation
 - Répartition : **sphère** (défaut) ou **disque** (épaisseur, profil de densité uniforme/exponentiel).
@@ -75,3 +75,19 @@
 - Moteur CPU : parcours par groupes de 32 corps voisins au plus, évaluation AVX2/FMA si disponible ; contacts sans table de hachage (curseurs sur les clés de cellule triées).
 - Interface : présentation en mode Mailbox quand il est garanti (NVIDIA, AMD sous Vulkan ; DirectX 12) — l'attente de l'écran en mode Fifo bloquait chaque soumission du moteur GPU d'une image entière ; `STELLAR_STATS=1` journalise pas/s et images/s.
 - Formats : seule la version courante de `.stellar` (v3) est lue ; la relecture des versions 1 et 2 est retirée.
+
+## Évolutions (v1.3) — amas éjectés
+- Nettoyage : les corps lointains (au-delà de k × R) sont regroupés par « amis d'amis » (distance de liaison, par défaut la distance moyenne initiale entre voisins) ; chaque groupe est épuré de ses membres non liés (énergie dans le référentiel du groupe, sous son seul potentiel ; les plus énergiques retirés d'abord) ; un groupe lié d'au moins n corps (10 par défaut) **ou** d'au moins une part de la masse initiale (0,1 % par défaut, un corps isolé pouvant suffire) est conservé en entier. Les autres corps lointains non liés au système sont éliminés comme avant.
+- Règle du domaine commune aux moteurs CPU et GPU ; le GPU repère les corps lointains et ne relit qu'eux aux pas de nettoyage.
+- Panneau « Corps » : liste des amas éjectés conservés au dernier nettoyage (repère, corps, masse, distance au barycentre), sélection du repère par clic ; absente en relecture.
+- Paramètres avancés : distance de liaison (déduite automatiquement), nombre de corps et part de masse minimaux.
+- Formats : sauvegardes `.stellar` version 4 (version 3 relue, seuils complétés par les valeurs suggérées), enregistrements `.stellarec` version 2 (version 1 relue : seul l'en-tête change).
+
+## Évolutions (v1.4) — sous-simulations
+- Un amas éjecté devient une sous-simulation quand (taille de l'amas + taille du système) < 0,3 × distance (taille d'un amas : deux fois son rayon de demi-masse) : moteur propre (même type), repère propre (origine au barycentre), même pas de temps.
+- Couplage par champ linéaire (accélération au barycentre et tenseur de marée des autres sous-systèmes, sources ponctuelles), sur les barycentres extrapolés à la fin du pas ; énergie totale = énergies propres + énergies d'interaction.
+- Réunion quand (somme des tailles) > 0,6 × distance ; recentrage quand le barycentre s'écarte de l'origine de plus d'une demi-taille.
+- Corps éliminés par une sous-simulation secondaire : confiés au système principal (le plus massif).
+- Panneau « Corps » : liste des sous-simulations (repère, corps, masse, distance), sélection du repère par clic.
+- Formats : sauvegardes `.stellar` version 5 (plages de corps par sous-système ; versions 4 et 3 relues), enregistrements `.stellarec` version 3 (une boîte de quantification par sous-système ; versions 2 et 1 relues, un enregistrement repris garde sa version).
+

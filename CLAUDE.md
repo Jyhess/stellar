@@ -46,8 +46,8 @@ rotation) et `STELLAR_GPU_PROFILE=1` (temps par noyau).
 
 | Crate | Rôle |
 |---|---|
-| `stellar-domain` | Corps (`BodySet`, structure de tableaux), état, paramètres, règles physiques, traits `PhysicsEngine` / `EngineFactory`. Aucune dépendance d'infrastructure. |
-| `stellar-application` | Génération des conditions initiales, thread de simulation (`SimulationHandle`, instantanés publiés), registre des moteurs, enregistrement (`Recorder`), relecture, ports, façade `SimulatorService`. |
+| `stellar-domain` | Corps (`BodySet`, structure de tableaux), état, paramètres, règles physiques (dont le nettoyage des éjectés et la détection des amas, `ejection.rs`), traits `PhysicsEngine` / `EngineFactory`. Aucune dépendance d'infrastructure. |
+| `stellar-application` | Génération des conditions initiales, thread de simulation (`SimulationHandle`, instantanés publiés), moteur composite des sous-simulations (`MultiSystem`, `systems.rs`), registre des moteurs, enregistrement (`Recorder`), relecture, ports, façade `SimulatorService`. |
 | `stellar-engine-cpu` | Barnes-Hut sur octree de Morton (parcours par groupes de 32 corps, évaluation AVX2), Leapfrog KDK à pas fixe, contacts balayés (grille hiérarchique + union-find), fusions, nettoyage. |
 | `stellar-engine-gpu` | Même physique en shaders WGSL, simple précision : tri radix, LBVH de Karras (topologie refaite tous les 4 pas, réajustée entre-temps), parcours de Barnes-Hut par groupes de 128 corps, paires de contact sur GPU, union-find des fusions sur CPU. |
 | `stellar-persistence` | Fichiers `.stellar` (sauvegardes) et `.stellarec` (enregistrements). |
@@ -96,6 +96,16 @@ Règles :
 - **Précision** : positions en `f64` côté CPU ; le rendu travaille relativement
   à une ancre (`anchor`) pour rester précis en `f32`. Le moteur GPU est en
   simple précision (erreur médiane sur l'accélération ~10⁻³ à θ = 0,5).
+- **Sous-simulations** : le thread de simulation enveloppe toujours le
+  moteur dans `MultiSystem` (un seul sous-système le plus souvent, origine
+  nulle). Chaque sous-système a son moteur et son repère ; `state()` renvoie
+  les corps en coordonnées globales, rangés par sous-système
+  (`SimulationState::systems`). Affichage direct : `SystemsView` (un
+  `BodiesView` et une origine par sous-système). Traits du domaine :
+  `set_external_field` (champ de la fin du pas ; le premier demi-kick
+  reprend celui du pas précédent), `insert`, `moments`, `systems`,
+  `StepReport::removed_bodies`. Les opérations de structure (séparation,
+  réunion, recentrage) reconstruisent les moteurs depuis leur état.
 - **Polices egui** : certains caractères manquent (●, ✦, U+202F) ; vérifier
   qu'un symbole s'affiche avant de l'utiliser.
 - **Caméra** : orientation par quaternion (repère local : X avant, −Y droite,
@@ -105,13 +115,20 @@ Règles :
 
 ## Formats de fichiers
 
-- **`.stellar`** (version 3, seule lue) : signature, version, en-tête
+- **`.stellar`** (version 5 ; versions 4 et 3 relues) : signature, version, en-tête
   `SaveSummary` lisible sans décompression, puis `SaveData` en bincode
   compressé zstd. bincode n'est pas auto-descriptif : **tout ajout de champ
-  impose une nouvelle version** ; les fichiers d'une autre version sont
-  refusés (la relecture des anciennes formes a été retirée à la demande de
-  l'utilisateur, les sauvegardes existantes pouvant être perdues).
-- **`.stellarec`** : instantanés tous les N pas (positions 21 bits, vitesses
+  impose une nouvelle version** et une copie de l'ancienne forme dans
+  `stellar-persistence/src/legacy.rs`, avec un test de relecture.
+  `PhysicsParams` figure aussi dans l'en-tête des enregistrements : le
+  modifier change les deux formats.
+  - Version 4 : seuils des amas éjectés (`cluster_link_length`,
+    `cluster_min_bodies`, `cluster_min_mass`).
+  - Version 5 : sous-systèmes dans l'état (`SystemSpan` : plage, taille).
+- **`.stellarec`** (version 3 ; versions 2 et 1 relues — en-tête de la
+  version 1, instantanés sans sous-systèmes avant la version 3 ; un
+  enregistrement repris garde la version de son fichier) : instantanés tous
+  les N pas, une boîte de quantification par sous-système (positions 21 bits, vitesses
   16 bits, masses, devenir des corps disparus), zstd, index en fin de fichier
   reconstructible si le fichier n'a pas été clos. Budget de poussière
   optionnel (sélection stable par identifiant). Relecture par interpolation
@@ -142,6 +159,34 @@ Règles :
 
 ## En attente
 
+- **Améliorations demandées, à faire dans cet ordre** (réponses de
+  l'utilisateur entre crochets) :
+  1. création : curseur logarithmique du nombre de corps (100 k, 1 M,
+     10 M…) jusqu'à 1 milliard ou au maximum supporté, au lieu du champ
+     [crans 1-2-5 à partir de 1 000, petit champ de saisie exacte à côté] ;
+  2. vitesse initiale orbitale par défaut ;
+  3. un « ? » d'explication pour chaque paramètre ;
+  4. si possible, estimation de la durée du premier pas ;
+  5. corps sélectionné hors des 10 plus massifs : une ligne de plus dans le
+     classement avec ses informations ;
+  6. traces : masse et part de la masse à côté du code couleur ;
+  7. supprimer la trace absolue : référentiel = corps sélectionné,
+     barycentre de la simulation ou barycentre de l'amas local [amas lié du
+     corps suivi, même règle que le nettoyage, recalculé périodiquement] ;
+  8. supprimer une simulation ou un enregistrement, avec confirmation
+     [case « supprimer aussi le fichier lié », décochée ; corbeille] ;
+  9. nommer une simulation ; nom par défaut : date et abréviations du
+     nombre de particules, de la répartition et de la vitesse initiale
+     [`2026-10-28_1M_sph_orb` ; heure ajoutée si le nom existe] ;
+  10. renommer simulation et enregistrement (fichiers compris ; sauvegarde
+      et enregistrement liés renommés ensemble) ;
+  11. langue anglaise sélectionnable, langue du PC par défaut [interface
+      seulement ; choix dans le menu, mémorisé] ;
+  12. lancer une simulation sans l'afficher, avec enregistrement
+      automatique [écran de suivi sans rendu 3D ET mode console ; arrêt à
+      une cible au choix (pas, temps simulé, durée réelle) ou manuel ;
+      enregistrement clos et sauvegarde finale à l'arrêt].
+
 - Pistes de performance restantes (RTX 4060 Ti, 1 M de corps : ~14 ms par
   pas, dont ~9 ms pour les forces) :
   - tri radix (8 passes de 4 bits, ~1,5 ms à 1 M) : chiffres plus larges ;
@@ -153,4 +198,9 @@ Règles :
     quadratiques dans le cœur dense, plafonnées à 2¹⁸ ; planification des
     fusions sur le CPU, relecture des paires) ;
   - préparer l'encodage du pas suivant pendant le calcul (~0,3 à 0,5 ms par
-    pas, sensible aux petits nombres de corps).
+    pas, sensible aux petits nombres de corps) ;
+  - sous-simulations : chaque petite sous-simulation sur GPU coûte ~0,6 ms
+    par pas (soumission et attente propres) ; les calculer sur le CPU en
+    deçà de quelques milliers de corps, ou regrouper leurs soumissions ;
+    les évadés d'une sous-simulation sont insérés sans accélération propre
+    pour leur premier demi-kick.

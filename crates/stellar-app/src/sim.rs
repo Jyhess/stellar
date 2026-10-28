@@ -13,8 +13,7 @@ use stellar_application::recording::is_dust;
 use stellar_application::trace::{relative_to, MAX_TAIL};
 use stellar_application::{Phase, SimulatorService, Snapshot, TraceReference, ViewState};
 use stellar_domain::physics::body_radius;
-use stellar_domain::{ranking, BodyId};
-use stellar_engine_gpu::BodiesView;
+use stellar_domain::{ranking, BodyId, SystemsView};
 
 use crate::camera::{Camera, Mode, MAX_FOV, MIN_FOV};
 use crate::format;
@@ -140,7 +139,7 @@ pub struct SimScreen {
     cache: SnapshotCache,
     /// Corps du moteur GPU, dessinés directement (sans copie) quand le
     /// moteur calcule sur la carte de l'interface.
-    direct: Option<Arc<BodiesView>>,
+    direct: Option<Arc<SystemsView>>,
     /// Corps dont le thread de calcul publie la position à chaque instantané.
     sent_watch: Option<BodyId>,
 
@@ -313,7 +312,7 @@ impl SimScreen {
                 .source
                 .live()
                 .and_then(|h| h.live_view())
-                .and_then(|v| v.downcast::<BodiesView>().ok());
+                .and_then(|v| v.downcast::<SystemsView>().ok());
         }
         // Les grandeurs tirées de l'état complet ne sont recalculées que
         // lorsqu'il change (avec l'affichage direct, la plupart des
@@ -1127,7 +1126,10 @@ impl SimScreen {
         let source = match &self.direct {
             Some(view) => {
                 self.anchor = self.camera.position;
-                PointsSource::Direct(Arc::clone(view))
+                PointsSource::Direct {
+                    view: Arc::clone(view),
+                    anchor: self.anchor,
+                }
             }
             None => {
                 self.prepare_batch();
@@ -1707,12 +1709,119 @@ impl SimScreen {
                             ui.end_row();
                         }
                     });
+                if self.source.replay().is_none() {
+                    ui.separator();
+                    if let Some(id) = self.clusters_panel(ui, &snap) {
+                        clicked_id = Some(id);
+                    }
+                }
             });
         if let Some(id) = clicked_id {
             if let Some(i) = self.snapshot.state.bodies.index_of(id) {
                 self.select_index(i);
             }
         }
+    }
+
+    /// Amas éjectés conservés par le nettoyage ; renvoie le corps repère
+    /// de l'amas cliqué.
+    fn clusters_panel(&self, ui: &mut egui::Ui, snap: &Snapshot) -> Option<BodyId> {
+        /// Amas affichés au plus.
+        const SHOWN: usize = 10;
+        let mut clicked = None;
+        if snap.systems.len() > 1 {
+            ui.label(RichText::new("Sous-simulations").strong()).on_hover_text(
+                "Amas éjectés détachés : chacun est calculé à part, dans son propre                  repère, et ressent les autres par leur champ de marée. Deux                  sous-simulations qui se rapprochent sont réunies.",
+            );
+            egui::Grid::new("systems")
+                .num_columns(4)
+                .spacing([10.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Repère").weak());
+                    ui.label(RichText::new("Corps").weak());
+                    ui.label(RichText::new("Masse").weak());
+                    ui.label(RichText::new("Distance").weak());
+                    ui.end_row();
+                    for s in &snap.systems {
+                        let sel = self.selected == Some(s.anchor);
+                        if ui
+                            .selectable_label(sel, format!("#{}", s.anchor))
+                            .on_hover_text(format!(
+                                "Taille : {}
+Vitesse : {}",
+                                format::real(s.size),
+                                format::real(s.velocity.length())
+                            ))
+                            .clicked()
+                        {
+                            clicked = Some(s.anchor);
+                        }
+                        ui.label(RichText::new(format::count(s.bodies as u64)).monospace());
+                        ui.label(RichText::new(format::real(s.mass)).monospace());
+                        ui.label(
+                            RichText::new(format::real((s.center - self.cache.barycenter).length()))
+                                .monospace(),
+                        );
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(4.0);
+        }
+        ui.label(RichText::new("Amas éjectés").strong())
+            .on_hover_text(
+                "Groupes liés de corps lointains, conservés par le nettoyage                  (seuils dans les paramètres avancés). Cliquer sur un amas                  sélectionne son corps le plus massif.",
+            );
+        let Some(step) = snap.clusters_step else {
+            ui.label(RichText::new("Aucun nettoyage effectué pour l'instant.").weak());
+            return None;
+        };
+        if snap.clusters.is_empty() {
+            ui.label(
+                RichText::new(format!("Aucun au dernier nettoyage (pas {}).", format::count(step)))
+                    .weak(),
+            );
+            return None;
+        }
+        ui.label(
+            RichText::new(format!("Au dernier nettoyage (pas {}) :", format::count(step))).weak(),
+        );
+        egui::Grid::new("clusters")
+            .num_columns(4)
+            .spacing([10.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(RichText::new("Repère").weak());
+                ui.label(RichText::new("Corps").weak());
+                ui.label(RichText::new("Masse").weak());
+                ui.label(RichText::new("Distance").weak());
+                ui.end_row();
+                for c in snap.clusters.iter().take(SHOWN) {
+                    let sel = self.selected == Some(c.anchor);
+                    if ui
+                        .selectable_label(sel, format!("#{}", c.anchor))
+                        .on_hover_text(format!(
+                            "Rayon de demi-masse : {}
+Vitesse : {}",
+                            format::real(c.half_mass_radius),
+                            format::real(c.velocity.length())
+                        ))
+                        .clicked()
+                    {
+                        clicked = Some(c.anchor);
+                    }
+                    ui.label(RichText::new(format::count(c.bodies as u64)).monospace());
+                    ui.label(RichText::new(format::real(c.mass)).monospace());
+                    ui.label(
+                        RichText::new(format::real((c.center - self.cache.barycenter).length()))
+                            .monospace(),
+                    );
+                    ui.end_row();
+                }
+            });
+        let hidden = snap.clusters.len().saturating_sub(SHOWN);
+        if hidden > 0 {
+            ui.label(RichText::new(format!("… et {} autres", format::count(hidden as u64))).weak());
+        }
+        clicked
     }
 
     fn traces_panel(&mut self, ui: &mut egui::Ui) {

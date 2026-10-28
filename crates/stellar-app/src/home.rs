@@ -552,7 +552,7 @@ impl HomeScreen {
         });
         ui.checkbox(
             &mut self.auto_physics,
-            "Déduire automatiquement dt, ε, r₀ des conditions initiales",
+            "Déduire automatiquement dt, ε, r₀ et la liaison des amas des conditions initiales",
         );
         if !self.auto_physics && ui.button("Recalculer les valeurs suggérées").clicked() {
             self.physics = PhysicsParams::suggested(ic, self.g);
@@ -592,6 +592,18 @@ impl HomeScreen {
                             .max_decimals(6),
                     );
                     ui.end_row();
+                    ui.label("Amas éjectés : liaison")
+                        .on_hover_text(
+                            "Deux corps lointains plus proches que cette distance                              appartiennent au même groupe (par défaut : distance                              moyenne entre voisins au départ).",
+                        );
+                    let sp = p.cluster_link_length.max(1e-6) * 0.01;
+                    ui.add(
+                        egui::DragValue::new(&mut p.cluster_link_length)
+                            .range(0.0..=1e9)
+                            .speed(sp)
+                            .max_decimals(6),
+                    );
+                    ui.end_row();
                 });
         });
         egui::Grid::new("phys-grid-2")
@@ -611,6 +623,28 @@ impl HomeScreen {
                         .range(1.0..=1e6)
                         .speed(0.1),
                 );
+                ui.end_row();
+                ui.label("Amas éjectés : corps au moins").on_hover_text(
+                    "Un amas éjecté lié d'au moins ce nombre de corps est conservé                      par le nettoyage (0 : critère ignoré).",
+                );
+                ui.add(egui::DragValue::new(&mut p.cluster_min_bodies).range(0..=10_000_000));
+                ui.end_row();
+                ui.label("… ou masse au moins").on_hover_text(
+                    "… ou d'au moins cette part de la masse initiale, même s'il                      ne compte qu'un corps (0 : critère ignoré).",
+                );
+                let mut percent = p.cluster_min_mass * 100.0;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut percent)
+                            .range(0.0..=100.0)
+                            .speed(0.01)
+                            .max_decimals(4)
+                            .suffix(" %"),
+                    )
+                    .changed()
+                {
+                    p.cluster_min_mass = percent / 100.0;
+                }
                 ui.end_row();
                 ui.label("Moteur de calcul");
                 let engines = service.engines();
@@ -635,8 +669,9 @@ impl HomeScreen {
         self.physics.reference_radius = ic.radius;
     }
 
-    /// En mode automatique, dt, ε et r₀ suivent les conditions initiales ;
-    /// θ et le nettoyage restent ceux saisis.
+    /// En mode automatique, dt, ε, r₀ et la liaison des amas suivent les
+    /// conditions initiales ; θ, le nettoyage et les seuils des amas restent
+    /// ceux saisis.
     fn apply_auto(&mut self, ic: &InitialConditions) {
         if self.auto_physics {
             let keep = self.physics;
@@ -644,6 +679,8 @@ impl HomeScreen {
             self.physics.theta = keep.theta;
             self.physics.cleanup_period = keep.cleanup_period;
             self.physics.cleanup_distance_factor = keep.cleanup_distance_factor;
+            self.physics.cluster_min_bodies = keep.cluster_min_bodies;
+            self.physics.cluster_min_mass = keep.cluster_min_mass;
         }
         self.physics.g = self.g;
         self.physics.reference_radius = ic.radius;

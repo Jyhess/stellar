@@ -12,3 +12,6 @@ rand.workspace = true
 rand_pcg.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
+
+[dev-dependencies]
+stellar-engine-cpu.workspace = true
