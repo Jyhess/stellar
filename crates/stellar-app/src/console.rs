@@ -25,8 +25,15 @@ pub const FLAG: &str = "--sans-affichage";
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
+/// Options d'aide.
+const HELP: [&str; 3] = ["--help", "-h", "--aide"];
+
 fn usage() -> String {
-    tr!("Usage : stellar.exe --sans-affichage [options]
+    tr!("Usage : stellar.exe                         interface graphique
+        stellar.exe --sans-affichage [options]   simulation sans fenêtre
+        stellar.exe --help                       cette aide
+
+Options de --sans-affichage :
 
   --corps N          nombre de particules (défaut : 1000000)
   --rayon R          rayon du nuage (défaut : 100)
@@ -110,8 +117,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let m: f64 = num(&value(&mut it, a)?, a)?;
                 o.target = RunTarget::WallTime(Duration::from_secs_f64(m.max(0.0) * 60.0));
             }
-            "--aide" | "-h" | "--help" => return Err(String::new()),
-            other => return Err(tr!("option inconnue : {}", other)),
+            h if HELP.contains(&h) => return Err(String::new()),
+            other => return Err(tr!("argument inconnu : {}", other)),
         }
     }
     o.initial.velocity = match velocity.as_str() {
@@ -149,17 +156,41 @@ fn setup_console() {
 #[cfg(not(windows))]
 fn setup_console() {}
 
+/// Vérifie la ligne de commande : options de la simulation sans fenêtre
+/// (`Err("")` : aide demandée ; `Err(message)` : erreur).
+fn check(args: &[String]) -> Result<Options, String> {
+    if args.iter().any(|a| HELP.contains(&a.as_str())) {
+        return Err(String::new());
+    }
+    if !args.iter().any(|a| a == FLAG) {
+        let Some(first) = args.first() else {
+            return Err(String::new());
+        };
+        // Option de simulation (seule, ou suivie de sa valeur) sans le mode.
+        let known = parse(std::slice::from_ref(first)).is_ok()
+            || parse(&args[..args.len().min(2)]).is_ok();
+        return Err(if known {
+            tr!("l'option {} demande --sans-affichage", first)
+        } else {
+            tr!("argument inconnu : {}", first)
+        });
+    }
+    parse(args)
+}
+
 /// Exécute le mode console ; renvoie le code de sortie.
 pub fn run(args: &[String]) -> i32 {
     setup_console();
-    let o = match parse(args) {
+    let o = match check(args) {
         Ok(o) => o,
-        Err(e) => {
-            if !e.is_empty() {
-                eprintln!("{e}\n");
-            }
+        Err(e) if e.is_empty() => {
             println!("{}", usage());
-            return if e.is_empty() { 0 } else { 2 };
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("{}", tr!("Erreur : {}", e));
+            eprintln!("{}", crate::i18n::tr("Voir stellar.exe --help pour la liste des options."));
+            return 2;
         }
     };
     let mut registry = EngineRegistry::new();
@@ -272,5 +303,18 @@ mod tests {
         assert_eq!(o.initial.velocity, VelocityMode::CircularOrbital { spread: 0.1 });
         assert!(parse(&args("--inconnue")).is_err());
         assert!(parse(&args("--corps")).is_err());
+    }
+
+    #[test]
+    fn help_and_unknown_arguments() {
+        assert_eq!(check(&args("--help")).err().as_deref(), Some(""));
+        assert_eq!(check(&args("--sans-affichage -h")).err().as_deref(), Some(""));
+        let e = check(&args("--bidule")).err().unwrap();
+        assert!(e.contains("--bidule"), "{e}");
+        let e = check(&args("--sans-affichage --pas 10 fichier.txt")).err().unwrap();
+        assert!(e.contains("fichier.txt"), "{e}");
+        let e = check(&args("--corps 1000")).err().unwrap();
+        assert!(e.contains("--sans-affichage"), "{e}");
+        assert!(check(&args("--sans-affichage --pas 10")).is_ok());
     }
 }

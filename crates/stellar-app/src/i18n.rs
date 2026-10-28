@@ -177,8 +177,13 @@ const EN: &[(&str, &str)] = &[
     ("Circulaire — vitesse imposée", "Circular — set speed"),
     ("Circulaire — vitesse orbitale", "Circular — orbital speed"),
     ("Radiale, vers le centre", "Radial, towards the centre"),
+    ("manuel (bouton d'arrêt)", "manual (stop button)"),
+    ("après un nombre de pas", "after a number of steps"),
+    ("après un temps simulé", "after a simulated time"),
+    ("après une durée réelle", "after a real duration"),
     ("Stellar — simulateur gravitationnel N-corps (calcul CPU ou GPU, rendu GPU)", "Stellar — gravitational N-body simulator (CPU or GPU computation, GPU rendering)"),
     ("Quitter", "Quit"),
+    ("Langue", "Language"),
     ("Effondrement gravitationnel et fusion de particules", "Gravitational collapse and particle mergers"),
     ("enregistrement « {} »", "recording “{}”"),
     ("sauvegarde « {} »", "save “{}”"),
@@ -231,10 +236,14 @@ const EN: &[(&str, &str)] = &[
     ("Norme de la vitesse, tirée uniformément entre le minimum et le maximum.", "Speed magnitude, drawn uniformly between the minimum and the maximum."),
     ("Vitesse caractéristique √(GM/R) ≈ {} · temps de chute libre ≈ {}", "Characteristic speed √(GM/R) ≈ {} · free-fall time ≈ {}"),
     ("Paramètres avancés", "Advanced parameters"),
+    ("Sans affichage (enregistrement automatique)", "Without display (automatic recording)"),
+    ("Calcule sans dessiner les corps, toute la carte graphique pour le calcul. Un écran de suivi montre l'avancement ; à la cible (ou à l'arrêt), l'enregistrement est clos et l'état final sauvegardé. Aussi en console : stellar.exe --sans-affichage (voir le README).", "Computes without drawing the bodies, the whole graphics card for the computation. A monitoring screen shows the progress; at the target (or when stopped), the recording is closed and the final state saved. Also from the console: stellar.exe --sans-affichage (see the README)."),
+    ("   Arrêt :", "   Stop:"),
+    ("pas", "steps"),
+    ("(≈ {} pas)", "(≈ {} steps)"),
     ("Enregistrer dès le départ (pour relecture fluide)", "Record from the start (for smooth playback)"),
     ("   Un instantané tous les", "   One snapshot every"),
     ("Intervalle entre deux instantanés enregistrés ; la relecture interpole entre eux.", "Interval between two recorded snapshots; playback interpolates between them."),
-    ("pas", "steps"),
     ("Poussière limitée à", "Dust limited to"),
     ("Nombre maximal de particules de masse 1 enregistrées par instantané \
                      (choisies de façon stable) ; les corps issus de fusions sont toujours \
@@ -247,6 +256,7 @@ const EN: &[(&str, &str)] = &[
     (" · mémoire vidéo ≈ {}", " · video memory ≈ {}"),
     ("Durée estimée du premier pas : ≈ {}", "Estimated duration of the first step: ≈ {}"),
     ("Estimation tirée des mesures du banc d'essai (RTX 4060 Ti pour le GPU, processeur de la même machine pour le CPU) ; elle varie avec le matériel, la répartition et θ.", "Estimate based on benchmark measurements (RTX 4060 Ti for the GPU, the same machine's processor for the CPU); it varies with the hardware, the distribution and θ."),
+    ("▶ Lancer sans affichage", "▶ Start without display"),
     ("▶ Lancer la simulation", "▶ Start the simulation"),
     ("Constante G", "Constant G"),
     ("Constante de gravitation (unités libres).", "Gravitational constant (free units)."),
@@ -455,11 +465,59 @@ Vitesse : {}", "Half-mass radius: {}\nVelocity: {}"),
     ("{}\n\nDétails enregistrés dans {}.", "{}\n\nDetails written to {}."),
     ("Carte graphique : {}", "Graphics card: {}"),
     ("Moteur GPU indisponible : {}", "GPU engine unavailable: {}"),
+    ("Usage : stellar.exe                         interface graphique
+        stellar.exe --sans-affichage [options]   simulation sans fenêtre
+        stellar.exe --help                       cette aide
+
+Options de --sans-affichage :
+
+  --corps N          nombre de particules (défaut : 1000000)
+  --rayon R          rayon du nuage (défaut : 100)
+  --graine S         graine aléatoire (défaut : 42)
+  --disque           disque en rotation (sinon sphère)
+  --vitesse V        repos | alea | circ | orb | rad (défaut : orb)
+  --dispersion D     dispersion de la vitesse orbitale (défaut : 0,05)
+  --vmin A --vmax B  plage de vitesse (alea, circ, rad)
+  --moteur M         gpu | cpu (défaut : gpu si une carte convient)
+  --nom NOM          nom de la simulation (défaut : date et paramètres)
+  --intervalle N     un instantané tous les N pas (défaut : 10)
+  --poussiere N      poussière enregistrée par instantané, ou « toutes » (défaut : 1000000)
+  --pas N            s'arrêter après N pas
+  --temps T          s'arrêter après un temps simulé T
+  --duree M          s'arrêter après M minutes de calcul
+Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
+sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar.exe                         graphical interface\n       stellar.exe --sans-affichage [options]   simulation without a window\n       stellar.exe --help                       this help\n\nOptions of --sans-affichage:\n\n  --corps N          number of particles (default: 1000000)\n  --rayon R          cloud radius (default: 100)\n  --graine S         random seed (default: 42)\n  --disque           rotating disc (otherwise a sphere)\n  --vitesse V        repos | alea | circ | orb | rad (default: orb)\n  --dispersion D     spread of the orbital speed (default: 0.05)\n  --vmin A --vmax B  speed range (alea, circ, rad)\n  --moteur M         gpu | cpu (default: gpu if a suitable card is present)\n  --nom NOM          simulation name (default: date and parameters)\n  --intervalle N     one snapshot every N steps (default: 10)\n  --poussiere N      dust recorded per snapshot, or “toutes” for all (default: 1000000)\n  --pas N            stop after N steps\n  --temps T          stop after a simulated time T\n  --duree M          stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
+    ("valeur manquante après {}", "missing value after {}"),
+    ("valeur invalide pour {} : {}", "invalid value for {}: {}"),
+    ("argument inconnu : {}", "unknown argument: {}"),
+    ("vitesse inconnue : {}", "unknown velocity: {}"),
+    ("l'option {} demande --sans-affichage", "option {} requires --sans-affichage"),
+    ("Erreur : {}", "Error: {}"),
+    ("Voir stellar.exe --help pour la liste des options.", "See stellar.exe --help for the list of options."),
+    ("Arrêt : clôture de l'enregistrement et sauvegarde…", "Stopping: closing the recording and saving…"),
+    ("Terminé au pas {}.", "Finished at step {}."),
+    ("Sauvegarde : {}", "Save: {}"),
+    ("Enregistrement : {}", "Recording: {}"),
+    ("Échec : {}", "Failure: {}"),
+    ("Simulation sans affichage", "Simulation without display"),
+    ("{} % · reste ≈ {}", "{}% · ≈ {} left"),
+    ("préparation…", "preparing…"),
+    ("Cible", "Target"),
+    ("arrêt manuel", "manual stop"),
+    ("{} pas", "{} steps"),
+    ("temps simulé {}", "simulated time {}"),
+    ("durée {}", "duration {}"),
+    ("Durée écoulée", "Elapsed time"),
+    ("Enregistrement", "Recording"),
+    ("■ Arrêter et sauvegarder", "■ Stop and save"),
+    ("Afficher la simulation", "Show the simulation"),
+    ("Le calcul et l'enregistrement continuent ; la cible n'est plus surveillée.", "The computation and the recording go on; the target is no longer watched."),
+    ("À l'arrêt, l'enregistrement est clos et l'état final sauvegardé sous le nom de la simulation.", "When stopped, the recording is closed and the final state saved under the simulation's name."),
+    ("Clôture de l'enregistrement et sauvegarde…", "Closing the recording and saving…"),
     ("CPU — Barnes-Hut multithread", "CPU — multithreaded Barnes-Hut"),
     ("Octree de Barnes-Hut sur tous les cœurs (sauf un, réservé à l'affichage).", "Barnes-Hut octree on all cores (but one, kept for the display)."),
     ("GPU — Barnes-Hut (carte graphique)", "GPU — Barnes-Hut (graphics card)"),
     ("Arbre de Barnes-Hut construit et parcouru sur la carte graphique (simple précision).", "Barnes-Hut tree built and traversed on the graphics card (single precision)."),
-    ("Langue", "Language"),
 ];
 
 #[cfg(test)]

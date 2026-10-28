@@ -41,7 +41,8 @@ en rotation), `STELLAR_ENGINE=<id>` (`cpu-barnes-hut` ou `gpu-barnes-hut`),
 `STELLAR_AUTORECORD=<intervalle>`, `STELLAR_LOAD=<sauvegarde>`,
 `STELLAR_REPLAY=<enregistrement>`, `STELLAR_LANG=fr|en`. Mode console :
 `stellar.exe --sans-affichage --corps 2000 --pas 300` (voir `console.rs`,
-`--aide`). Les dossiers `saves\` et `recordings\` sont
+`--help`). Tout argument fait passer en mode console : un argument
+inconnu y est signalé (code de sortie 2) ; sans argument, l'interface. Les dossiers `saves\` et `recordings\` sont
 relatifs au répertoire courant. Mesures : `STELLAR_STATS=1` (une ligne par
 seconde sur la sortie d'erreur : pas/s, durée du pas, images/s ; lancer
 depuis un shell qui redirige `2>` pour la lire), `STELLAR_PRESENT=fifo|mailbox|immediate`

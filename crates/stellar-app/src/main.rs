@@ -65,9 +65,10 @@ fn install_panic_hook() {
 fn main() -> eframe::Result {
     install_panic_hook();
     i18n::init();
-    // Mode console : simulation sans fenêtre.
+    // Avec des arguments : mode console (simulation sans fenêtre, aide, ou
+    // erreur pour un argument inconnu). Sans argument : l'interface.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == console::FLAG || a == "--aide") {
+    if !args.is_empty() {
         std::process::exit(console::run(&args));
     }
     let mut registry = EngineRegistry::new();

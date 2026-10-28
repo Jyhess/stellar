@@ -63,7 +63,7 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 Pour les longs calculs : aucun rendu des corps, toute la carte graphique pour le calcul, enregistrement automatique (intervalle et budget de poussière réglables).
 
 - **Depuis l'accueil** : case « Sans affichage », puis condition d'arrêt — nombre de pas, temps simulé, durée réelle, ou manuel. Un écran de suivi montre l'avancement (pas, pas/s, temps restant estimé, enregistrement) ; « Arrêter et sauvegarder » clôt l'enregistrement et sauvegarde l'état final sous le nom de la simulation, « Afficher la simulation » bascule vers l'affichage habituel (le calcul et l'enregistrement continuent). Fermer la fenêtre arrête proprement.
-- **En console** : `stellar.exe --sans-affichage [options]` (liste complète avec `--aide`) :
+- **En console** : `stellar.exe --sans-affichage [options]` (liste complète avec `--help`, aussi `-h` ou `--aide` ; un argument inconnu est signalé, avec un code de sortie 2) :
 
   ```powershell
   .\stellar.exe --sans-affichage --corps 4000000 --disque --pas 200000 --intervalle 20 --nom galaxie
