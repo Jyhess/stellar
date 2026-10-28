@@ -1,5 +1,7 @@
 // Structures partagées par tous les noyaux (préfixées à chaque module).
 
+// Corps (48 octets). La position de début de pas, utile aux contacts
+// balayés, se déduit de la vitesse de dérive : pos − vel·dt.
 struct Body {
     pos: vec3<f32>,
     mass: f32,
@@ -7,8 +9,6 @@ struct Body {
     id: u32,
     acc: vec3<f32>,
     pot: f32,
-    old: vec3<f32>,
-    flag: u32,
 };
 
 struct Params {

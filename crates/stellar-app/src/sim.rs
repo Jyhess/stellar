@@ -157,6 +157,8 @@ pub struct SimScreen {
 
     fps: f64,
     last_frame: Option<Instant>,
+    /// Journal de mesure (`STELLAR_STATS=1`) : dernière ligne écrite.
+    last_stats: Option<Instant>,
     last_aspect: f64,
     toast: Option<(String, Instant)>,
     save_job: Option<Receiver<Result<PathBuf, String>>>,
@@ -242,6 +244,7 @@ impl SimScreen {
             max_rate: 30.0,
             fps: 0.0,
             last_frame: None,
+            last_stats: std::env::var_os("STELLAR_STATS").map(|_| Instant::now()),
             last_aspect: 16.0 / 9.0,
             toast: None,
             save_job: None,
@@ -1935,8 +1938,7 @@ impl SimScreen {
                 );
             }
         });
-        let toggle;
-        if active {
+        let toggle = if active {
             let frames = st.frames.load(Ordering::Relaxed);
             let bytes = st.bytes.load(Ordering::Relaxed);
             ui.label(format!(
@@ -1945,7 +1947,7 @@ impl SimScreen {
                 format_bytes(bytes),
                 st.interval.load(Ordering::Relaxed)
             ));
-            toggle = ui.button("■ Arrêter").clicked();
+            ui.button("■ Arrêter").clicked()
         } else {
             ui.horizontal(|ui| {
                 ui.label("Un instantané tous les");
@@ -1970,8 +1972,8 @@ impl SimScreen {
                         .weak(),
                 );
             }
-            toggle = ui.button("Enregistrer").clicked();
-        }
+            ui.button("Enregistrer").clicked()
+        };
         if toggle {
             self.toggle_recording();
         }
@@ -2188,6 +2190,21 @@ impl SimScreen {
         action
     }
 
+    /// Journal de mesure pour les essais (`STELLAR_STATS=1`) : une ligne par
+    /// seconde sur la sortie d'erreur.
+    fn log_stats(&mut self, now: Instant) {
+        let Some(last) = self.last_stats else { return };
+        if now - last < std::time::Duration::from_secs(1) {
+            return;
+        }
+        self.last_stats = Some(now);
+        let snap = &self.snapshot;
+        eprintln!(
+            "stats : pas {} · {:.1} pas/s · {:.1} ms par pas · {:.0} images/s · {} corps",
+            snap.step, snap.steps_per_second, snap.last_step_ms, self.fps, snap.body_count
+        );
+    }
+
     /// Image courante. Renvoie l'action demandée par l'utilisateur.
     pub fn show(&mut self, ctx: &egui::Context) -> SimAction {
         let now = Instant::now();
@@ -2206,6 +2223,7 @@ impl SimScreen {
 
         self.source.tick(dt);
         self.poll_snapshot();
+        self.log_stats(now);
         self.refresh_disk_normal(false);
         self.sync_watch();
         self.poll_save();

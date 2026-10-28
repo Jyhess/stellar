@@ -172,19 +172,34 @@ impl CpuEngine {
         // 2. Octree.
         self.nodes = octree::build(&codes, &self.pos, &self.mass, cube, self.params.theta);
 
-        // 3. Champ en chaque corps.
+        // 3. Champ en chaque corps, par groupes de corps voisins. Les
+        //    groupes, en ordre préfixe, couvrent les corps dans l'ordre :
+        //    leurs plages de sortie se découpent sans recouvrement.
         let eps2 = self.params.softening * self.params.softening;
         let g = self.params.g;
         let (nodes, pos, mass) = (&self.nodes, &self.pos, &self.mass);
-        self.acc
-            .par_iter_mut()
-            .zip(self.pot.par_iter_mut())
-            .enumerate()
-            .for_each(|(i, (a, phi))| {
-                let (acc, p) = octree::field_at(nodes, pos, mass, i, pos[i], eps2);
-                *a = acc * g;
-                *phi = p * g;
-            });
+        let mut work = Vec::new();
+        let (mut acc, mut pot) = (&mut self.acc[..], &mut self.pot[..]);
+        for group in octree::groups(nodes) {
+            let count = group.count as usize;
+            let (a, rest_a) = std::mem::take(&mut acc).split_at_mut(count);
+            let (p, rest_p) = std::mem::take(&mut pot).split_at_mut(count);
+            acc = rest_a;
+            pot = rest_p;
+            work.push((group, a, p));
+        }
+        work.into_par_iter().for_each_init(
+            octree::Interactions::default,
+            |list, (group, a, p)| {
+                octree::field_of_group(nodes, pos, mass, group, eps2, list, (&mut *a, &mut *p));
+                for v in a.iter_mut() {
+                    *v *= g;
+                }
+                for v in p.iter_mut() {
+                    *v *= g;
+                }
+            },
+        );
 
         self.update_diagnostics();
     }
@@ -358,7 +373,7 @@ impl CpuEngine {
         self.time += dt;
 
         let period = self.params.cleanup_period as u64;
-        let removed = if period > 0 && self.step % period == 0 {
+        let removed = if period > 0 && self.step.is_multiple_of(period) {
             self.cleanup()
         } else {
             Vec::new()

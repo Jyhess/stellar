@@ -1,6 +1,6 @@
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> bodies: array<Body>;
-@group(0) @binding(2) var<storage, read> nodes: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> swept: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> children: array<vec2<u32>>;
 @group(0) @binding(4) var<storage, read_write> pairs: array<PairRec>;
 @group(0) @binding(5) var<storage, read_write> counter: array<atomic<u32>>;
@@ -36,11 +36,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let bi = bodies[i];
     let ri = radius(bi.mass);
-    let qmin = min(bi.old, bi.pos) - vec3<f32>(ri);
-    let qmax = max(bi.old, bi.pos) + vec3<f32>(ri);
+    let oi = bi.pos - bi.vel * P.dt;
+    let qmin = min(oi, bi.pos) - vec3<f32>(ri);
+    let qmax = max(oi, bi.pos) + vec3<f32>(ri);
     var stack: array<u32, 72>;
     var sp = 1u;
     stack[0] = 0u;
+    // Plafond déjà atteint par d'autres fils : rien à enregistrer.
+    if (atomicLoad(&counter[0]) >= P.cap) {
+        return;
+    }
     while (sp > 0u) {
         sp = sp - 1u;
         let c = stack[sp];
@@ -49,22 +54,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (j > i) {
                 let bj = bodies[j];
                 let rj = radius(bj.mass);
-                let jmin = min(bj.old, bj.pos) - vec3<f32>(rj);
-                let jmax = max(bj.old, bj.pos) + vec3<f32>(rj);
+                let oj = bj.pos - bj.vel * P.dt;
+                let jmin = min(oj, bj.pos) - vec3<f32>(rj);
+                let jmax = max(oj, bj.pos) + vec3<f32>(rj);
                 if (overlaps(qmin, qmax, jmin, jmax)
-                    && swept_min_distance(bi.old, bi.pos, bj.old, bj.pos) <= ri + rj) {
+                    && swept_min_distance(oi, bi.pos, oj, bj.pos) <= ri + rj) {
                     let slot = atomicAdd(&counter[0], 1u);
-                    if (slot < P.cap) {
-                        pairs[slot] = PairRec(bi, bj, i, j, 0u, 0u);
+                    if (slot >= P.cap) {
+                        // Plafond atteint (effondrement d'un cœur dense) :
+                        // les paires suivantes seraient perdues, inutile de
+                        // poursuivre ; elles seront retrouvées au pas suivant.
+                        return;
                     }
+                    pairs[slot] = PairRec(bi, bj, i, j, 0u, 0u);
                 }
             }
             continue;
         }
-        let v2 = nodes[4u * c + 2u];
-        let v3 = nodes[4u * c + 3u];
-        let smin = vec3<f32>(v2.z, v2.w, v3.x);
-        let smax = v3.yzw;
+        let smin = swept[2u * c].xyz;
+        let smax = swept[2u * c + 1u].xyz;
         if (overlaps(qmin, qmax, smin, smax) && sp + 2u <= 72u) {
             let ch = children[c];
             stack[sp] = ch.x;

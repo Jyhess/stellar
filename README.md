@@ -1,6 +1,6 @@
 # Stellar
 
-Simulateur gravitationnel N-corps en 3D. Un nuage de particules de masse 1 s'effondre sous l'effet de la gravité, et deux corps qui se touchent fusionnent. Le calcul se fait **sur le CPU** (Barnes-Hut multithread) ; la carte graphique sert **uniquement à l'affichage** (wgpu).
+Simulateur gravitationnel N-corps en 3D. Un nuage de particules de masse 1 s'effondre sous l'effet de la gravité, et deux corps qui se touchent fusionnent. Le calcul se fait **sur la carte graphique** (moteur GPU par défaut : shaders de calcul wgpu) ou **sur le CPU** (Barnes-Hut multithread) ; l'affichage passe par wgpu dans les deux cas.
 
 La spécification fonctionnelle se trouve dans [`SPEC.md`](SPEC.md).
 
@@ -31,7 +31,7 @@ La première compilation prend quelques minutes, le temps de télécharger et de
 
 > Lancez toujours en `--release` : en mode debug, le calcul est plusieurs dizaines de fois plus lent.
 
-L'affichage est plafonné à 120 images par seconde.
+L'affichage est plafonné à 120 images par seconde. Sur les cartes NVIDIA et AMD (Vulkan) ou sous DirectX 12, il est synchronisé en mode « Mailbox » : sans déchirement, et sans que l'attente de l'écran ne bloque le moteur GPU, qui partage la carte (voir « Moteur GPU »).
 
 Comptez environ 420 octets de mémoire vive par particule : à peu près 4,2 Go pour 10 millions.
 
@@ -133,15 +133,26 @@ Une simulation lourde peut être enregistrée puis rejouée de façon fluide, à
 Si une carte graphique compatible (DirectX 12 ou Vulkan) est détectée, le moteur **GPU** devient le moteur par défaut. Le moteur CPU reste disponible dans « Paramètres avancés → Moteur de calcul », où la carte détectée est indiquée.
 
 - **Même algorithme que le moteur CPU :** Barnes-Hut, Leapfrog, fusions balayées, nettoyage.
-- **Simple précision :** sur les essais, l'écart avec le moteur CPU reste de l'ordre de 10⁻³ en position après 50 pas, avec un écart d'énergie de 4 × 10⁻⁵.
-- **Mémoire vidéo :** environ 330 octets par corps, soit environ 3,3 Go pour 10 millions. Le maximum est de 16,7 millions de corps.
+- **Simple précision :** l'erreur relative médiane sur l'accélération, comparée à la somme directe, est d'environ 10⁻³ (θ = 0,5) ; après 50 pas, l'écart avec le moteur CPU reste inférieur à 10⁻³ en position.
+- **Mémoire vidéo :** environ 240 octets par corps, soit environ 2,4 Go pour 10 millions. Le maximum est de 16,7 millions de corps.
+- **Performances** (RTX 4060 Ti, nuage sphérique au repos) : environ 14 ms par pas pour 1 million de corps, 62 ms pour 4 millions.
 - **Repli automatique :** une sauvegarde faite avec le moteur GPU se recharge avec le moteur CPU si la carte est absente.
 - **Affichage direct :** le moteur calcule sur la carte graphique de l'interface, qui dessine les corps directement depuis ses tampons, sans copie. L'état complet n'est relu qu'une fois toutes les une à deux secondes (pointage, classement, barycentre, sauvegarde) ; le pas, les énergies, le centre de masse et la position du corps suivi sont publiés à jour à chaque instantané. Si la carte de l'interface ne convient pas au calcul (OpenGL), le moteur ouvre sa propre carte et l'affichage repasse par les copies.
-- **Banc d'essai :**
+- **Banc d'essai** (nombre de corps, nombre de pas ; `gpu` ou `cpu` pour n'essayer qu'un moteur, `disque` pour un disque en rotation) :
 
 ```powershell
 cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10
 ```
+
+Avec `$env:STELLAR_GPU_PROFILE=1`, le banc affiche le temps passé dans chaque noyau GPU (horodatage des passes).
+
+Ce qui rend le moteur GPU rapide :
+
+1. **Parcours de Barnes-Hut par groupes** : les 128 corps consécutifs d'un groupe de travail, voisins dans l'ordre de Morton, descendent l'arbre ensemble. Un nœud est assimilé à un point s'il est assez loin de la boîte englobante du groupe entier, critère plus strict que pour chaque corps isolément. Nœuds acceptés et corps des feuilles proches s'accumulent dans une liste en mémoire partagée, que chaque fil évalue ensuite pour son corps, en boucle déroulée.
+2. **Arbre réajusté** : la topologie (codes de Morton, tri radix, construction de Karras) n'est refaite que tous les quatre pas, ou après une compaction. Entre-temps, seuls les centres de masse, boîtes et rayons d'ouverture sont recalculés : le critère reste exact.
+3. **Une soumission et une attente par pas** : paires de contact, corps éliminés, moments globaux et positions des corps suivis (traces, caméra) sont recopiés ensemble dans un tampon de relecture. Les fusions, regroupées sur le CPU, sont appliquées dans une seconde soumission, sans attente.
+4. **Lancements regroupés** : une seule passe de calcul par soumission, groupes de liaisons et paramètres de passe créés une fois pour toutes.
+5. **Corps de 48 octets** : la position de début de pas, utile aux contacts balayés, se déduit de la vitesse (`pos − vel·dt`).
 
 ## 3. Architecture
 
@@ -150,8 +161,9 @@ Le projet suit la **clean architecture**. Les dépendances pointent toutes vers 
 ```
 stellar-app (présentation + racine de composition : egui, wgpu)
    │
-   ├──► stellar-persistence (adaptateur : fichiers .stellar)
+   ├──► stellar-persistence (adaptateur : fichiers .stellar, .stellarec)
    ├──► stellar-engine-cpu  (adaptateur : moteur Barnes-Hut CPU)
+   ├──► stellar-engine-gpu  (adaptateur : moteur Barnes-Hut GPU, wgpu)
    │
    └──► stellar-application (cas d'usage, ports)
               │
@@ -163,8 +175,8 @@ stellar-app (présentation + racine de composition : egui, wgpu)
 | `stellar-domain` | Corps (`BodySet`, en structure de tableaux), état, paramètres, règles physiques (rayon, fusion, distance balayée), classement par masse, **traits `PhysicsEngine` / `EngineFactory`**. Aucune infrastructure. |
 | `stellar-application` | Génération des conditions initiales, thread de simulation découplé (`SimulationHandle`, instantanés publiés à ≤ 60 Hz ; copie complète de l'état espacée quand le moteur est affiché directement), registre des moteurs, ports `SimulationRepository`, façade `SimulatorService`. |
 | `stellar-engine-cpu` | Moteur de calcul CPU. Optimisé librement, comme prévu par la spécification (voir ci-dessous). |
-| `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau, parcours de Barnes-Hut, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. Sur la carte de l'interface, expose ses tampons de corps (`BodiesView`) pour l'affichage. |
-| `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. |
+| `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau et réajusté entre deux constructions, parcours de Barnes-Hut par groupes de 128 corps, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. Sur la carte de l'interface, expose ses tampons de corps (`BodiesView`) pour l'affichage. |
+| `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. Seule la version courante du format est lue. |
 | `stellar-app` | Écrans egui, caméra, sélection, rendu GPU des corps (billboards additifs, positions relatives à une ancre pour garder la précision en `f32`), lus directement dans les tampons du moteur GPU ou téléversés depuis les instantanés. |
 
 ### Moteur CPU
@@ -174,14 +186,16 @@ stellar-app (présentation + racine de composition : egui, wgpu)
 1. **Kick ½ dt** : demi-mise à jour des vitesses.
 2. **Drift dt** : mise à jour des positions ; les positions de départ sont conservées.
 3. **Contacts balayés** :
-   - grille uniforme sur les boîtes englobantes des trajectoires ; les corps très rapides ou très gros sont traités à part ;
+   - grille hiérarchique sur les boîtes englobantes des trajectoires ; les corps très rapides ou très gros sont rangés aux niveaux supérieurs ;
+   - cellules voisines trouvées sans table de hachage : les clés de cellule, triées, sont parcourues avec un curseur par direction ;
    - distance minimale exacte entre trajectoires rectilignes ;
    - fusions en chaîne regroupées par union-find.
 4. **Fusion** : la masse et la quantité de mouvement sont conservées et la position passe au barycentre. L'identifiant du membre le plus massif est conservé.
 5. **Forces** :
    - réordonnancement des corps selon leur code de Morton ;
    - octree construit en parallèle, stocké en ordre préfixe et parcouru sans pile ;
-   - critère d'ouverture `d > s/θ + δ` et adoucissement de Plummer.
+   - critère d'ouverture `d > s/θ + δ` et adoucissement de Plummer ;
+   - **parcours par groupes** de 32 corps voisins au plus : l'arbre est descendu une fois par groupe, avec la boîte du groupe pour le critère, puis la liste d'interactions est évaluée pour chaque corps (AVX2 et FMA quand le processeur les a : quatre corps par instruction, inverse de la racine par estimation affinée de Newton).
 6. **Kick ½ dt**.
 7. **Nettoyage, tous les N pas** : suppression des corps **non liés** (énergie spécifique > 0 relativement au barycentre) **et** situés au-delà de k × R.
 
@@ -213,7 +227,17 @@ Mesure rapide du moteur, avec affichage de l'évolution (corps restants, fusions
 cargo run --release -p stellar-engine-cpu --example timing -- 1000000 5
 ```
 
-Pour lancer directement une simulation sans passer par l'accueil : `$env:STELLAR_AUTOSTART=200000; cargo run --release`.
+Pour lancer directement une simulation sans passer par l'accueil : `$env:STELLAR_AUTOSTART=200000; cargo run --release`. Variables utiles aux essais :
+
+| Variable | Effet |
+|---|---|
+| `STELLAR_AUTOSTART=<n>` | simulation de n corps dès le lancement |
+| `STELLAR_AUTODISK=1` | disque en rotation plutôt que sphère au repos |
+| `STELLAR_ENGINE=<id>` | moteur imposé (`cpu-barnes-hut`, `gpu-barnes-hut`) |
+| `STELLAR_AUTORECORD=<intervalle>` | enregistrement immédiat |
+| `STELLAR_LOAD=<sauvegarde>` / `STELLAR_REPLAY=<enregistrement>` | chargement ou relecture directs |
+| `STELLAR_STATS=1` | une ligne par seconde sur la sortie d'erreur : pas, pas/s, durée du pas, images/s, corps |
+| `STELLAR_PRESENT=fifo\|mailbox\|immediate` | mode de présentation de l'interface imposé |
 
 Les tests physiques (`crates/stellar-engine-cpu/tests/physics.rs`) vérifient notamment :
 

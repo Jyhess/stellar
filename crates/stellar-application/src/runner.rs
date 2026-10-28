@@ -665,11 +665,11 @@ impl Worker {
                 // secondes, publications légères entre-temps.
                 let full = self
                     .last_full
-                    .map_or(true, |t| t.elapsed() >= full_state_interval(n));
+                    .is_none_or(|t| t.elapsed() >= full_state_interval(n));
                 if full
                     || self
                         .last_publish
-                        .map_or(true, |t| t.elapsed() >= PUBLISH_INTERVAL)
+                        .is_none_or(|t| t.elapsed() >= PUBLISH_INTERVAL)
                 {
                     self.publish(full);
                 }
@@ -679,7 +679,7 @@ impl Worker {
                 let scale = (n as f64 / 1e6).max(1.0);
                 if self
                     .last_publish
-                    .map_or(true, |t| t.elapsed() >= PUBLISH_INTERVAL.mul_f64(scale))
+                    .is_none_or(|t| t.elapsed() >= PUBLISH_INTERVAL.mul_f64(scale))
                 {
                     self.publish(true);
                 }

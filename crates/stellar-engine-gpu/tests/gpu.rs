@@ -64,23 +64,29 @@ fn barnes_hut_matches_direct_sum() {
     p.softening = 0.05;
     let Some(e) = engine(s, p) else { return };
     let eps2 = p.softening * p.softening;
+    let mut worst_phi = 0.0f64;
     let mut errors: Vec<f64> = e
         .read_bodies()
         .iter()
         .map(|g| {
             let i = g.id as usize;
             let mut exact = DVec3::ZERO;
+            let mut phi = 0.0;
             for j in 0..bodies.len() {
                 if j != i {
                     let d = bodies.positions[j] - bodies.positions[i];
                     let r2 = d.length_squared() + eps2;
                     exact += d * (bodies.masses[j] / (r2 * r2.sqrt()));
+                    phi -= bodies.masses[j] / r2.sqrt();
                 }
             }
             let a = DVec3::new(g.acc[0] as f64, g.acc[1] as f64, g.acc[2] as f64);
+            worst_phi = worst_phi.max((g.pot as f64 - phi).abs() / phi.abs());
             (a - exact).length() / exact.length()
         })
         .collect();
+    eprintln!("Barnes-Hut GPU : erreur maximale sur le potentiel {worst_phi:.2e}");
+    assert!(worst_phi < 1e-2, "erreur sur le potentiel {worst_phi}");
     assert_eq!(errors.len(), 3_000);
     errors.sort_by(f64::total_cmp);
     let median = errors[errors.len() / 2];
@@ -322,6 +328,47 @@ fn queries_positions_and_barycenter() {
     assert_eq!(pos[2], Some(DVec3::new(1.0, 2.0, 3.0)));
     let c = e.center_of_mass().unwrap();
     assert!((c - DVec3::new(-0.5, 0.5, 1.5)).length() < 1e-6);
+}
+
+/// Positions suivies : relues avec chaque pas (sans relecture à part),
+/// cohérentes avec l'état, corrigées des fusions du pas (corps absorbé
+/// absent, corps résultant au barycentre) ; le centre de masse suit aussi.
+#[test]
+fn tracked_positions_follow_steps_and_merges() {
+    let mut b = BodySet::default();
+    b.push(10, DVec3::new(-1.0, 0.0, 0.0), DVec3::new(2.0, 0.0, 0.0), 1.0);
+    b.push(20, DVec3::new(1.0, 0.0, 0.0), DVec3::new(-1.0, 0.3, 0.0), 2.0);
+    b.push(30, DVec3::new(0.0, 50.0, 0.0), DVec3::new(0.0, 0.0, 1.0), 1.0);
+    let mut p = params();
+    p.g = 0.0;
+    p.dt = 0.1;
+    p.base_radius = 0.1;
+    let Some(mut e) = engine(state(b), p) else {
+        return;
+    };
+    let ids = [10, 20, 30, 99];
+    assert_eq!(e.positions_of(&ids)[3], None);
+    let mut merged = false;
+    for _ in 0..20 {
+        let report = e.step();
+        let pos = e.positions_of(&ids);
+        let s = e.state();
+        for (k, id) in ids.iter().enumerate() {
+            let expected = s.bodies.index_of(*id).map(|i| s.bodies.positions[i]);
+            match (pos[k], expected) {
+                (Some(a), Some(b)) => assert!((a - b).length() < 1e-5, "{id} : {a} ≠ {b}"),
+                (a, b) => assert_eq!(a, b, "corps {id}"),
+            }
+        }
+        let c = e.center_of_mass().unwrap();
+        assert!((c - s.bodies.center_of_mass().unwrap()).length() < 1e-4);
+        if !report.merges.is_empty() {
+            assert_eq!(report.merges, vec![(10, 20)]);
+            assert_eq!(pos[0], None);
+            merged = true;
+        }
+    }
+    assert!(merged, "le test doit provoquer une fusion");
 }
 
 /// Carte partagée : les tampons exposés à l'affichage contiennent, aux

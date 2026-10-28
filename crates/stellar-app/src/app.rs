@@ -14,10 +14,18 @@ use crate::sim::{SimAction, SimScreen};
 use crate::source::Source;
 
 enum Screen {
-    Home(HomeScreen),
-    Sim(SimScreen),
+    // En boîte : les deux écrans sont volumineux et de tailles très
+    // différentes.
+    Home(Box<HomeScreen>),
+    Sim(Box<SimScreen>),
     /// État transitoire pendant un changement d'écran.
     Switching,
+}
+
+impl Screen {
+    fn sim(screen: SimScreen) -> Self {
+        Self::Sim(Box::new(screen))
+    }
 }
 
 /// Plafond de la cadence d'affichage.
@@ -51,7 +59,7 @@ impl StellarApp {
         let home = HomeScreen::new(&service);
         let mut app = Self {
             service,
-            screen: Screen::Home(home),
+            screen: Screen::Home(Box::new(home)),
             last_frame: None,
         };
         app.autostart();
@@ -63,7 +71,7 @@ impl StellarApp {
         // `STELLAR_LOAD=<sauvegarde>` : chargement direct (reprise d'enregistrement comprise).
         if let Ok(path) = std::env::var("STELLAR_LOAD") {
             if let Ok(loaded) = self.service.load_simulation(std::path::Path::new(&path)) {
-                self.screen = Screen::Sim(SimScreen::new(
+                self.screen = Screen::sim(SimScreen::new(
                     Source::Live(loaded.handle),
                     self.service.clone(),
                     loaded.view,
@@ -75,7 +83,7 @@ impl StellarApp {
         if let Ok(path) = std::env::var("STELLAR_REPLAY") {
             if let Ok(player) = self.service.open_replay(std::path::Path::new(&path)) {
                 let source = Source::Replay(Box::new(crate::source::Replay::new(player)));
-                self.screen = Screen::Sim(SimScreen::new(source, self.service.clone(), None));
+                self.screen = Screen::sim(SimScreen::new(source, self.service.clone(), None));
                 return;
             }
         }
@@ -112,7 +120,7 @@ impl StellarApp {
                     self.service
                         .start_recording("autorecord", &handle, interval, Some(1_000_000));
             }
-            self.screen = Screen::Sim(SimScreen::new(
+            self.screen = Screen::sim(SimScreen::new(
                 Source::Live(handle),
                 self.service.clone(),
                 None,
@@ -144,7 +152,7 @@ impl StellarApp {
         }
         let mut home = HomeScreen::new(&self.service);
         home.message = message;
-        self.screen = Screen::Home(home);
+        self.screen = Screen::Home(Box::new(home));
     }
 }
 
@@ -192,7 +200,7 @@ impl eframe::App for StellarApp {
                                 home.message = Some(format!("Enregistrement impossible : {e}"));
                             }
                         }
-                        self.screen = Screen::Sim(SimScreen::new(
+                        self.screen = Screen::sim(SimScreen::new(
                             Source::Live(handle),
                             self.service.clone(),
                             None,
@@ -221,7 +229,7 @@ impl eframe::App for StellarApp {
                             Some(Err(e)) => sim.notify(format!("Reprise de l'enregistrement impossible : {e}")),
                             None => {}
                         }
-                        self.screen = Screen::Sim(sim);
+                        self.screen = Screen::sim(sim);
                     }
                     Err(e) => home.message = Some(format!("Chargement impossible : {e}")),
                 },
@@ -229,7 +237,7 @@ impl eframe::App for StellarApp {
                     Ok(player) => {
                         let source = Source::Replay(Box::new(crate::source::Replay::new(player)));
                         self.screen =
-                            Screen::Sim(SimScreen::new(source, self.service.clone(), None));
+                            Screen::sim(SimScreen::new(source, self.service.clone(), None));
                     }
                     Err(e) => home.message = Some(format!("Relecture impossible : {e}")),
                 },

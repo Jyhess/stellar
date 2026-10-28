@@ -20,7 +20,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = bodies[i];
     let dp = b.pos - cm;
     let dv = b.vel - vcm;
-    if (dot(dp, dp) > P.limit2 && 0.5 * dot(dv, dv) + b.pot > 0.0) {
+    if (b.mass > 0.0 && dot(dp, dp) > P.limit2 && 0.5 * dot(dv, dv) + b.pot > 0.0) {
         let slot = atomicAdd(&counter[0], 1u);
         removed[slot] = b.id;
         bodies[i].mass = 0.0;

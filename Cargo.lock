@@ -3052,7 +3052,6 @@ name = "stellar-persistence"
 version = "0.1.0"
 dependencies = [
  "bincode",
- "serde",
  "stellar-application",
  "stellar-domain",
  "stellar-engine-cpu",

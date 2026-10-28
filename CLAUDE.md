@@ -36,7 +36,11 @@ Démarrage direct pour les essais (variables d'environnement, voir `app.rs`) :
 en rotation), `STELLAR_ENGINE=<id>` (`cpu-barnes-hut` ou `gpu-barnes-hut`),
 `STELLAR_AUTORECORD=<intervalle>`, `STELLAR_LOAD=<sauvegarde>`,
 `STELLAR_REPLAY=<enregistrement>`. Les dossiers `saves\` et `recordings\` sont
-relatifs au répertoire courant.
+relatifs au répertoire courant. Mesures : `STELLAR_STATS=1` (une ligne par
+seconde sur la sortie d'erreur : pas/s, durée du pas, images/s ; lancer
+depuis un shell qui redirige `2>` pour la lire), `STELLAR_PRESENT=fifo|mailbox|immediate`
+(mode de présentation imposé). Le banc d'essai accepte `disque` (disque en
+rotation) et `STELLAR_GPU_PROFILE=1` (temps par noyau).
 
 ## Architecture (clean architecture)
 
@@ -44,8 +48,8 @@ relatifs au répertoire courant.
 |---|---|
 | `stellar-domain` | Corps (`BodySet`, structure de tableaux), état, paramètres, règles physiques, traits `PhysicsEngine` / `EngineFactory`. Aucune dépendance d'infrastructure. |
 | `stellar-application` | Génération des conditions initiales, thread de simulation (`SimulationHandle`, instantanés publiés), registre des moteurs, enregistrement (`Recorder`), relecture, ports, façade `SimulatorService`. |
-| `stellar-engine-cpu` | Barnes-Hut sur octree de Morton, Leapfrog KDK à pas fixe, contacts balayés (grille hiérarchique + union-find), fusions, nettoyage. |
-| `stellar-engine-gpu` | Même physique en shaders WGSL, simple précision : tri radix, LBVH de Karras, parcours de Barnes-Hut, paires de contact sur GPU, union-find des fusions sur CPU. |
+| `stellar-engine-cpu` | Barnes-Hut sur octree de Morton (parcours par groupes de 32 corps, évaluation AVX2), Leapfrog KDK à pas fixe, contacts balayés (grille hiérarchique + union-find), fusions, nettoyage. |
+| `stellar-engine-gpu` | Même physique en shaders WGSL, simple précision : tri radix, LBVH de Karras (topologie refaite tous les 4 pas, réajustée entre-temps), parcours de Barnes-Hut par groupes de 128 corps, paires de contact sur GPU, union-find des fusions sur CPU. |
 | `stellar-persistence` | Fichiers `.stellar` (sauvegardes) et `.stellarec` (enregistrements). |
 | `stellar-app` | Écrans egui (`home.rs`, `sim.rs`), caméra (`camera.rs`), sélection (`picking.rs`), rendu des corps (`render/`). Racine de composition (`main.rs`). |
 
@@ -69,13 +73,29 @@ Règles :
   donnée tirée de `snapshot.state` doit rester cohérente avec `state.step`,
   pas avec `snapshot.step`. Sous OpenGL, le moteur ouvre sa propre carte et
   l'affichage repasse par des copies.
+- **Présentation et verrou de la carte** : dans wgpu 24,
+  `Surface::get_current_texture` garde le verrou `device.fence` pendant
+  l'attente de l'écran, et `queue.submit` le réclame. En mode Fifo, chaque
+  soumission du moteur GPU attendait donc jusqu'à une image (~25 ms par pas
+  quelle que soit la taille). D'où le mode Mailbox (`present_mode` dans
+  `main.rs`, `STELLAR_PRESENT` pour l'imposer). Sous DirectX 12, la
+  compilation des shaders par FXC prend ~100 s : rester sous Vulkan.
+- **Pas du moteur GPU** : une soumission principale, une attente (tampon de
+  relecture : compteurs, moments, positions suivies, premières paires), puis
+  les fusions sans attente. `positions_of` suit jusqu'à 4 listes
+  d'identifiants (table identifiant → indice sur le GPU) ; une liste nouvelle
+  est relue tout de suite puis à chaque pas. Les accesseurs ne doivent pas
+  relire la carte. Profilage : `STELLAR_GPU_PROFILE=1` (banc d'essai).
 - **Limites GPU** : `MAX_BODIES = 65 535 × 256`, `MAX_PAIRS = 2¹⁸` paires de
   contact par pas. Les tampons d'instances du rendu sont découpés en tronçons
   (4 M d'instances au plus) pour respecter `max_buffer_size` (plantage passé à
-  10 M de corps).
+  10 M de corps). Corps GPU de 48 octets (`GpuBody`, `common.wgsl` : position
+  de début de pas = `pos − vel·dt`). La pile et la liste du parcours de
+  Barnes-Hut sont dimensionnées selon `max_compute_workgroup_storage_size`
+  (préfixe du module `forces`).
 - **Précision** : positions en `f64` côté CPU ; le rendu travaille relativement
   à une ancre (`anchor`) pour rester précis en `f32`. Le moteur GPU est en
-  simple précision (écart d'énergie avec le CPU ~10⁻⁵ sur les essais).
+  simple précision (erreur médiane sur l'accélération ~10⁻³ à θ = 0,5).
 - **Polices egui** : certains caractères manquent (●, ✦, U+202F) ; vérifier
   qu'un symbole s'affiche avant de l'utiliser.
 - **Caméra** : orientation par quaternion (repère local : X avant, −Y droite,
@@ -85,16 +105,12 @@ Règles :
 
 ## Formats de fichiers
 
-- **`.stellar`** (version 3 ; versions 1 et 2 toujours lues) : signature,
-  version, en-tête `SaveSummary` lisible sans décompression, puis `SaveData`
-  en bincode compressé zstd. bincode n'est pas auto-descriptif : **tout ajout
-  de champ impose une nouvelle version** et un module de relecture des
-  anciennes formes (voir `legacy_view`, `v1`, `v2` dans
-  `stellar-persistence/src/lib.rs`), avec un test de relecture.
-  - Version 2 : `RecordingLink` (reprise exacte d'un enregistrement suspendu),
-    masse initiale.
-  - Version 3 : roulis de la caméra, suivi du barycentre (`ViewState`),
-    `continue_recording` (enregistrement en cours lors d'une sauvegarde F5).
+- **`.stellar`** (version 3, seule lue) : signature, version, en-tête
+  `SaveSummary` lisible sans décompression, puis `SaveData` en bincode
+  compressé zstd. bincode n'est pas auto-descriptif : **tout ajout de champ
+  impose une nouvelle version** ; les fichiers d'une autre version sont
+  refusés (la relecture des anciennes formes a été retirée à la demande de
+  l'utilisateur, les sauvegardes existantes pouvant être perdues).
 - **`.stellarec`** : instantanés tous les N pas (positions 21 bits, vitesses
   16 bits, masses, devenir des corps disparus), zstd, index en fin de fichier
   reconstructible si le fichier n'a pas été clos. Budget de poussière
@@ -126,26 +142,15 @@ Règles :
 
 ## En attente
 
-- Mesurer les performances réelles du moteur GPU sur la RTX 4060 Ti (banc
-  d'essai), et vérifier l'affichage direct sous DirectX 12 / Vulkan.
-- Essayer la poursuite d'un enregistrement sur les fichiers réels :
-  `saves\sim_20261027_191427.stellar` (format 1) avec
-  `recordings\rec_20261027_001645.stellarec` (≈ 27 Go, peut-être non clos).
-- Avertissements clippy préexistants (`is_multiple_of`, `is_none_or`…) : la
-  version minimale de Rust (1.89) permet désormais d'adopter ces suggestions.
-- Pistes de performance du moteur GPU, après l'affichage direct (le banc
-  occupe la carte à 100 %, l'application doit s'en approcher) :
-  - `step_inner` relit le compteur de paires de contact au milieu de chaque
-    pas (`read_u32`), ce qui vide la file : appliquer les fusions avec un pas
-    de décalage permettrait d'enchaîner les pas sans attente ;
-  - chaque lancement crée son bind group, et `pass_uniform` un tampon
-    uniforme (≈ 150 lancements par pas) : bind groups précalculés (deux jeux,
-    un par tampon de corps), décalages dynamiques, une seule passe de calcul
-    par pas ;
-  - `positions_of` traite les identifiants par paquets de 15, chacun relançant
-    un passage sur tous les corps puis une relecture bloquante : coûteux à
-    chaque pas quand des traces sont actives ; un seul lancement pour tous ;
-  - `forces.wgsl` relit l'enregistrement complet de 64 octets d'un corps aux
-    feuilles alors que position et masse suffiraient (tableau compact `vec4`) ;
-  - le coût du dessin des points (plusieurs millions à chaque image) partage
-    la carte avec le calcul.
+- Pistes de performance restantes (RTX 4060 Ti, 1 M de corps : ~14 ms par
+  pas, dont ~9 ms pour les forces) :
+  - tri radix (8 passes de 4 bits, ~1,5 ms à 1 M) : chiffres plus larges ;
+  - un pas = une soumission longue (60 ms à 4 M) : les images de l'interface
+    attendent derrière ; découper le pas en plusieurs soumissions rendrait
+    la caméra plus fluide aux très grands nombres de corps ;
+  - effondrement massif (des centaines de milliers de fusions en quelques
+    pas) : jusqu'à ~150 ms par pas pendant quelques pas (paires de contact
+    quadratiques dans le cœur dense, plafonnées à 2¹⁸ ; planification des
+    fusions sur le CPU, relecture des paires) ;
+  - préparer l'encodage du pas suivant pendant le calcul (~0,3 à 0,5 ms par
+    pas, sensible aux petits nombres de corps).

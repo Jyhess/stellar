@@ -145,7 +145,7 @@ fn assign_velocities(rng: &mut impl Rng, ic: &InitialConditions, g: f64, b: &mut
                 acc += b.masses[i];
             }
             let spread = spread.abs();
-            for i in 0..n {
+            for (i, &inside) in enclosed.iter().enumerate() {
                 let p = b.positions[i];
                 let r2 = p.length_squared();
                 let rho2 = p.x * p.x + p.y * p.y;
@@ -155,7 +155,7 @@ fn assign_velocities(rng: &mut impl Rng, ic: &InitialConditions, g: f64, b: &mut
                 let Some(t) = azimuthal(p) else { continue };
                 // Composante cylindrique de l'attraction : g_ρ = G·M(<r)·ρ / r³
                 // ⇒ v = √(ρ·g_ρ) = √(G·M(<r)·ρ² / r³).
-                let v_circ = (g * enclosed[i] * rho2 / (r2 * r2.sqrt())).sqrt();
+                let v_circ = (g * inside * rho2 / (r2 * r2.sqrt())).sqrt();
                 let factor = if spread > 0.0 {
                     1.0 + rng.gen_range(-spread..spread)
                 } else {

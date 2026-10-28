@@ -8,32 +8,12 @@
 //!   (voir [`find_contacts`]).
 //! - Phase fine : distance minimale exacte entre trajectoires rectilignes.
 
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
-
 use glam::DVec3;
 use rayon::prelude::*;
 use stellar_domain::physics::swept_min_distance;
 
 const AXIS_BITS: u32 = 21;
 const AXIS_LIMIT: i64 = 1 << AXIS_BITS;
-
-/// Hachage minimal pour des clés entières déjà bien réparties.
-#[derive(Default)]
-struct IdentityMix(u64);
-impl Hasher for IdentityMix {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-    fn write(&mut self, _: &[u8]) {
-        unreachable!("clé u64 uniquement")
-    }
-    fn write_u64(&mut self, v: u64) {
-        // Mélange multiplicatif (Fibonacci) pour disperser les clés voisines.
-        self.0 = v.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
-    }
-}
-type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<IdentityMix>>;
 
 #[derive(Clone, Copy)]
 struct Swept {
@@ -120,6 +100,12 @@ impl Grid {
     }
 
     /// Paires entre membres de la grille (cellule et 13 voisines « en avant »).
+    ///
+    /// La clé d'une cellule est linéaire en ses coordonnées : la voisine de
+    /// décalage `off` a pour clé `clé + δ(off)`, et l'ordre des clés est
+    /// conservé. Pour chaque décalage, un curseur avance donc avec les
+    /// cellules (fusion de deux listes triées) : ni table de hachage, ni
+    /// recherche, des accès séquentiels.
     fn self_pairs(&self, touches: &(impl Fn(usize, usize) -> bool + Sync)) -> Vec<(u32, u32)> {
         let entries = &self.entries;
         let mut cells: Vec<(u64, u32, u32)> = Vec::new();
@@ -133,33 +119,44 @@ impl Grid {
             cells.push((k, s as u32, e as u32));
             s = e;
         }
-        let mut index: FastMap<u64, u32> = FastMap::default();
-        index.reserve(cells.len());
-        for (ci, c) in cells.iter().enumerate() {
-            index.insert(c.0, ci as u32);
-        }
         let offsets = forward_offsets();
+        let deltas: Vec<i64> = offsets
+            .iter()
+            .map(|o| o[0] + (o[1] << AXIS_BITS) + (o[2] << (2 * AXIS_BITS)))
+            .collect();
+        const CHUNK: usize = 2048;
         cells
-            .par_iter()
-            .flat_map_iter(|&(key, s, e)| {
+            .par_chunks(CHUNK)
+            .flat_map_iter(|chunk| {
                 let mut local = Vec::new();
-                let members = &entries[s as usize..e as usize];
-                for a in 0..members.len() {
-                    for b in a + 1..members.len() {
-                        let (i, j) = (members[a].1 as usize, members[b].1 as usize);
-                        if touches(i, j) {
-                            local.push((i as u32, j as u32));
+                // Curseurs : première cellule de clé ≥ clé du bloc + δ.
+                let first = chunk[0].0 as i64;
+                let mut cursor: Vec<usize> = deltas
+                    .iter()
+                    .map(|&d| cells.partition_point(|c| (c.0 as i64) < first + d))
+                    .collect();
+                for &(key, s, e) in chunk {
+                    let members = &entries[s as usize..e as usize];
+                    for a in 0..members.len() {
+                        for b in a + 1..members.len() {
+                            let (i, j) = (members[a].1 as usize, members[b].1 as usize);
+                            if touches(i, j) {
+                                local.push((i as u32, j as u32));
+                            }
                         }
                     }
-                }
-                let c = unpack(key);
-                for off in &offsets {
-                    let nc = [c[0] + off[0], c[1] + off[1], c[2] + off[2]];
-                    if !in_range(nc) {
-                        continue;
-                    }
-                    if let Some(&ci) = index.get(&pack(nc)) {
-                        let (_, ns, ne) = cells[ci as usize];
+                    let c = unpack(key);
+                    for (k, off) in offsets.iter().enumerate() {
+                        let target = key as i64 + deltas[k];
+                        let cur = &mut cursor[k];
+                        while *cur < cells.len() && (cells[*cur].0 as i64) < target {
+                            *cur += 1;
+                        }
+                        let nc = [c[0] + off[0], c[1] + off[1], c[2] + off[2]];
+                        if *cur >= cells.len() || cells[*cur].0 as i64 != target || !in_range(nc) {
+                            continue;
+                        }
+                        let (_, ns, ne) = cells[*cur];
                         for a in members {
                             for b in &entries[ns as usize..ne as usize] {
                                 let (i, j) = (a.1 as usize, b.1 as usize);
@@ -227,9 +224,12 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
     };
 
     let ext: Vec<f64> = boxes.par_iter().map(Swept::extent).collect();
+    // 99ᵉ centile des extensions, estimé sur un échantillon régulier : il ne
+    // fixe que la taille des cellules, pas l'exactitude du résultat.
     let p99 = {
-        let mut e = ext.clone();
-        let k = (((n as f64) * 0.99) as usize).min(n - 1);
+        let stride = (n / 65_536).max(1);
+        let mut e: Vec<f64> = ext.iter().step_by(stride).copied().collect();
+        let k = (((e.len() as f64) * 0.99) as usize).min(e.len() - 1);
         *e.select_nth_unstable_by(k, f64::total_cmp).1
     };
 

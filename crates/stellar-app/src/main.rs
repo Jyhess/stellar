@@ -117,7 +117,48 @@ fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
         descriptor
     });
     egui_wgpu::WgpuConfiguration {
+        present_mode: present_mode(),
         wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
         ..Default::default()
+    }
+}
+
+/// Mode de présentation de l'interface.
+///
+/// En mode synchronisé classique (Fifo), l'acquisition de l'image suivante
+/// attend le balayage de l'écran en tenant un verrou de la carte que toute
+/// soumission de travaux réclame aussi : le moteur GPU, qui partage la carte,
+/// perdrait jusqu'à une image entière à chaque pas. Le mode Mailbox reste
+/// synchronisé (pas de déchirement) sans cette attente ; il est garanti sous
+/// DirectX 12 et proposé par les pilotes Vulkan de NVIDIA et d'AMD.
+///
+/// `STELLAR_PRESENT=fifo|mailbox|immediate` impose un mode (essais).
+fn present_mode() -> wgpu::PresentMode {
+    match std::env::var("STELLAR_PRESENT").as_deref() {
+        Ok("fifo") => return wgpu::PresentMode::AutoVsync,
+        Ok("mailbox") => return wgpu::PresentMode::Mailbox,
+        Ok("immediate") => return wgpu::PresentMode::AutoNoVsync,
+        _ => {}
+    }
+    const NVIDIA: u32 = 0x10de;
+    const AMD: u32 = 0x1002;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::PRIMARY,
+        ..Default::default()
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+    }));
+    match adapter.map(|a| a.get_info()) {
+        Some(info)
+            if info.backend == wgpu::Backend::Dx12
+                || (info.backend == wgpu::Backend::Vulkan
+                    && matches!(info.vendor, NVIDIA | AMD)) =>
+        {
+            wgpu::PresentMode::Mailbox
+        }
+        _ => wgpu::PresentMode::AutoVsync,
     }
 }

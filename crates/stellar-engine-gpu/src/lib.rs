@@ -6,13 +6,23 @@
 //! - **Barnes-Hut sur LBVH** : à chaque pas, boîte englobante, codes de
 //!   Morton (30 bits), tri radix GPU, construction parallèle de l'arbre
 //!   binaire radix (Karras 2012), agrégation niveau par niveau (centres de
-//!   masse, boîtes, boîtes balayées), puis parcours par corps ;
+//!   masse, boîtes, rayons d'ouverture, boîtes balayées), puis parcours
+//!   **par groupes** de 128 corps voisins, qui partagent la descente de
+//!   l'arbre et une liste d'interactions en mémoire partagée ;
 //! - **Leapfrog KDK** à pas fixe ;
 //! - **fusions balayées** : les paires en contact sont détectées sur le GPU
 //!   (même arbre, boîtes balayées) ; le regroupement (union-find, rarement
 //!   plus de quelques milliers de paires) est fait sur le CPU, puis appliqué
 //!   sur le GPU ;
 //! - **nettoyage** des corps éjectés et compaction sur le GPU.
+//!
+//! Un pas ne coûte qu'**une soumission et une attente** : tout ce que
+//! l'application lit ensuite (paires de contact, éliminés, moments globaux,
+//! positions des corps suivis) est recopié en une fois dans un tampon de
+//! relecture. Les fusions planifiées sont appliquées dans une seconde
+//! soumission, sans attente. Les accesseurs ([`PhysicsEngine::positions_of`],
+//! [`PhysicsEngine::center_of_mass`], [`PhysicsEngine::diagnostics`])
+//! répondent alors sans solliciter la carte.
 //!
 //! Les calculs sont en simple précision (f32) ; l'état est relu en double
 //! précision quand l'application le demande (sauvegarde, enregistrement…).
@@ -24,8 +34,8 @@
 mod gpu;
 
 use std::any::Any;
-use std::cell::Cell;
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -38,7 +48,7 @@ use stellar_domain::{
     SimulationState, StepReport,
 };
 
-use crate::gpu::{groups, Gpu, Kernel};
+use crate::gpu::{grid, groups, Gpu, Kernel};
 
 pub use crate::gpu::{SharedDevice, WG};
 
@@ -48,8 +58,25 @@ pub const ENGINE_ID: &str = "gpu-barnes-hut";
 const LEVELS: usize = 72;
 /// Nombre maximal de paires de contact traitées par pas.
 const MAX_PAIRS: usize = 1 << 18;
+/// Taille d'un nœud de l'arbre (centre de masse, boîte, rayon d'ouverture).
+const NODE_BYTES: usize = 48;
+/// La topologie de l'arbre (ordre de Morton, construction de Karras) est
+/// refaite tous les `REBUILD_EVERY` pas, ou après une compaction ; entre-temps
+/// l'arbre est seulement réajusté (centres de masse, boîtes, rayons
+/// d'ouverture), les corps ayant peu bougé.
+const REBUILD_EVERY: u32 = 4;
+/// Corps par groupe du parcours de Barnes-Hut (`forces.wgsl`).
+const FORCE_GROUP: u32 = 128;
 /// Nombre maximal de corps (lancements 1D : 65 535 groupes de 256).
 pub const MAX_BODIES: usize = 65_535 * WG as usize;
+/// Identifiants dont la position est relue à chaque pas (traces, suivi).
+const QUERY_CAP: usize = 1024;
+/// Listes d'identifiants suivies à chaque pas (les plus récemment demandées).
+const QUERY_LISTS: usize = 4;
+/// Paires de contact et éliminés relus avec chaque pas ; au-delà (rare),
+/// une relecture complémentaire.
+const PAIR_PREFIX: usize = 1024;
+const REMOVED_PREFIX: usize = 1024;
 
 // ----------------------------------------------------------------------
 // Structures partagées avec les shaders (disposition identique)
@@ -64,8 +91,6 @@ pub struct GpuBody {
     pub id: u32,
     pub acc: [f32; 3],
     pub pot: f32,
-    pub old: [f32; 3],
-    pub flag: u32,
 }
 
 #[repr(C)]
@@ -86,7 +111,7 @@ struct Params {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 struct Pass {
     n: u32,
     a: u32,
@@ -113,12 +138,32 @@ struct MergeOp {
     body: GpuBody,
 }
 
+const PAIR_BYTES: usize = std::mem::size_of::<PairRec>();
+
+/// Disposition du tampon de relecture d'un pas (octets).
+mod readback {
+    use super::*;
+    /// Nombre de paires de contact, nombre d'éliminés (u32).
+    pub const COUNTERS: u64 = 0;
+    /// Moments globaux : 3 × vec4<f32>.
+    pub const MOMENTS: u64 = 16;
+    /// Positions des corps suivis : QUERY_CAP × vec4<f32>.
+    pub const QUERY: u64 = 64;
+    pub const PAIRS: u64 = QUERY + 16 * QUERY_CAP as u64;
+    pub const REMOVED: u64 = PAIRS + (PAIR_PREFIX * PAIR_BYTES) as u64;
+    pub const SIZE: u64 = REMOVED + 4 * REMOVED_PREFIX as u64;
+}
+
 fn v3(a: [f32; 3]) -> DVec3 {
     DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64)
 }
 
 fn f3(v: DVec3) -> [f32; 3] {
     [v.x as f32, v.y as f32, v.z as f32]
+}
+
+fn u32_at(raw: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([raw[offset], raw[offset + 1], raw[offset + 2], raw[offset + 3]])
 }
 
 // ----------------------------------------------------------------------
@@ -183,7 +228,7 @@ impl EngineFactory for GpuEngineFactory {
 
 struct Kernels {
     kick_drift: Kernel,
-    kick: Kernel,
+    kick_moments: Kernel,
     bbox_partial: Kernel,
     bbox_final: Kernel,
     moments_partial: Kernel,
@@ -205,6 +250,7 @@ struct Kernels {
     collide: Kernel,
     apply_merges: Kernel,
     cleanup: Kernel,
+    index_map: Kernel,
     query: Kernel,
 }
 
@@ -215,9 +261,24 @@ impl Kernels {
                 g.kernel($name, include_str!(concat!("shaders/", $name, ".wgsl")))
             };
         }
+        // Parcours de Barnes-Hut : liste d'interactions de 512 entrées, pile
+        // aussi grande que la mémoire partagée le permet (2 048 nœuds au
+        // plus, pour garder plusieurs groupes actifs par multiprocesseur).
+        const LIST: u32 = 512;
+        let shared = g.limits.max_compute_workgroup_storage_size;
+        let fixed = 16 * (LIST + 4) + 4 * FORCE_GROUP + 64;
+        let stack = (shared.saturating_sub(fixed) / 4).clamp(256, 2048);
+        let forces = g.kernel(
+            "forces",
+            &format!(
+                "const STACK: u32 = {stack}u;\nconst LIST: u32 = {LIST}u;\nconst LIST_PAD: u32 = {}u;\n{}",
+                LIST + 4,
+                include_str!("shaders/forces.wgsl")
+            ),
+        );
         Self {
             kick_drift: k!("kick_drift"),
-            kick: k!("kick"),
+            kick_moments: k!("kick_moments"),
             bbox_partial: k!("bbox_partial"),
             bbox_final: k!("bbox_final"),
             moments_partial: k!("moments_partial"),
@@ -235,13 +296,55 @@ impl Kernels {
             lbvh_levels: k!("lbvh_levels"),
             lbvh_list: k!("lbvh_list"),
             lbvh_aggregate: k!("lbvh_aggregate"),
-            forces: k!("forces"),
+            forces,
             collide: k!("collide"),
             apply_merges: k!("apply_merges"),
             cleanup: k!("cleanup"),
+            index_map: k!("index_map"),
             query: k!("query"),
         }
     }
+}
+
+/// Paramètres de passe (tri, scan, requêtes) : un petit tampon uniforme par
+/// usage, réécrit seulement quand sa valeur change. Les tampons restant les
+/// mêmes, leurs groupes de liaisons sont créés une fois pour toutes.
+///
+/// Un même emplacement ne doit servir qu'avec une seule valeur par
+/// soumission (les écritures de la file précèdent toute la soumission).
+struct PassSlots {
+    buffers: Vec<wgpu::Buffer>,
+    values: RefCell<Vec<Pass>>,
+}
+
+impl PassSlots {
+    fn new(gpu: &Gpu, count: usize) -> Self {
+        Self {
+            buffers: (0..count)
+                .map(|_| gpu.uniform("pass", bytemuck::bytes_of(&Pass::default())))
+                .collect(),
+            values: RefCell::new(vec![Pass::default(); count]),
+        }
+    }
+
+    fn get(&self, gpu: &Gpu, slot: usize, value: Pass) -> &wgpu::Buffer {
+        let mut values = self.values.borrow_mut();
+        if values[slot] != value {
+            gpu.queue
+                .write_buffer(&self.buffers[slot], 0, bytemuck::bytes_of(&value));
+            values[slot] = value;
+        }
+        &self.buffers[slot]
+    }
+}
+
+/// Emplacements des paramètres de passe.
+mod slot {
+    /// Huit passes du tri radix.
+    pub const SORT: usize = 0;
+    /// Niveaux du scan des histogrammes du tri.
+    pub const SORT_SCAN: usize = 8;
+    // Puis les niveaux du scan de la compaction, et enfin les requêtes.
 }
 
 struct Buffers {
@@ -264,13 +367,18 @@ struct Buffers {
     level_args: wgpu::Buffer,
     level_uniforms: Vec<wgpu::Buffer>,
     nodes: wgpu::Buffer,
+    swept: wgpu::Buffer,
     pairs: wgpu::Buffer,
     pair_counter: wgpu::Buffer,
     ops: wgpu::Buffer,
     removed: wgpu::Buffer,
     removed_counter: wgpu::Buffer,
+    index_of: wgpu::Buffer,
+    query_ids: wgpu::Buffer,
     query_results: wgpu::Buffer,
     params: wgpu::Buffer,
+    /// Tampon de relecture du pas (disposition : module [`readback`]).
+    readback: wgpu::Buffer,
 }
 
 /// Accès direct aux corps du moteur, pour les dessiner sans copie.
@@ -308,11 +416,59 @@ impl BodiesView {
     }
 }
 
+/// Listes d'identifiants dont les positions sont relues à chaque pas.
+#[derive(Default)]
+struct Queries {
+    /// Listes suivies, la plus récemment demandée en dernier.
+    lists: Vec<Vec<BodyId>>,
+    /// Positions relues, dans l'ordre de concaténation des listes.
+    results: Vec<Option<DVec3>>,
+    /// Pas auquel `results` correspond.
+    step: Option<u64>,
+}
+
+impl Queries {
+    fn total(&self) -> usize {
+        self.lists.iter().map(Vec::len).sum()
+    }
+
+    /// Positions de la liste `ids` si elle est suivie et à jour.
+    fn cached(&self, ids: &[BodyId], step: u64) -> Option<Vec<Option<DVec3>>> {
+        if self.step != Some(step) {
+            return None;
+        }
+        let mut start = 0;
+        for list in &self.lists {
+            if list.as_slice() == ids {
+                return Some(self.results[start..start + list.len()].to_vec());
+            }
+            start += list.len();
+        }
+        None
+    }
+}
+
+/// Fusions d'un pas : opérations à appliquer sur le GPU, paires (absorbé,
+/// résultant) et position de chaque corps résultant.
+struct MergePlan {
+    ops: Vec<MergeOp>,
+    merges: Vec<(BodyId, BodyId)>,
+    survivors: Vec<(BodyId, DVec3)>,
+}
+
+/// Grandeurs relues à l'issue d'un pas.
+#[derive(Clone, Copy, Default)]
+struct Moments {
+    /// (m, m·x), (m·v, ½ m v²), (½ m φ, 0, 0, 0), sommés sur tous les corps.
+    raw: [[f32; 4]; 3],
+}
+
 /// Moteur Barnes-Hut sur GPU.
 pub struct GpuEngine {
     gpu: Gpu,
     k: Kernels,
     b: Buffers,
+    slots: PassSlots,
     params: PhysicsParams,
     capacity: usize,
     pair_cap: usize,
@@ -323,9 +479,13 @@ pub struct GpuEngine {
     time: f64,
     /// Tampons exposés à l'affichage (carte partagée uniquement).
     view: Option<Arc<BodiesView>>,
-    /// Moments globaux du dernier pas (évite de les recalculer quand
-    /// énergies et centre de masse sont demandés ensemble).
-    moments: Cell<Option<(u64, [[f32; 4]; 3])>>,
+    moments: Moments,
+    queries: RefCell<Queries>,
+    /// La table des indices est périmée (compaction depuis le dernier arbre).
+    map_stale: std::cell::Cell<bool>,
+    /// Pas écoulés depuis la dernière construction de la topologie de
+    /// l'arbre (`u32::MAX` : à refaire).
+    tree_age: u32,
 }
 
 impl GpuEngine {
@@ -357,13 +517,14 @@ impl GpuEngine {
                 "le moteur GPU est limité à {MAX_BODIES} corps ({n} demandés)"
             ));
         }
-        if state.bodies.ids.iter().any(|&id| id > u32::MAX as u64) {
+        let max_id = state.bodies.ids.iter().copied().max().unwrap_or(0);
+        if max_id >= u32::MAX as u64 {
             return Err("identifiants de corps trop grands pour le moteur GPU".to_owned());
         }
         let capacity = n.max(2);
         let body_bytes = (capacity * std::mem::size_of::<GpuBody>()) as u64;
-        let node_bytes = (capacity * 64) as u64;
-        let largest = body_bytes.max(node_bytes);
+        let node_bytes = (capacity * NODE_BYTES) as u64;
+        let largest = body_bytes.max(node_bytes).max((max_id + 1) * 4);
         if largest > gpu.limits.max_storage_buffer_binding_size as u64
             || largest > gpu.limits.max_buffer_size
         {
@@ -392,6 +553,8 @@ impl GpuEngine {
             }
             len = blocks;
         }
+        let scan_levels = scan_sums.len();
+        let slots = PassSlots::new(&gpu, slot::SORT_SCAN + 2 * scan_levels + 1);
 
         let level_uniforms = (0..LEVELS)
             .map(|l| {
@@ -436,10 +599,8 @@ impl GpuEngine {
             level_args: gpu.indirect("level-args", LEVELS as u64 * 12),
             level_uniforms,
             nodes: gpu.storage("nodes", node_bytes),
-            pairs: gpu.storage(
-                "pairs",
-                pair_cap as u64 * std::mem::size_of::<PairRec>() as u64,
-            ),
+            swept: gpu.storage("swept", cap * 32),
+            pairs: gpu.storage("pairs", pair_cap as u64 * PAIR_BYTES as u64),
             pair_counter: gpu.storage("pair-counter", 16),
             ops: gpu.storage(
                 "ops",
@@ -447,8 +608,11 @@ impl GpuEngine {
             ),
             removed: gpu.storage("removed", cap * 4),
             removed_counter: gpu.storage("removed-counter", 16),
-            query_results: gpu.storage("query-results", 16 * 16),
+            index_of: gpu.storage("index-of", (max_id + 1) * 4),
+            query_ids: gpu.storage("query-ids", QUERY_CAP as u64 * 4),
+            query_results: gpu.storage("query-results", QUERY_CAP as u64 * 16),
             params: gpu.uniform("params", bytemuck::bytes_of(&Params::default())),
+            readback: gpu.readback("readback", readback::SIZE),
         };
 
         // Téléversement de l'état initial.
@@ -460,7 +624,6 @@ impl GpuEngine {
                     mass: s.masses[i] as f32,
                     vel: f3(s.velocities[i]),
                     id: s.ids[i] as u32,
-                    old: f3(s.positions[i]),
                     ..Default::default()
                 }
             })
@@ -480,6 +643,7 @@ impl GpuEngine {
             gpu,
             k,
             b,
+            slots,
             params,
             capacity,
             pair_cap,
@@ -488,12 +652,31 @@ impl GpuEngine {
             step: state.step,
             time: state.time,
             view,
-            moments: Cell::new(None),
+            moments: Moments::default(),
+            queries: RefCell::default(),
+            map_stale: Default::default(),
+            tree_age: u32::MAX,
         };
+        // Premier calcul du champ (le premier kick en a besoin) et des moments.
         engine.write_params(0);
         let mut enc = engine.gpu.encoder();
         engine.encode_tree_and_forces(&mut enc);
-        engine.gpu.submit(enc);
+        engine.encode_moments(&mut enc);
+        enc.copy_buffer_to_buffer(
+            &engine.b.moments,
+            0,
+            &engine.b.readback,
+            readback::MOMENTS,
+            48,
+        );
+        let index = engine.gpu.submit(enc);
+        let mut raw = [[0f32; 4]; 3];
+        engine
+            .gpu
+            .map_read(&engine.b.readback, index, readback::SIZE, |r| {
+                raw = read_moments(r)
+            });
+        engine.moments = Moments { raw };
         engine.publish_view();
         Ok(engine)
     }
@@ -512,6 +695,12 @@ impl GpuEngine {
 
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Temps GPU cumulés par noyau (ms, lancements), si le profilage est
+    /// actif (`STELLAR_GPU_PROFILE=1`, carte propre au moteur).
+    pub fn profile(&self) -> Vec<(&'static str, f64, u64)> {
+        self.gpu.profile()
     }
 
     fn write_params(&self, n_ops: usize) {
@@ -536,54 +725,60 @@ impl GpuEngine {
             .write_buffer(&self.b.params, 0, bytemuck::bytes_of(&params));
     }
 
-    fn pass_uniform(&self, pass: Pass) -> wgpu::Buffer {
-        self.gpu.uniform("pass", bytemuck::bytes_of(&pass))
-    }
-
-    /// Scan exclusif en place de `len` entiers de `data` (récursif).
+    /// Scan exclusif en place de `len` entiers de `data` (récursif) ;
+    /// `slot_base` : emplacements des paramètres, un par niveau.
     fn encode_scan(
         &self,
-        enc: &mut wgpu::CommandEncoder,
+        enc: &mut gpu::Encoder,
         data: &wgpu::Buffer,
         len: usize,
         level: usize,
+        slot_base: usize,
     ) {
         let wg = groups(len);
-        let u = self.pass_uniform(Pass {
-            n: len as u32,
-            ..Default::default()
-        });
+        let u = self.slots.get(
+            &self.gpu,
+            slot_base + level,
+            Pass {
+                n: len as u32,
+                ..Default::default()
+            },
+        );
         let sums = &self.b.scan_sums[level];
         self.gpu
-            .run(enc, &self.k.scan_blocks, &[&u, data, sums], wg);
+            .run(enc, &self.k.scan_blocks, &[u, data, sums], wg);
         if wg > 1 {
-            self.encode_scan(enc, sums, wg as usize, level + 1);
-            self.gpu.run(enc, &self.k.scan_add, &[&u, data, sums], wg);
+            self.encode_scan(enc, sums, wg as usize, level + 1, slot_base);
+            self.gpu.run(enc, &self.k.scan_add, &[u, data, sums], wg);
         }
     }
 
     /// Tri radix (clé 30 bits, 4 bits par passe) de keys[0]/vals[0].
-    fn encode_sort(&self, enc: &mut wgpu::CommandEncoder) {
+    fn encode_sort(&self, enc: &mut gpu::Encoder) {
         let n = self.n;
         let wg = groups(n);
         let b = &self.b;
         let mut src = 0;
         for pass in 0..8u32 {
-            let u = self.pass_uniform(Pass {
-                n: n as u32,
-                a: 4 * pass,
-                b: wg,
-                c: 0,
-            });
+            let u = self.slots.get(
+                &self.gpu,
+                slot::SORT + pass as usize,
+                Pass {
+                    n: n as u32,
+                    a: 4 * pass,
+                    b: wg,
+                    c: 0,
+                },
+            );
             let dst = 1 - src;
             self.gpu
-                .run(enc, &self.k.radix_hist, &[&u, &b.keys[src], &b.counts], wg);
-            self.encode_scan(enc, &b.counts, 16 * wg as usize, 0);
+                .run(enc, &self.k.radix_hist, &[u, &b.keys[src], &b.counts], wg);
+            self.encode_scan(enc, &b.counts, 16 * wg as usize, 0, slot::SORT_SCAN);
             self.gpu.run(
                 enc,
                 &self.k.radix_scatter,
                 &[
-                    &u,
+                    u,
                     &b.keys[src],
                     &b.vals[src],
                     &b.counts,
@@ -597,15 +792,19 @@ impl GpuEngine {
         debug_assert_eq!(src, 0);
     }
 
-    /// Réordonne les corps (Morton), construit l'arbre et calcule le champ.
-    fn encode_tree_and_forces(&mut self, enc: &mut wgpu::CommandEncoder) {
+    /// Réordonne les corps (Morton) et construit l'arbre, ou le réajuste
+    /// seulement (voir [`REBUILD_EVERY`]), puis calcule le champ et tient à
+    /// jour la table des indices.
+    fn encode_tree_and_forces(&mut self, enc: &mut gpu::Encoder) {
         let n = self.n;
         if n == 0 {
             return;
         }
         let wg = groups(n);
         let mut cur = self.cur;
-        if n >= 2 {
+        let rebuild = self.tree_age >= REBUILD_EVERY;
+        self.tree_age = if rebuild { 0 } else { self.tree_age + 1 };
+        if n >= 2 && rebuild {
             let (g, k, b) = (&self.gpu, &self.k, &self.b);
             let p = &b.params;
             let src = &b.bodies[cur];
@@ -621,7 +820,6 @@ impl GpuEngine {
             self.encode_sort(enc);
             g.run(enc, &k.gather, &[p, &b.vals[0], src, dst], wg);
             cur = 1 - cur;
-            let bodies = &b.bodies[cur];
             g.run(
                 enc,
                 &k.lbvh_build,
@@ -653,6 +851,11 @@ impl GpuEngine {
                 ],
                 wg,
             );
+        }
+        if n >= 2 {
+            let (g, k, b) = (&self.gpu, &self.k, &self.b);
+            let p = &b.params;
+            let bodies = &b.bodies[cur];
             for level in (0..LEVELS).rev() {
                 g.run_indirect(
                     enc,
@@ -666,6 +869,7 @@ impl GpuEngine {
                         &b.level_offset,
                         &b.node_list,
                         &b.nodes,
+                        &b.swept,
                     ],
                     &b.level_args,
                     level as u64 * 12,
@@ -673,17 +877,31 @@ impl GpuEngine {
             }
         }
         let b = &self.b;
-        self.gpu.run(
+        self.gpu.run_2d(
             enc,
             &self.k.forces,
             &[&b.params, &b.bodies[cur], &b.nodes, &b.children],
-            wg,
+            grid(n, FORCE_GROUP),
         );
         self.cur = cur;
+        if rebuild || self.map_stale.get() {
+            self.encode_index_map(enc);
+            self.map_stale.set(false);
+        }
+    }
+
+    fn encode_index_map(&self, enc: &mut gpu::Encoder) {
+        let b = &self.b;
+        self.gpu.run(
+            enc,
+            &self.k.index_map,
+            &[&b.params, &b.bodies[self.cur], &b.index_of],
+            groups(self.n),
+        );
     }
 
     /// Moments globaux (masse, centre de masse, quantité de mouvement, énergies).
-    fn encode_moments(&self, enc: &mut wgpu::CommandEncoder) {
+    fn encode_moments(&self, enc: &mut gpu::Encoder) {
         let b = &self.b;
         let wg = groups(self.n);
         self.gpu.run(
@@ -700,28 +918,38 @@ impl GpuEngine {
         );
     }
 
-    fn read_moments(&self) -> [[f32; 4]; 3] {
-        if let Some((step, m)) = self.moments.get() {
-            if step == self.step {
-                return m;
-            }
+    /// Positions des listes suivies (au plus `QUERY_CAP` identifiants,
+    /// déjà écrits dans `query_ids`).
+    fn encode_queries(&self, enc: &mut gpu::Encoder, count: usize) {
+        if count == 0 {
+            return;
         }
-        let mut enc = self.gpu.encoder();
-        self.encode_moments(&mut enc);
-        self.gpu.submit(enc);
-        let raw = self.gpu.read(&self.b.moments, 0, 48);
-        let f: &[f32] = bytemuck::cast_slice(&raw);
-        let m = [
-            [f[0], f[1], f[2], f[3]],
-            [f[4], f[5], f[6], f[7]],
-            [f[8], f[9], f[10], f[11]],
-        ];
-        self.moments.set(Some((self.step, m)));
-        m
+        let b = &self.b;
+        let u = self.slots.get(
+            &self.gpu,
+            slot::SORT_SCAN + 2 * self.b.scan_sums.len(),
+            Pass {
+                n: count as u32,
+                ..Default::default()
+            },
+        );
+        self.gpu.run(
+            enc,
+            &self.k.query,
+            &[
+                &b.params,
+                u,
+                &b.query_ids,
+                &b.index_of,
+                &b.bodies[self.cur],
+                &b.query_results,
+            ],
+            groups(count),
+        );
     }
 
     /// Supprime les corps de masse nulle (compaction par scan).
-    fn encode_compaction(&mut self, enc: &mut wgpu::CommandEncoder) {
+    fn encode_compaction(&mut self, enc: &mut gpu::Encoder) {
         let b = &self.b;
         let wg = groups(self.n);
         // Les drapeaux réutilisent le tampon des histogrammes du tri.
@@ -731,7 +959,13 @@ impl GpuEngine {
             &[&b.params, &b.bodies[self.cur], &b.counts],
             wg,
         );
-        self.encode_scan(enc, &b.counts, self.n, 0);
+        self.encode_scan(
+            enc,
+            &b.counts,
+            self.n,
+            0,
+            slot::SORT_SCAN + b.scan_sums.len(),
+        );
         self.gpu.run(
             enc,
             &self.k.compact,
@@ -747,7 +981,11 @@ impl GpuEngine {
     }
 
     /// Regroupe les paires en contact et prépare les opérations de fusion.
-    fn plan_merges(&self, pairs: &[PairRec]) -> (Vec<MergeOp>, Vec<(BodyId, BodyId)>) {
+    ///
+    /// Les corps éliminés au même pas par le nettoyage sont écartés des
+    /// paires (ils ont déjà disparu). Renvoie aussi, pour chaque groupe,
+    /// l'identifiant du corps résultant et sa position.
+    fn plan_merges(&self, pairs: &[PairRec], removed: &HashSet<BodyId>) -> MergePlan {
         let mut index_of: HashMap<u32, usize> = HashMap::new();
         let mut members: Vec<(u32, GpuBody)> = Vec::new();
         let mut slot = |i: u32, body: GpuBody, members: &mut Vec<(u32, GpuBody)>| -> usize {
@@ -758,6 +996,9 @@ impl GpuEngine {
         };
         let mut links = Vec::with_capacity(pairs.len());
         for p in pairs {
+            if removed.contains(&(p.a.id as u64)) || removed.contains(&(p.b.id as u64)) {
+                continue;
+            }
             let a = slot(p.ia, p.a, &mut members);
             let b = slot(p.ib, p.b, &mut members);
             links.push((a, b));
@@ -785,6 +1026,7 @@ impl GpuEngine {
 
         let mut ops = Vec::new();
         let mut merges = Vec::new();
+        let mut survivors = Vec::new();
         for (_, group) in groups {
             let inputs: Vec<MergeInput> = group
                 .iter()
@@ -799,6 +1041,7 @@ impl GpuEngine {
                 })
                 .collect();
             let merged = merge(&inputs);
+            survivors.push((merged.id, merged.position));
             let acc: DVec3 = group
                 .iter()
                 .map(|&m| v3(members[m].1.acc) * members[m].1.mass as f64)
@@ -818,8 +1061,6 @@ impl GpuEngine {
                             id: body.id,
                             acc: f3(acc),
                             pot: body.pot,
-                            old: body.old,
-                            flag: 0,
                         },
                     });
                 } else {
@@ -833,19 +1074,28 @@ impl GpuEngine {
                 }
             }
         }
-        (ops, merges)
+        MergePlan {
+            ops,
+            merges,
+            survivors,
+        }
     }
 
     fn step_inner(&mut self) -> StepReport {
         let mut report = StepReport::default();
+        self.step += 1;
+        self.time += self.params.dt;
         if self.n == 0 {
-            self.step += 1;
-            self.time += self.params.dt;
+            self.queries.borrow_mut().step = Some(self.step);
+            self.moments = Moments::default();
             return report;
         }
         let wg = groups(self.n);
+        let period = self.params.cleanup_period as u64;
+        let cleanup = period > 0 && self.step.is_multiple_of(period);
 
-        // 1. Kick ½, drift, arbre, champ, contacts.
+        // 1. Kick ½, drift, arbre, champ, contacts, kick ½, nettoyage,
+        //    moments et positions suivies : une soumission, une attente.
         self.write_params(0);
         let mut enc = self.gpu.encoder();
         {
@@ -867,65 +1117,30 @@ impl GpuEngine {
                 &[
                     &b.params,
                     &b.bodies[self.cur],
-                    &b.nodes,
+                    &b.swept,
                     &b.children,
                     &b.pairs,
                     &b.pair_counter,
                 ],
                 wg,
             );
-        }
-        self.gpu.submit(enc);
-
-        // 2. Fusions (regroupement sur le CPU).
-        let found = self.gpu.read_u32(&self.b.pair_counter) as usize;
-        let mut dead = 0usize;
-        let mut ops = Vec::new();
-        if found > 0 {
-            let count = found.min(self.pair_cap);
-            let raw = self.gpu.read(
-                &self.b.pairs,
-                0,
-                (count * std::mem::size_of::<PairRec>()) as u64,
-            );
-            let pairs: &[PairRec] = bytemuck::cast_slice(&raw);
-            let (o, merges) = self.plan_merges(pairs);
-            dead += merges.len();
-            report.merges = merges;
-            ops = o;
-        }
-
-        // 3. Application des fusions, kick ½, nettoyage, compaction.
-        self.write_params(ops.len());
-        let mut enc = self.gpu.encoder();
-        if !ops.is_empty() {
-            self.gpu
-                .queue
-                .write_buffer(&self.b.ops, 0, bytemuck::cast_slice(&ops));
-            let b = &self.b;
+            // Kick ½ et moments globaux en une lecture des corps.
             self.gpu.run(
                 &mut enc,
-                &self.k.apply_merges,
-                &[&b.params, &b.ops, &b.bodies[self.cur]],
-                groups(ops.len()),
-            );
-        }
-        {
-            let b = &self.b;
-            self.gpu.run(
-                &mut enc,
-                &self.k.kick,
-                &[&b.params, &b.bodies[self.cur]],
+                &self.k.kick_moments,
+                &[&b.params, &b.bodies[self.cur], &b.moments_partial],
                 wg,
             );
+            self.gpu.run(
+                &mut enc,
+                &self.k.moments_final,
+                &[&b.params, &b.moments_partial, &b.moments],
+                1,
+            );
         }
-        self.step += 1;
-        self.time += self.params.dt;
-        let period = self.params.cleanup_period as u64;
-        if period > 0 && self.step % period == 0 {
-            self.encode_moments(&mut enc);
+        enc.clear_buffer(&self.b.removed_counter, 0, None);
+        if cleanup {
             let b = &self.b;
-            enc.clear_buffer(&b.removed_counter, 0, None);
             self.gpu.run(
                 &mut enc,
                 &self.k.cleanup,
@@ -938,24 +1153,174 @@ impl GpuEngine {
                 ],
                 wg,
             );
-            self.gpu.submit(enc);
-            let removed = self.gpu.read_u32(&self.b.removed_counter) as usize;
-            if removed > 0 {
-                let raw = self.gpu.read(&self.b.removed, 0, removed as u64 * 4);
-                let ids: &[u32] = bytemuck::cast_slice(&raw);
-                report.removed = ids.iter().map(|&i| i as u64).collect();
-                dead += removed;
+            // Moments sans les corps éliminés.
+            self.encode_moments(&mut enc);
+        }
+        let query_count = self.queries.borrow().total();
+        self.encode_queries(&mut enc, query_count);
+        let index = {
+            let b = &self.b;
+            let rb = &b.readback;
+            enc.copy_buffer_to_buffer(&b.pair_counter, 0, rb, readback::COUNTERS, 4);
+            enc.copy_buffer_to_buffer(&b.removed_counter, 0, rb, readback::COUNTERS + 4, 4);
+            enc.copy_buffer_to_buffer(&b.moments, 0, rb, readback::MOMENTS, 48);
+            if query_count > 0 {
+                enc.copy_buffer_to_buffer(
+                    &b.query_results,
+                    0,
+                    rb,
+                    readback::QUERY,
+                    16 * query_count as u64,
+                );
             }
-            enc = self.gpu.encoder();
+            let pairs = (PAIR_PREFIX.min(self.pair_cap) * PAIR_BYTES) as u64;
+            enc.copy_buffer_to_buffer(&b.pairs, 0, rb, readback::PAIRS, pairs);
+            if cleanup {
+                let removed = 4 * REMOVED_PREFIX.min(self.capacity) as u64;
+                enc.copy_buffer_to_buffer(&b.removed, 0, rb, readback::REMOVED, removed);
+            }
+            self.gpu.submit(enc)
+        };
+        self.publish_view();
+
+        // 2. Relecture : compteurs, moments, positions, premières paires.
+        let mut found = 0usize;
+        let mut removed_count = 0usize;
+        let mut pairs: Vec<PairRec> = Vec::new();
+        let mut removed_ids: Vec<u32> = Vec::new();
+        let mut query_raw: Vec<[f32; 4]> = Vec::new();
+        let mut moments = [[0f32; 4]; 3];
+        self.gpu
+            .map_read(&self.b.readback, index, readback::SIZE, |raw| {
+                found = u32_at(raw, readback::COUNTERS as usize) as usize;
+                removed_count = u32_at(raw, readback::COUNTERS as usize + 4) as usize;
+                moments = read_moments(raw);
+                let q = readback::QUERY as usize;
+                query_raw = bytemuck::cast_slice(&raw[q..q + 16 * query_count]).to_vec();
+                let count = found.min(self.pair_cap).min(PAIR_PREFIX);
+                let p = readback::PAIRS as usize;
+                pairs = bytemuck::cast_slice(&raw[p..p + count * PAIR_BYTES]).to_vec();
+                if cleanup {
+                    let count = removed_count.min(REMOVED_PREFIX);
+                    let r = readback::REMOVED as usize;
+                    removed_ids = bytemuck::cast_slice(&raw[r..r + 4 * count]).to_vec();
+                }
+            });
+        // Au-delà des premiers enregistrements (rare) : relecture du reste.
+        let total_pairs = found.min(self.pair_cap);
+        if total_pairs > pairs.len() {
+            let start = pairs.len();
+            let raw = self.gpu.read(
+                &self.b.pairs,
+                (start * PAIR_BYTES) as u64,
+                ((total_pairs - start) * PAIR_BYTES) as u64,
+            );
+            pairs.extend_from_slice(bytemuck::cast_slice(&raw));
+        }
+        if removed_count > removed_ids.len() {
+            let start = removed_ids.len();
+            let raw = self.gpu.read(
+                &self.b.removed,
+                start as u64 * 4,
+                (removed_count - start) as u64 * 4,
+            );
+            removed_ids.extend_from_slice(bytemuck::cast_slice(&raw));
+        }
+        report.removed = removed_ids.iter().map(|&i| i as u64).collect();
+        self.moments = Moments { raw: moments };
+
+        // 3. Fusions : regroupement sur le CPU, application sans attente.
+        let mut dead = report.removed.len();
+        let mut survivors = Vec::new();
+        let mut ops = Vec::new();
+        if !pairs.is_empty() {
+            let removed: HashSet<BodyId> = report.removed.iter().copied().collect();
+            let plan = self.plan_merges(&pairs, &removed);
+            dead += plan.merges.len();
+            report.merges = plan.merges;
+            ops = plan.ops;
+            survivors = plan.survivors;
         }
         if dead > 0 {
+            self.write_params(ops.len());
+            let mut enc = self.gpu.encoder();
+            if !ops.is_empty() {
+                self.gpu
+                    .queue
+                    .write_buffer(&self.b.ops, 0, bytemuck::cast_slice(&ops));
+                let b = &self.b;
+                self.gpu.run(
+                    &mut enc,
+                    &self.k.apply_merges,
+                    &[&b.params, &b.ops, &b.bodies[self.cur]],
+                    groups(ops.len()),
+                );
+            }
             self.encode_compaction(&mut enc);
+            self.gpu.submit(enc);
+            // Les paramètres suivants ne valent qu'à partir de la prochaine
+            // soumission, une fois la compaction faite.
+            self.n -= dead.min(self.n);
+            self.write_params(0);
+            self.map_stale.set(true);
+            self.tree_age = u32::MAX;
+            self.publish_view();
         }
-        self.gpu.submit(enc);
-        self.n -= dead.min(self.n);
-        self.write_params(0);
-        self.publish_view();
+
+        // 4. Positions suivies, corrigées des fusions et éliminations du pas.
+        let gone: HashSet<BodyId> = report
+            .merges
+            .iter()
+            .map(|&(a, _)| a)
+            .chain(report.removed.iter().copied())
+            .collect();
+        let moved: HashMap<BodyId, DVec3> = survivors.into_iter().collect();
+        let mut q = self.queries.borrow_mut();
+        let ids: Vec<BodyId> = q.lists.iter().flatten().copied().collect();
+        q.results = ids
+            .iter()
+            .zip(&query_raw)
+            .map(|(id, r)| {
+                if gone.contains(id) {
+                    None
+                } else if let Some(&p) = moved.get(id) {
+                    Some(p)
+                } else {
+                    (r[3] > 0.5).then(|| DVec3::new(r[0] as f64, r[1] as f64, r[2] as f64))
+                }
+            })
+            .collect();
+        q.step = Some(self.step);
         report
+    }
+
+    /// Relit sur-le-champ les positions de toutes les listes suivies.
+    fn refresh_queries(&self) {
+        let mut q = self.queries.borrow_mut();
+        let ids: Vec<u32> = q
+            .lists
+            .iter()
+            .flatten()
+            .map(|&id| id.min(u32::MAX as u64) as u32)
+            .collect();
+        if !ids.is_empty() {
+            self.gpu
+                .queue
+                .write_buffer(&self.b.query_ids, 0, bytemuck::cast_slice(&ids));
+        }
+        let mut enc = self.gpu.encoder();
+        if self.map_stale.replace(false) {
+            self.encode_index_map(&mut enc);
+        }
+        self.encode_queries(&mut enc, ids.len());
+        self.gpu.submit(enc);
+        let raw = self.gpu.read(&self.b.query_results, 0, 16 * ids.len() as u64);
+        let r: &[[f32; 4]] = bytemuck::cast_slice(&raw);
+        q.results = r
+            .iter()
+            .map(|v| (v[3] > 0.5).then(|| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64)))
+            .collect();
+        q.step = Some(self.step);
     }
 
     /// Relit tous les corps (ordre interne du moteur).
@@ -970,6 +1335,16 @@ impl GpuEngine {
         );
         bytemuck::cast_slice::<u8, GpuBody>(&raw).to_vec()
     }
+}
+
+fn read_moments(raw: &[u8]) -> [[f32; 4]; 3] {
+    let m = readback::MOMENTS as usize;
+    let f: &[f32] = bytemuck::cast_slice(&raw[m..m + 48]);
+    [
+        [f[0], f[1], f[2], f[3]],
+        [f[4], f[5], f[6], f[7]],
+        [f[8], f[9], f[10], f[11]],
+    ]
 }
 
 impl PhysicsEngine for GpuEngine {
@@ -1042,49 +1417,48 @@ impl PhysicsEngine for GpuEngine {
     }
 
     fn positions_of(&self, ids: &[BodyId]) -> Vec<Option<DVec3>> {
-        let mut out = Vec::with_capacity(ids.len());
-        for chunk in ids.chunks(15) {
-            let mut q = [0u32; 16];
-            q[0] = chunk.len() as u32;
-            for (k, &id) in chunk.iter().enumerate() {
-                q[k + 1] = id.min(u32::MAX as u64) as u32;
-            }
-            let qbuf = self.gpu.uniform("query", bytemuck::cast_slice(&q));
-            let b = &self.b;
-            let mut enc = self.gpu.encoder();
-            enc.clear_buffer(&b.query_results, 0, None);
-            self.gpu.run(
-                &mut enc,
-                &self.k.query,
-                &[&b.params, &qbuf, &b.bodies[self.cur], &b.query_results],
-                groups(self.n),
-            );
-            self.gpu.submit(enc);
-            let raw = self.gpu.read(&b.query_results, 0, chunk.len() as u64 * 16);
-            let r: &[[f32; 4]] = bytemuck::cast_slice(&raw);
-            out.extend(
-                r.iter().map(|v| {
-                    (v[3] > 0.5).then(|| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
-                }),
-            );
+        if let Some(r) = self.queries.borrow().cached(ids, self.step) {
+            return r;
         }
-        out
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        if ids.len() > QUERY_CAP {
+            // Liste trop longue pour être suivie : relecture par l'état.
+            let s = self.state();
+            let index: HashMap<BodyId, usize> =
+                s.bodies.ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+            return ids
+                .iter()
+                .map(|id| index.get(id).map(|&i| s.bodies.positions[i]))
+                .collect();
+        }
+        // Nouvelle liste : suivie désormais à chaque pas (à la place de la
+        // plus ancienne), et relue tout de suite.
+        {
+            let mut q = self.queries.borrow_mut();
+            q.lists.retain(|l| l.as_slice() != ids);
+            q.lists.push(ids.to_vec());
+            while q.lists.len() > QUERY_LISTS || q.total() > QUERY_CAP {
+                q.lists.remove(0);
+            }
+        }
+        self.refresh_queries();
+        self.queries
+            .borrow()
+            .cached(ids, self.step)
+            .expect("liste suivie")
     }
 
     fn center_of_mass(&self) -> Option<DVec3> {
-        if self.n == 0 {
-            return None;
-        }
-        let m = self.read_moments();
+        let m = self.moments.raw;
         let mass = m[0][0] as f64;
-        (mass > 0.0).then(|| DVec3::new(m[0][1] as f64, m[0][2] as f64, m[0][3] as f64) / mass)
+        (self.n > 0 && mass > 0.0)
+            .then(|| DVec3::new(m[0][1] as f64, m[0][2] as f64, m[0][3] as f64) / mass)
     }
 
     fn diagnostics(&self) -> Diagnostics {
-        if self.n == 0 {
-            return Diagnostics::default();
-        }
-        let m = self.read_moments();
+        let m = self.moments.raw;
         Diagnostics {
             kinetic_energy: m[1][3] as f64,
             potential_energy: m[2][0] as f64,

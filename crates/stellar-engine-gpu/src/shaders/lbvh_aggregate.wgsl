@@ -6,9 +6,12 @@
 @group(0) @binding(5) var<storage, read> level_offset: array<u32>;
 @group(0) @binding(6) var<storage, read> node_list: array<u32>;
 @group(0) @binding(7) var<storage, read_write> nodes: array<vec4<f32>>;
+@group(0) @binding(8) var<storage, read_write> swept: array<vec4<f32>>;
 
-// Nœud : v0 = (centre de masse, masse), v1 = (min, max.x),
-// v2 = (max.yz, balayé min.xy), v3 = (balayé min.z, balayé max).
+// Nœud k : nodes[3k] = (centre de masse, masse), nodes[3k + 1] = (min, rc²),
+// nodes[3k + 2] = (max, 0) ; swept[2k], swept[2k + 1] = boîte balayée
+// (trajectoires du pas, rayons compris). rc est le rayon d'ouverture de
+// Barnes-Hut : plus grand côté / θ + |centre de masse − centre géométrique|.
 struct Agg {
     com: vec3<f32>,
     mass: f32,
@@ -27,19 +30,17 @@ fn load(c: u32) -> Agg {
         a.mass = b.mass;
         a.bmin = b.pos;
         a.bmax = b.pos;
-        a.smin = min(b.old, b.pos) - vec3<f32>(r);
-        a.smax = max(b.old, b.pos) + vec3<f32>(r);
+        let old = b.pos - b.vel * P.dt;
+        a.smin = min(old, b.pos) - vec3<f32>(r);
+        a.smax = max(old, b.pos) + vec3<f32>(r);
     } else {
-        let v0 = nodes[4u * c];
-        let v1 = nodes[4u * c + 1u];
-        let v2 = nodes[4u * c + 2u];
-        let v3 = nodes[4u * c + 3u];
+        let v0 = nodes[3u * c];
         a.com = v0.xyz;
         a.mass = v0.w;
-        a.bmin = v1.xyz;
-        a.bmax = vec3<f32>(v1.w, v2.x, v2.y);
-        a.smin = vec3<f32>(v2.z, v2.w, v3.x);
-        a.smax = v3.yzw;
+        a.bmin = nodes[3u * c + 1u].xyz;
+        a.bmax = nodes[3u * c + 2u].xyz;
+        a.smin = swept[2u * c].xyz;
+        a.smax = swept[2u * c + 1u].xyz;
     }
     return a;
 }
@@ -63,10 +64,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let bmin = min(a.bmin, b.bmin);
     let bmax = max(a.bmax, b.bmax);
-    let smin = min(a.smin, b.smin);
-    let smax = max(a.smax, b.smax);
-    nodes[4u * k] = vec4<f32>(com, m);
-    nodes[4u * k + 1u] = vec4<f32>(bmin, bmax.x);
-    nodes[4u * k + 2u] = vec4<f32>(bmax.y, bmax.z, smin.x, smin.y);
-    nodes[4u * k + 3u] = vec4<f32>(smin.z, smax);
+    let ext = bmax - bmin;
+    let rc = max(ext.x, max(ext.y, ext.z)) * P.inv_theta + length(com - (bmin + bmax) * 0.5);
+    nodes[3u * k] = vec4<f32>(com, m);
+    nodes[3u * k + 1u] = vec4<f32>(bmin, rc * rc);
+    nodes[3u * k + 2u] = vec4<f32>(bmax, 0.0);
+    swept[2u * k] = vec4<f32>(min(a.smin, b.smin), 0.0);
+    swept[2u * k + 1u] = vec4<f32>(max(a.smax, b.smax), 0.0);
 }
