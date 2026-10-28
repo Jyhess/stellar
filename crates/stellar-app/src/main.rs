@@ -5,9 +5,13 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
 mod app;
 mod camera;
+mod console;
 mod format;
+mod headless;
 mod home;
 mod picking;
 mod render;
@@ -22,6 +26,8 @@ use stellar_application::{EngineRegistry, SimulatorService};
 use stellar_engine_cpu::CpuEngineFactory;
 use stellar_engine_gpu::GpuEngineFactory;
 use stellar_persistence::{FileRecordingRepository, FileRepository};
+
+use crate::i18n::tr;
 
 /// Dossier des sauvegardes, relatif au répertoire de lancement.
 const SAVES_DIR: &str = "saves";
@@ -38,10 +44,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current().name().unwrap_or("?").to_owned();
         let backtrace = std::backtrace::Backtrace::force_capture();
-        let report = format!(
-            "[{}] Plantage dans le thread « {thread} »\n{info}\n\n{backtrace}\n",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-        );
+        let report = tr!("[{}] Plantage dans le thread « {} »\n{}\n\n{}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), thread, info, backtrace);
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -52,8 +55,8 @@ fn install_panic_hook() {
         }
         let _ = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("Stellar — erreur fatale")
-            .set_description(format!("{info}\n\nDétails enregistrés dans {CRASH_LOG}."))
+            .set_title(tr("Stellar — erreur fatale"))
+            .set_description(tr!("{}\n\nDétails enregistrés dans {}.", info, CRASH_LOG))
             .show();
         default(info);
     }));
@@ -61,6 +64,12 @@ fn install_panic_hook() {
 
 fn main() -> eframe::Result {
     install_panic_hook();
+    i18n::init();
+    // Mode console : simulation sans fenêtre.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == console::FLAG || a == "--aide") {
+        std::process::exit(console::run(&args));
+    }
     let mut registry = EngineRegistry::new();
     // Le moteur GPU devient le moteur par défaut si une carte compatible est
     // présente ; le moteur CPU reste toujours disponible.
@@ -73,12 +82,12 @@ fn main() -> eframe::Result {
     }
     registry.register(Arc::new(CpuEngineFactory));
 
-    let repository = Arc::new(FileRepository::new(SAVES_DIR));
-    let recordings = Arc::new(FileRecordingRepository::new(RECORDINGS_DIR));
+    let repository = Arc::new(FileRepository::new(SAVES_DIR).with_trash());
+    let recordings = Arc::new(FileRecordingRepository::new(RECORDINGS_DIR).with_trash());
     let mut service = SimulatorService::new(registry, repository, recordings);
     service.set_engine_note(match gpu {
-        Ok(name) => format!("Carte graphique : {name}"),
-        Err(e) => format!("Moteur GPU indisponible : {e}"),
+        Ok(name) => tr!("Carte graphique : {}", name),
+        Err(e) => tr!("Moteur GPU indisponible : {}", e),
     });
 
     let options = eframe::NativeOptions {

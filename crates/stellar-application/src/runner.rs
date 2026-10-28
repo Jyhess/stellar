@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 use crate::recording::{
     BodyFate, Keyframe, Recorder, RecordingLink, RecordingStatus, RecordingWriter,
 };
-use crate::trace::{TraceReference, TraceSet};
+use crate::trace::{cluster_members, TraceReference, TraceSet};
 use stellar_domain::{
-    ranking, BodyId, Diagnostics, EjectedCluster, EngineFactory, SystemSummary, PhysicsEngine, SimulationConfig, SimulationState,
+    ranking, PhysicsParams, BodyId, Diagnostics, EjectedCluster, EngineFactory, SystemSummary, PhysicsEngine, SimulationConfig, SimulationState,
     Vec3,
 };
 
@@ -158,6 +158,7 @@ enum Command {
     Resume,
     StepOnce,
     SetMaxRate(Option<f64>),
+    StopAt(Option<u64>),
     StartTraces(Vec<BodyId>),
     SetWatched(Vec<BodyId>),
     StopTraces,
@@ -200,6 +201,8 @@ struct Shared {
 /// termine proprement le thread de calcul.
 pub struct SimulationHandle {
     config: SimulationConfig,
+    /// Nom de la simulation : nom des sauvegardes (F5) et des enregistrements.
+    name: Mutex<String>,
     tx: Sender<Command>,
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
@@ -286,6 +289,8 @@ impl SimulationHandle {
                     spare: None,
                     step,
                     dt: params.dt,
+                    params,
+                    stop_at: None,
                     recording: None,
                 }
                 .run();
@@ -293,10 +298,19 @@ impl SimulationHandle {
             .expect("impossible de lancer le thread de simulation");
         Self {
             config,
+            name: Mutex::new("simulation".to_owned()),
             tx,
             shared,
             thread: Some(thread),
         }
+    }
+
+    pub fn name(&self) -> String {
+        self.name.lock().expect("verrou empoisonné").clone()
+    }
+
+    pub fn set_name(&self, name: &str) {
+        *self.name.lock().expect("verrou empoisonné") = name.to_owned();
     }
 
     pub fn config(&self) -> &SimulationConfig {
@@ -345,6 +359,11 @@ impl SimulationHandle {
     /// Limite la cadence de calcul (pas par seconde) ; `None` = illimitée.
     pub fn set_max_rate(&self, rate: Option<f64>) {
         let _ = self.tx.send(Command::SetMaxRate(rate));
+    }
+
+    /// Met le calcul en pause dès le pas `step` atteint (`None` : jamais).
+    pub fn stop_at(&self, step: Option<u64>) {
+        let _ = self.tx.send(Command::StopAt(step));
     }
 
     /// Démarre l'enregistrement des traces des corps donnés (un point par
@@ -478,6 +497,10 @@ struct Worker {
     step: u64,
     /// Pas de temps (fixe).
     dt: f64,
+    /// Paramètres physiques (recherche de l'amas local des traces).
+    params: PhysicsParams,
+    /// Pas auquel se mettre en pause ([`SimulationHandle::stop_at`]).
+    stop_at: Option<u64>,
     recording: Option<ActiveRecording>,
 }
 
@@ -644,6 +667,7 @@ impl Worker {
                         }
                     }
                     Command::SetMaxRate(r) => self.max_rate = r.filter(|r| *r > 0.0),
+                    Command::StopAt(step) => self.stop_at = step,
                     Command::StartTraces(ids) => {
                         let mut set = TraceSet::new(ids);
                         let pos = self.engine.positions_of(&set.current_ids());
@@ -658,6 +682,7 @@ impl Worker {
                         let mut guard = self.shared.traces.lock().expect("verrou empoisonné");
                         if let Some(set) = guard.as_mut() {
                             set.set_reference_kind(id);
+                            self.update_cluster(set);
                             let ids = set.current_ids();
                             let pos = self.engine.positions_of(&ids);
                             set.push(self.step, &pos);
@@ -686,6 +711,12 @@ impl Worker {
             // 2. Un pas de calcul.
             let started = Instant::now();
             self.step();
+            if self.stop_at.is_some_and(|s| self.step >= s) {
+                self.stop_at = None;
+                self.running = false;
+                self.publish(true);
+                continue;
+            }
             let n = self.engine.body_count();
             if self.direct_view {
                 // Affichage direct : copie complète toutes les une à deux
@@ -799,6 +830,23 @@ impl Worker {
         self.full = Arc::new(state);
         self.recent.push_back(Arc::clone(&self.full));
         self.last_full = Some(Instant::now());
+        if self.shared.tracing.load(Ordering::Acquire) {
+            let shared = Arc::clone(&self.shared);
+            let mut guard = shared.traces.lock().expect("verrou empoisonné");
+            if let Some(set) = guard.as_mut() {
+                self.update_cluster(set);
+            }
+        }
+    }
+
+    /// Redésigne les membres de l'amas local servant de référentiel aux
+    /// traces, d'après la dernière copie complète de l'état.
+    fn update_cluster(&self, set: &mut TraceSet) {
+        if let Some(around) = set.cluster_around() {
+            if let Some(members) = cluster_members(&self.full.bodies, around, &self.params) {
+                set.set_cluster_members(members);
+            }
+        }
     }
 
     /// Publie un instantané ; `full` : avec une nouvelle copie complète de

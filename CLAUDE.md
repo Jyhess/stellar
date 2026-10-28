@@ -12,8 +12,12 @@ La spécification validée est dans `SPEC.md`, l'usage et l'architecture dans
   elle aide à répondre à la demande. Poser en revanche toutes les questions de
   clarification nécessaires **avant** d'implémenter une fonctionnalité.
 - Tout le texte du projet est en français : interface, messages d'erreur,
-  commentaires, documentation, messages de commit. Nombres à la française
-  (`format.rs` : virgule décimale, espace insécable comme séparateur de milliers).
+  commentaires, documentation, messages de commit. L'interface est aussi
+  traduite en anglais (`stellar-app/src/i18n.rs`) : tout texte affiché passe
+  par `tr("…")` ou `tr!("… {} …", x)` (emplacements `{}` seulement) et reçoit
+  sa traduction dans la table `EN` (un test vérifie doublons et
+  emplacements). Nombres selon la langue (`format.rs` : `count`, `real`,
+  `decimal_sep()` — jamais `.replace('.', ",")` en dur).
 - Mettre à jour `README.md` (table des commandes, sections concernées) et
   `SPEC.md` à chaque fonctionnalité.
 
@@ -35,7 +39,9 @@ Démarrage direct pour les essais (variables d'environnement, voir `app.rs`) :
 `STELLAR_AUTOSTART=<n>` (simulation de n corps), `STELLAR_AUTODISK=1` (disque
 en rotation), `STELLAR_ENGINE=<id>` (`cpu-barnes-hut` ou `gpu-barnes-hut`),
 `STELLAR_AUTORECORD=<intervalle>`, `STELLAR_LOAD=<sauvegarde>`,
-`STELLAR_REPLAY=<enregistrement>`. Les dossiers `saves\` et `recordings\` sont
+`STELLAR_REPLAY=<enregistrement>`, `STELLAR_LANG=fr|en`. Mode console :
+`stellar.exe --sans-affichage --corps 2000 --pas 300` (voir `console.rs`,
+`--aide`). Les dossiers `saves\` et `recordings\` sont
 relatifs au répertoire courant. Mesures : `STELLAR_STATS=1` (une ligne par
 seconde sur la sortie d'erreur : pas/s, durée du pas, images/s ; lancer
 depuis un shell qui redirige `2>` pour la lire), `STELLAR_PRESENT=fifo|mailbox|immediate`
@@ -106,6 +112,12 @@ Règles :
   reprend celui du pas précédent), `insert`, `moments`, `systems`,
   `StepReport::removed_bodies`. Les opérations de structure (séparation,
   réunion, recentrage) reconstruisent les moteurs depuis leur état.
+- **Fichiers de l'utilisateur** : les dépôts de l'application suppriment
+  vers la corbeille (`with_trash`, `stellar-persistence/src/files.rs`) ; les
+  tests suppriment définitivement dans un dossier temporaire. Le nom d'une
+  sauvegarde est celui de son fichier (l'en-tête garde le nom d'origine).
+  Nom d'une simulation : `SimulationHandle::name`, tiré du fichier au
+  chargement (`name_from_file`).
 - **Polices egui** : certains caractères manquent (●, ✦, U+202F) ; vérifier
   qu'un symbole s'affiche avant de l'utiliser.
 - **Caméra** : orientation par quaternion (repère local : X avant, −Y droite,
@@ -158,34 +170,6 @@ Règles :
 - `*.exe`, `*.stellar`, `*.stellarec` sont ignorés.
 
 ## En attente
-
-- **Améliorations demandées, à faire dans cet ordre** (réponses de
-  l'utilisateur entre crochets) :
-  1. création : curseur logarithmique du nombre de corps (100 k, 1 M,
-     10 M…) jusqu'à 1 milliard ou au maximum supporté, au lieu du champ
-     [crans 1-2-5 à partir de 1 000, petit champ de saisie exacte à côté] ;
-  2. vitesse initiale orbitale par défaut ;
-  3. un « ? » d'explication pour chaque paramètre ;
-  4. si possible, estimation de la durée du premier pas ;
-  5. corps sélectionné hors des 10 plus massifs : une ligne de plus dans le
-     classement avec ses informations ;
-  6. traces : masse et part de la masse à côté du code couleur ;
-  7. supprimer la trace absolue : référentiel = corps sélectionné,
-     barycentre de la simulation ou barycentre de l'amas local [amas lié du
-     corps suivi, même règle que le nettoyage, recalculé périodiquement] ;
-  8. supprimer une simulation ou un enregistrement, avec confirmation
-     [case « supprimer aussi le fichier lié », décochée ; corbeille] ;
-  9. nommer une simulation ; nom par défaut : date et abréviations du
-     nombre de particules, de la répartition et de la vitesse initiale
-     [`2026-10-28_1M_sph_orb` ; heure ajoutée si le nom existe] ;
-  10. renommer simulation et enregistrement (fichiers compris ; sauvegarde
-      et enregistrement liés renommés ensemble) ;
-  11. langue anglaise sélectionnable, langue du PC par défaut [interface
-      seulement ; choix dans le menu, mémorisé] ;
-  12. lancer une simulation sans l'afficher, avec enregistrement
-      automatique [écran de suivi sans rendu 3D ET mode console ; arrêt à
-      une cible au choix (pas, temps simulé, durée réelle) ou manuel ;
-      enregistrement clos et sauvegarde finale à l'arrêt].
 
 - Pistes de performance restantes (RTX 4060 Ti, 1 M de corps : ~14 ms par
   pas, dont ~9 ms pour les forces) :

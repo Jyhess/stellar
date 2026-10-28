@@ -13,13 +13,22 @@
 //! p(t) − r(t) + r(maintenant), ce qui fait apparaître les orbites autour de ce
 //! corps. La trajectoire de la référence provient de sa propre trace si elle
 //! est tracée, sinon d'une piste dédiée enregistrée depuis sa sélection.
+//!
+//! Autres référentiels : le barycentre de la simulation, ou celui de l'amas
+//! local d'un corps (groupe lié qui le contient, voir
+//! [`stellar_domain::ejection::local_cluster`]) ; les membres de l'amas sont
+//! redésignés périodiquement par l'appelant ([`TraceSet::set_cluster_members`]).
 
 use std::collections::VecDeque;
 
-use stellar_domain::{BodyId, Vec3};
+use stellar_domain::ejection::{local_cluster, EjectionRules};
+use stellar_domain::{BodyId, BodySet, PhysicsParams, Vec3};
 
 pub const MAX_HISTORY: usize = 4096;
 pub const MAX_TAIL: usize = 5000;
+/// Membres d'un amas local suivis au plus (les plus massifs) : leurs
+/// positions sont relues à chaque pas.
+pub const MAX_CLUSTER_MEMBERS: usize = 512;
 
 /// Échantillon : (numéro de pas, position).
 pub type Sample = (u64, Vec3);
@@ -116,6 +125,36 @@ pub enum TraceReference {
     Body(BodyId),
     /// Le centre de gravité du système.
     Barycenter,
+    /// Le centre de gravité de l'amas lié qui contient ce corps.
+    Cluster(BodyId),
+}
+
+/// Barycentre de l'amas local d'un corps : membres (identifiant, masse) et
+/// trajectoire.
+#[derive(Debug, Clone)]
+pub struct ClusterTrack {
+    /// Corps autour duquel l'amas est cherché (suivi à travers ses fusions).
+    pub around: Option<BodyId>,
+    members: Vec<(BodyId, f64)>,
+    track: Trace,
+}
+
+/// Membres (identifiant, masse) de l'amas local du corps `around` dans
+/// `bodies`, les plus massifs d'abord (au plus [`MAX_CLUSTER_MEMBERS`]).
+pub fn cluster_members(
+    bodies: &BodySet,
+    around: BodyId,
+    params: &PhysicsParams,
+) -> Option<Vec<(BodyId, f64)>> {
+    let i = bodies.index_of(around)?;
+    let rules = EjectionRules::new(params, 0.0);
+    let mut members: Vec<(BodyId, f64)> = local_cluster(bodies, i, &rules)
+        .into_iter()
+        .map(|k| (bodies.ids[k], bodies.masses[k]))
+        .collect();
+    members.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    members.truncate(MAX_CLUSTER_MEMBERS);
+    Some(members)
 }
 
 /// Ensemble des traces actives, plus les pistes de référence.
@@ -127,6 +166,8 @@ pub struct TraceSet {
     /// Trajectoire du barycentre, enregistrée en permanence depuis
     /// l'activation des traces.
     pub barycenter: Trace,
+    /// Barycentre de l'amas local, quand c'est le référentiel choisi.
+    pub cluster: Option<ClusterTrack>,
 }
 
 impl TraceSet {
@@ -137,6 +178,7 @@ impl TraceSet {
             traces: ids.into_iter().map(Trace::new).collect(),
             reference: None,
             barycenter,
+            cluster: None,
         }
     }
 
@@ -145,12 +187,44 @@ impl TraceSet {
         self.barycenter.push((step, p));
     }
 
-    /// Choisit le référentiel (corps ou barycentre).
+    /// Choisit le référentiel (corps, barycentre ou amas local).
     pub fn set_reference_kind(&mut self, reference: Option<TraceReference>) {
+        if !matches!(reference, Some(TraceReference::Cluster(_))) {
+            self.cluster = None;
+        }
         match reference {
             Some(TraceReference::Body(id)) => self.set_reference(Some(id)),
+            Some(TraceReference::Cluster(id)) => {
+                self.reference = None;
+                if self.cluster_around() != Some(id) {
+                    let mut track = Trace::new(BodyId::MAX);
+                    track.current = None;
+                    self.cluster = Some(ClusterTrack {
+                        around: Some(id),
+                        members: Vec::new(),
+                        track,
+                    });
+                }
+            }
             Some(TraceReference::Barycenter) | None => self.reference = None,
         }
+    }
+
+    /// Corps dont l'amas local sert de référentiel.
+    pub fn cluster_around(&self) -> Option<BodyId> {
+        self.cluster.as_ref().and_then(|c| c.around)
+    }
+
+    /// Désigne les membres (identifiant, masse) de l'amas local.
+    pub fn set_cluster_members(&mut self, members: Vec<(BodyId, f64)>) {
+        if let Some(c) = &mut self.cluster {
+            c.members = members;
+        }
+    }
+
+    /// Nombre de membres suivis de l'amas local.
+    pub fn cluster_size(&self) -> usize {
+        self.cluster.as_ref().map_or(0, |c| c.members.len())
     }
 
     /// Trajectoire connue de la référence, pour l'affichage relatif.
@@ -161,16 +235,21 @@ impl TraceSet {
                 let s = self.barycenter.samples();
                 (!s.is_empty()).then_some(s)
             }
+            TraceReference::Cluster(_) => {
+                let s = self.cluster.as_ref()?.track.samples();
+                (!s.is_empty()).then_some(s)
+            }
         }
     }
 
     /// Corps dont les positions sont à enregistrer à chaque pas : traces
-    /// actives, puis référence éventuelle.
+    /// actives, référence éventuelle, puis membres de l'amas local.
     pub fn current_ids(&self) -> Vec<BodyId> {
         self.traces
             .iter()
             .chain(self.reference.iter())
             .filter_map(|t| t.current)
+            .chain(self.cluster.iter().flat_map(|c| c.members.iter().map(|m| m.0)))
             .collect()
     }
 
@@ -220,6 +299,11 @@ impl TraceSet {
                 }
             }
         }
+        if let Some(c) = &mut self.cluster {
+            if let Some(&(_, s)) = merges.iter().find(|(a, _)| Some(*a) == c.around) {
+                c.around = Some(s);
+            }
+        }
     }
 
     /// Met à jour les corps suivis à l'aide d'une fonction de résolution
@@ -227,6 +311,9 @@ impl TraceSet {
     pub fn resolve_with(&mut self, resolve: impl Fn(BodyId) -> Option<BodyId>) {
         for t in self.traces.iter_mut().chain(self.reference.iter_mut()) {
             t.current = t.current.and_then(&resolve);
+        }
+        if let Some(c) = &mut self.cluster {
+            c.around = c.around.and_then(&resolve).or(c.around);
         }
     }
 
@@ -240,6 +327,18 @@ impl TraceSet {
                     t.push((step, *p));
                 }
                 k += 1;
+            }
+        }
+        if let Some(c) = &mut self.cluster {
+            let (mut m, mut mx) = (0.0, Vec3::ZERO);
+            for (&(_, mass), p) in c.members.iter().zip(positions.iter().skip(k)) {
+                if let Some(p) = p {
+                    m += mass;
+                    mx += *p * mass;
+                }
+            }
+            if m > 0.0 {
+                c.track.push((step, mx / m));
             }
         }
     }
@@ -273,6 +372,34 @@ pub fn relative_to(points: &[Sample], reference: &[Sample]) -> Vec<Option<Vec3>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cluster_reference_follows_the_members_barycenter() {
+        let mut set = TraceSet::new([1]);
+        set.set_reference_kind(Some(TraceReference::Cluster(7)));
+        assert_eq!(set.cluster_around(), Some(7));
+        set.set_cluster_members(vec![(7, 3.0), (8, 1.0)]);
+        assert_eq!(set.current_ids(), vec![1, 7, 8]);
+        for step in 0..3u64 {
+            let t = step as f64;
+            set.push(
+                step,
+                &[
+                    Some(Vec3::new(t, 0.0, 0.0)),
+                    Some(Vec3::new(4.0 + t, 0.0, 0.0)),
+                    Some(Vec3::new(t, 0.0, 0.0)),
+                ],
+            );
+        }
+        let r = set.samples_for(TraceReference::Cluster(7)).unwrap();
+        assert_eq!(r.len(), 3);
+        assert!((r[2].1 - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-12);
+        // Le corps repère suit ses fusions ; un autre référentiel efface l'amas.
+        set.apply_fates(&[(7, 9)], &[]);
+        assert_eq!(set.cluster_around(), Some(9));
+        set.set_reference_kind(Some(TraceReference::Barycenter));
+        assert!(set.cluster.is_none());
+    }
 
     #[test]
     fn follows_merges_and_removals() {

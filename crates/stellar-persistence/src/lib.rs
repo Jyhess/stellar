@@ -23,6 +23,7 @@
 //!
 //! Les autres versions sont refusées.
 
+pub mod files;
 pub mod legacy;
 pub mod recording;
 
@@ -48,11 +49,22 @@ const ZSTD_LEVEL: i32 = 3;
 #[derive(Debug, Clone)]
 pub struct FileRepository {
     dir: PathBuf,
+    /// Suppression vers la corbeille (sinon définitive).
+    trash: bool,
 }
 
 impl FileRepository {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            trash: false,
+        }
+    }
+
+    /// Les suppressions passent par la corbeille de Windows.
+    pub fn with_trash(mut self) -> Self {
+        self.trash = true;
+        self
     }
 
     pub fn directory(&self) -> &Path {
@@ -60,7 +72,7 @@ impl FileRepository {
     }
 
     fn unique_path(&self, name: &str) -> PathBuf {
-        let stem = sanitize(name);
+        let stem = files::sanitize(name, "simulation");
         let mut path = self.dir.join(format!("{stem}.{EXTENSION}"));
         let mut k = 2;
         while path.exists() {
@@ -71,24 +83,6 @@ impl FileRepository {
     }
 }
 
-fn sanitize(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let s = s.trim_matches('_').to_owned();
-    if s.is_empty() {
-        "simulation".to_owned()
-    } else {
-        s
-    }
-}
 
 fn io(e: std::io::Error) -> RepositoryError {
     RepositoryError::Io(e.to_string())
@@ -131,17 +125,17 @@ fn read_header(r: &mut impl Read) -> Result<(SaveSummary, u32), RepositoryError>
     Ok((bincode::deserialize(&buf).map_err(fmt)?, version))
 }
 
-impl SimulationRepository for FileRepository {
-    fn save(&self, name: &str, data: &SaveData) -> Result<PathBuf, RepositoryError> {
-        fs::create_dir_all(&self.dir).map_err(io)?;
-        let path = self.unique_path(name);
+impl FileRepository {
+    /// Écrit `data` dans `path` (fichier temporaire puis renommage : jamais
+    /// de sauvegarde à moitié écrite).
+    fn write(&self, path: &Path, data: &SaveData, saved_at_unix: i64) -> Result<(), RepositoryError> {
         let summary = SaveSummary {
             path: PathBuf::new(),
             name: path
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            saved_at_unix: now_unix(),
+            saved_at_unix,
             body_count: data.state.bodies.len(),
             step: data.state.step,
             time: data.state.time,
@@ -171,8 +165,48 @@ impl SimulationRepository for FileRepository {
             let mut w = enc.finish().map_err(io)?;
             w.flush().map_err(io)?;
         }
-        fs::rename(&tmp, &path).map_err(io)?;
+        fs::rename(&tmp, path).map_err(io)?;
+        Ok(())
+    }
+}
+
+impl SimulationRepository for FileRepository {
+    fn save(&self, name: &str, data: &SaveData) -> Result<PathBuf, RepositoryError> {
+        fs::create_dir_all(&self.dir).map_err(io)?;
+        let path = self.unique_path(name);
+        self.write(&path, data, now_unix())?;
         Ok(path)
+    }
+
+    fn delete(&self, path: &Path) -> Result<(), RepositoryError> {
+        files::delete(path, self.trash)
+    }
+
+    fn rename(&self, path: &Path, name: &str) -> Result<PathBuf, RepositoryError> {
+        files::rename(path, name, EXTENSION, "simulation")
+    }
+
+    fn relink(&self, path: &Path, from: &Path, to: &Path) -> Result<(), RepositoryError> {
+        let (summary, _) = read_header(&mut BufReader::new(File::open(path).map_err(io)?))?;
+        let mut data = self.load(path)?;
+        let same = |p: &Path| p.file_name() == from.file_name();
+        let mut changed = false;
+        if let Some(link) = &mut data.recording {
+            if same(&link.path) {
+                link.path = to.to_path_buf();
+                changed = true;
+            }
+        }
+        if let Some(p) = &mut data.continue_recording {
+            if same(p) {
+                *p = to.to_path_buf();
+                changed = true;
+            }
+        }
+        if changed {
+            self.write(path, &data, summary.saved_at_unix)?;
+        }
+        Ok(())
     }
 
     fn load(&self, path: &Path) -> Result<SaveData, RepositoryError> {
@@ -213,6 +247,10 @@ impl SimulationRepository for FileRepository {
             };
             // Les fichiers illisibles sont ignorés plutôt que de bloquer la liste.
             if let Ok((mut s, _)) = read_header(&mut BufReader::new(file)) {
+                // Le nom est celui du fichier (renommé peut-être depuis).
+                if let Some(stem) = path.file_stem() {
+                    s.name = stem.to_string_lossy().into_owned();
+                }
                 s.path = path;
                 out.push(s);
             }

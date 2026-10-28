@@ -235,6 +235,17 @@ impl GpuEngineFactory {
 }
 
 impl EngineFactory for GpuEngineFactory {
+    /// Limite des lancements, et taille maximale d'un tampon de corps ou de
+    /// nœuds sur la carte de l'interface (si elle est connue).
+    fn max_bodies(&self) -> Option<usize> {
+        let by_buffer = self.shared.get().map_or(usize::MAX, |s| {
+            let l = s.device.limits();
+            let limit = (l.max_storage_buffer_binding_size as u64).min(l.max_buffer_size);
+            (limit / std::mem::size_of::<GpuBody>().max(NODE_BYTES) as u64) as usize
+        });
+        Some(MAX_BODIES.min(by_buffer))
+    }
+
     fn descriptor(&self) -> EngineDescriptor {
         EngineDescriptor {
             id: ENGINE_ID,

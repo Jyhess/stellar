@@ -15,6 +15,17 @@ use crate::registry::EngineRegistry;
 use crate::replay::ReplayPlayer;
 use crate::runner::{Phase, SimulationHandle, Snapshot};
 
+/// Nom d'une simulation d'après le nom d'un de ses fichiers : sans le
+/// suffixe « _reprise » ni le numéro ajouté pour rendre le nom unique.
+pub fn name_from_file(stem: &str) -> String {
+    let base = stem.strip_suffix("_reprise").unwrap_or(stem);
+    let base = match base.rsplit_once('_') {
+        Some((head, n)) if !head.is_empty() && (1..=3).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()) => head,
+        _ => base,
+    };
+    base.to_owned()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("moteur de calcul inconnu : « {0} »")]
@@ -80,6 +91,12 @@ impl SimulatorService {
         self.registry.descriptors()
     }
 
+    /// Nombre maximal de corps du moteur `engine` (voir
+    /// [`EngineFactory::max_bodies`]).
+    pub fn max_bodies(&self, engine: &str) -> Option<usize> {
+        self.registry.get(engine).and_then(|f| f.max_bodies())
+    }
+
     pub fn default_engine(&self) -> Option<&'static str> {
         self.registry.default_id()
     }
@@ -121,7 +138,11 @@ impl SimulatorService {
     /// instantanés postérieurs sont supprimés).
     pub fn load_simulation(&self, path: &Path) -> Result<LoadedSimulation, AppError> {
         let data = self.read_save(path)?;
-        self.start_loaded(data, None)
+        let loaded = self.start_loaded(data, None)?;
+        if let Some(stem) = path.file_stem() {
+            loaded.handle.set_name(&name_from_file(&stem.to_string_lossy()));
+        }
+        Ok(loaded)
     }
 
     /// Démarre une sauvegarde lue par [`Self::read_save`]. `continue_with`
@@ -364,6 +385,93 @@ impl SimulatorService {
         Ok(self.recordings.list()?)
     }
 
+    /// Enregistrement lié à une sauvegarde (repris ou poursuivi à son
+    /// chargement), s'il est dans le dossier des enregistrements.
+    pub fn linked_recording(&self, save: &SaveSummary) -> Option<RecordingSummary> {
+        let name = save.recording.as_deref()?;
+        self.recordings
+            .list()
+            .ok()?
+            .into_iter()
+            .find(|r| r.path.file_name().is_some_and(|n| n.to_string_lossy() == name))
+    }
+
+    /// Sauvegardes liées à l'enregistrement `path`.
+    pub fn linked_saves(&self, path: &Path) -> Vec<SaveSummary> {
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return Vec::new();
+        };
+        self.repository
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.recording.as_deref() == Some(name.as_str()))
+            .collect()
+    }
+
+    /// Supprime une sauvegarde ; `with_linked` : aussi l'enregistrement lié.
+    pub fn delete_save(&self, save: &SaveSummary, with_linked: bool) -> Result<(), AppError> {
+        let linked = with_linked.then(|| self.linked_recording(save)).flatten();
+        self.repository.delete(&save.path)?;
+        if let Some(r) = linked {
+            self.recordings.delete(&r.path)?;
+        }
+        Ok(())
+    }
+
+    /// Supprime un enregistrement ; `with_linked` : aussi les sauvegardes
+    /// liées.
+    pub fn delete_recording(&self, rec: &RecordingSummary, with_linked: bool) -> Result<(), AppError> {
+        let linked = if with_linked {
+            self.linked_saves(&rec.path)
+        } else {
+            Vec::new()
+        };
+        self.recordings.delete(&rec.path)?;
+        for s in linked {
+            self.repository.delete(&s.path)?;
+        }
+        Ok(())
+    }
+
+    /// Renomme une sauvegarde. Son enregistrement lié est renommé avec elle
+    /// (sans le suffixe « _reprise »), ainsi que les autres sauvegardes liées
+    /// dont le nom commence par celui de l'enregistrement ; tous les liens
+    /// sont mis à jour.
+    pub fn rename_save(&self, save: &SaveSummary, name: &str) -> Result<(), AppError> {
+        let linked = self.linked_recording(save);
+        let path = self.repository.rename(&save.path, name)?;
+        if let Some(rec) = linked {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let base = stem.strip_suffix("_reprise").unwrap_or(&stem).to_owned();
+            self.rename_recording(&rec, &base)?;
+        }
+        Ok(())
+    }
+
+    /// Renomme un enregistrement ; les sauvegardes liées suivent (liens mis à
+    /// jour, et nom changé quand il commence par celui de l'enregistrement).
+    pub fn rename_recording(&self, rec: &RecordingSummary, name: &str) -> Result<(), AppError> {
+        let saves = self.linked_saves(&rec.path);
+        let new_path = self.recordings.rename(&rec.path, name)?;
+        let new_stem = new_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for s in saves {
+            self.repository.relink(&s.path, &rec.path, &new_path)?;
+            if s.name != new_stem {
+                if let Some(rest) = s.name.strip_prefix(rec.name.as_str()) {
+                    self.repository.rename(&s.path, &format!("{new_stem}{rest}"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Ouvre un enregistrement pour relecture.
     pub fn open_replay(&self, path: &Path) -> Result<ReplayPlayer, AppError> {
         let reader = self.recordings.open(path)?;
@@ -375,3 +483,18 @@ impl SimulatorService {
         Ok(ReplayPlayer::new(reader))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::name_from_file;
+
+    #[test]
+    fn simulation_name_from_file_names() {
+        assert_eq!(name_from_file("2026-10-28_1M_sph_orb"), "2026-10-28_1M_sph_orb");
+        assert_eq!(name_from_file("2026-10-28_1M_sph_orb_2"), "2026-10-28_1M_sph_orb");
+        assert_eq!(name_from_file("galaxie_reprise"), "galaxie");
+        assert_eq!(name_from_file("galaxie_reprise_3"), "galaxie_reprise");
+        assert_eq!(name_from_file("essai_2026"), "essai_2026");
+    }
+}
+

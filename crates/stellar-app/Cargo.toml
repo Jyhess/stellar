@@ -22,3 +22,6 @@ rfd.workspace = true
 chrono.workspace = true
 rayon.workspace = true
 pollster = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_Globalization", "Win32_System_Console"] }

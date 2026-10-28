@@ -532,32 +532,25 @@ impl RecordingReader for FileRecordingReader {
 #[derive(Debug, Clone)]
 pub struct FileRecordingRepository {
     dir: PathBuf,
+    /// Suppression vers la corbeille (sinon définitive).
+    trash: bool,
 }
 
 impl FileRecordingRepository {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            trash: false,
+        }
+    }
+
+    /// Les suppressions passent par la corbeille de Windows.
+    pub fn with_trash(mut self) -> Self {
+        self.trash = true;
+        self
     }
 }
 
-fn sanitize(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let s = s.trim_matches('_').to_owned();
-    if s.is_empty() {
-        "enregistrement".to_owned()
-    } else {
-        s
-    }
-}
 
 impl RecordingRepository for FileRecordingRepository {
     fn create(
@@ -566,7 +559,7 @@ impl RecordingRepository for FileRecordingRepository {
         header: &RecordingHeader,
     ) -> Result<Box<dyn RecordingWriter>, RepositoryError> {
         fs::create_dir_all(&self.dir).map_err(io)?;
-        let stem = sanitize(name);
+        let stem = crate::files::sanitize(name, "enregistrement");
         let mut path = self.dir.join(format!("{stem}.{EXTENSION}"));
         let mut k = 2;
         while path.exists() {
@@ -638,6 +631,14 @@ impl RecordingRepository for FileRecordingRepository {
             offset: end,
             index,
         }))
+    }
+
+    fn delete(&self, path: &Path) -> Result<(), RepositoryError> {
+        crate::files::delete(path, self.trash)
+    }
+
+    fn rename(&self, path: &Path, name: &str) -> Result<PathBuf, RepositoryError> {
+        crate::files::rename(path, name, EXTENSION, "enregistrement")
     }
 
     fn list(&self) -> Result<Vec<RecordingSummary>, RepositoryError> {

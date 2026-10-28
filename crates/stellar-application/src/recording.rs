@@ -200,6 +200,12 @@ pub trait RecordingRepository: Send + Sync {
         path: &Path,
         keep_through_step: u64,
     ) -> Result<Box<dyn RecordingWriter>, RepositoryError>;
+
+    /// Supprime un enregistrement (corbeille si le dépôt la prévoit).
+    fn delete(&self, path: &Path) -> Result<(), RepositoryError>;
+
+    /// Renomme un enregistrement (même dossier) ; renvoie le nouveau chemin.
+    fn rename(&self, path: &Path, name: &str) -> Result<PathBuf, RepositoryError>;
 }
 
 /// État d'un enregistrement en cours, consultable par l'interface.

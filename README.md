@@ -45,13 +45,31 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 
 ### Écran d'accueil
 
-- **Nouvelle simulation** : nombre de particules, rayon du nuage, graine aléatoire, répartition (sphère ou disque, avec épaisseur et profil de densité), vitesse initiale (repos, aléatoire, circulaire imposée, circulaire orbitale ± dispersion, radiale).
+- **Nouvelle simulation** : nom, nombre de particules, rayon du nuage, graine aléatoire, répartition (sphère ou disque, avec épaisseur et profil de densité), vitesse initiale (repos, aléatoire, circulaire imposée, circulaire orbitale ± dispersion — choix par défaut —, radiale). Chaque paramètre porte une pastille « ? » qui explique son rôle.
+  - **Nom** : celui des sauvegardes (F5) et des enregistrements de la simulation. Par défaut, date, nombre de particules abrégé, répartition et vitesse initiale (`2026-10-28_1M_sph_orb`), avec l'heure si ce nom existe déjà ; il suit les paramètres tant qu'il n'est pas saisi (bouton « Auto » pour y revenir). Une simulation chargée reprend le nom de sa sauvegarde (sans « _reprise » ni numéro).
+  - **Nombre de particules** : curseur à crans 1-2-5 (1 000, 2 000, 5 000, 10 000…) jusqu'au maximum de la machine (limite du moteur, 80 % de la mémoire centrale, un milliard au plus), et champ de saisie exacte.
+  - Sous le formulaire : mémoire estimée et **durée estimée du premier pas** (d'après le banc d'essai).
 - **Paramètres avancés** : G, dt, adoucissement ε, rayon r₀ d'une particule de masse 1, précision θ, période et distance du nettoyage, seuils des amas éjectés (distance de liaison, nombre de corps, part de la masse), moteur de calcul. Par défaut, dt, ε, r₀ et la liaison sont déduits des conditions initiales :
   - dt = temps de chute libre / 500 ;
   - ε = 0,3 × distance moyenne entre voisins ;
   - r₀ = 1 % de cette distance ;
   - liaison des amas = distance moyenne entre voisins ; un amas est conservé à partir de 10 corps ou de 0,1 % de la masse initiale.
 - **Simulations sauvegardées** : la liste du dossier `saves\`, avec un bouton « Parcourir… » pour ouvrir un fichier situé ailleurs. Une simulation chargée redémarre en pause.
+- **Renommer, supprimer** (sauvegardes et enregistrements) : la suppression demande confirmation et envoie le fichier à la corbeille de Windows, avec en option le fichier lié (l'enregistrement d'une sauvegarde, les sauvegardes d'un enregistrement). Le renommage change aussi le fichier ; une sauvegarde et son enregistrement liés sont renommés ensemble et leurs liens mis à jour.
+- **Langue** : français ou anglais (liste en bas de l'accueil, ou menu Échap) ; par défaut celle de Windows, le choix est mémorisé dans `%APPDATA%\Stellar\langue`. Les nombres suivent la langue (virgule décimale et espace des milliers en français, point et virgule en anglais).
+
+### Simulation sans affichage
+
+Pour les longs calculs : aucun rendu des corps, toute la carte graphique pour le calcul, enregistrement automatique (intervalle et budget de poussière réglables).
+
+- **Depuis l'accueil** : case « Sans affichage », puis condition d'arrêt — nombre de pas, temps simulé, durée réelle, ou manuel. Un écran de suivi montre l'avancement (pas, pas/s, temps restant estimé, enregistrement) ; « Arrêter et sauvegarder » clôt l'enregistrement et sauvegarde l'état final sous le nom de la simulation, « Afficher la simulation » bascule vers l'affichage habituel (le calcul et l'enregistrement continuent). Fermer la fenêtre arrête proprement.
+- **En console** : `stellar.exe --sans-affichage [options]` (liste complète avec `--aide`) :
+
+  ```powershell
+  .\stellar.exe --sans-affichage --corps 4000000 --disque --pas 200000 --intervalle 20 --nom galaxie
+  ```
+
+  Options : `--corps`, `--rayon`, `--graine`, `--disque`, `--vitesse repos|alea|circ|orb|rad`, `--dispersion`, `--vmin`/`--vmax`, `--moteur gpu|cpu`, `--nom`, `--intervalle`, `--poussiere N|toutes`, et une cible `--pas N`, `--temps T` ou `--duree minutes` (sans cible : jusqu'à Ctrl+C). L'avancement s'affiche toutes les cinq secondes ; à l'arrêt, l'enregistrement est clos et l'état final sauvegardé.
 
 ### Commandes
 
@@ -73,7 +91,7 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 | B | sélectionner le barycentre et le regarder de face au disque (selon l'axe du moment cinétique), en conservant la distance |
 | C | viser le centre de gravité (vol libre) |
 | T | mode trace : trajectoires des 10 corps les plus massifs visibles à l'écran à cet instant / effacer |
-| R | traces : référentiel absolu / relatif au corps sélectionné (ou au barycentre) |
+| R | traces : référentiel suivant — corps sélectionné, barycentre de la simulation, ou barycentre de l’amas lié du corps sélectionné |
 | V | vue d'ensemble : recul jusqu'à voir 90 % de la masse, dans la direction de visée actuelle |
 | Espace | pause / reprise |
 | P | pas à pas |
@@ -87,7 +105,7 @@ Quand un corps (ou le barycentre) est suivi, il reste au centre de l'écran : la
 - l'**historique** complet depuis l'activation (décimé au-delà de 4 096 points) ;
 - une **queue** des N derniers pas, de 10 à 5 000, qui s'estompe vers le passé.
 
-En **référentiel relatif** (touche R), chaque point devient p(t) − r(t) + r(maintenant), où r est la trajectoire du corps sélectionné, ou celle du barycentre quand c'est lui qui est sélectionné (B). La trajectoire du barycentre est enregistrée dès l'activation des traces, ce qui permet de relire tout l'historique dans son référentiel. La référence reste ainsi fixe à l'écran et les orbites autour d'elle apparaissent. Sa trajectoire vient de sa propre trace si elle fait partie des corps tracés, sinon d'une piste enregistrée depuis sa sélection. Dans ce second cas, la partie plus ancienne des traces n'est pas affichée.
+Les traces sont toujours vues dans un **référentiel** (touche R pour passer au suivant) : chaque point devient p(t) − r(t) + r(maintenant), où r est la trajectoire du corps sélectionné, du barycentre de la simulation, ou du barycentre de l'**amas local** du corps sélectionné (groupe lié qui le contient, même règle que le nettoyage, redésigné toutes les une à deux secondes ; ses 512 membres les plus massifs sont suivis à chaque pas). Sans corps sélectionné, le barycentre sert de référentiel. La trajectoire du barycentre est enregistrée dès l'activation des traces, ce qui permet de relire tout l'historique dans son référentiel. La légende donne, pour chaque trace, la masse du corps et sa part de la masse présente. Le classement des plus massifs ajoute une ligne pour le corps sélectionné quand il n'en fait pas partie. La référence reste ainsi fixe à l'écran et les orbites autour d'elle apparaissent. Sa trajectoire vient de sa propre trace si elle fait partie des corps tracés, sinon d'une piste enregistrée depuis sa sélection. Dans ce second cas, la partie plus ancienne des traces n'est pas affichée.
 
 Les traces ne sont pas sauvegardées.
 
@@ -258,6 +276,7 @@ Pour lancer directement une simulation sans passer par l'accueil : `$env:STELLAR
 | `STELLAR_LOAD=<sauvegarde>` / `STELLAR_REPLAY=<enregistrement>` | chargement ou relecture directs |
 | `STELLAR_STATS=1` | une ligne par seconde sur la sortie d'erreur : pas, pas/s, durée du pas, images/s, corps |
 | `STELLAR_PRESENT=fifo\|mailbox\|immediate` | mode de présentation de l'interface imposé |
+| `STELLAR_LANG=fr\|en` | langue de l'interface imposée |
 
 Les tests physiques (`crates/stellar-engine-cpu/tests/physics.rs`) vérifient notamment :
 

@@ -1,12 +1,28 @@
-//! Mise en forme des nombres pour l'affichage (conventions françaises).
+//! Mise en forme des nombres pour l'affichage, selon la langue : virgule
+//! décimale et espace insécable des milliers en français, point et virgule
+//! en anglais.
 
-/// Entier avec séparateur de milliers : 1 234 567.
+use crate::i18n::{lang, Lang};
+
+/// Séparateur décimal de la langue de l'interface.
+pub fn decimal_sep() -> &'static str {
+    match lang() {
+        Lang::Fr => ",",
+        Lang::En => ".",
+    }
+}
+
+/// Entier avec séparateur de milliers : 1 234 567 (1,234,567 en anglais).
 pub fn count(n: u64) -> String {
+    let sep = match lang() {
+        Lang::Fr => '\u{00A0}',
+        Lang::En => ',',
+    };
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, ch) in s.chars().enumerate() {
         if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push('\u{00A0}');
+            out.push(sep);
         }
         out.push(ch);
     }
@@ -25,12 +41,12 @@ pub fn real(x: f64) -> String {
     } else {
         format!("{x:.4}")
     }
-    .replace('.', ",")
+    .replace('.', crate::format::decimal_sep())
 }
 
 /// Pourcentage signé : +0,012 %.
 pub fn percent(x: f64) -> String {
-    format!("{:+.4} %", 100.0 * x).replace('.', ",")
+    format!("{:+.4} %", 100.0 * x).replace('.', crate::format::decimal_sep())
 }
 
 #[cfg(test)]

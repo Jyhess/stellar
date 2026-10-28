@@ -10,6 +10,7 @@
 //! l'implémentation des moteurs.
 
 pub mod generator;
+pub mod headless;
 pub mod ports;
 pub mod recording;
 pub mod registry;
@@ -27,6 +28,7 @@ pub use recording::{
 pub use registry::EngineRegistry;
 pub use replay::{PlaybackClock, ReplayPlayer};
 pub use runner::{Phase, SimulationHandle, Snapshot};
+pub use headless::{HeadlessRun, Progress, RecordSettings, RunOutcome, RunTarget};
 pub use systems::MultiSystem;
-pub use service::{AppError, Continuation, LoadedSimulation, SimulatorService};
+pub use service::{name_from_file, AppError, Continuation, LoadedSimulation, SimulatorService};
 pub use trace::{Trace, TraceReference, TraceSet};

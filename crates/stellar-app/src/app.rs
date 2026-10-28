@@ -8,6 +8,7 @@ use eframe::egui;
 use stellar_application::SimulatorService;
 use stellar_engine_gpu::{GpuEngineFactory, SharedDevice};
 
+use crate::headless::{HeadlessAction, HeadlessScreen};
 use crate::home::{HomeAction, HomeScreen};
 use crate::render::PointRenderer;
 use crate::sim::{SimAction, SimScreen};
@@ -18,6 +19,8 @@ enum Screen {
     // différentes.
     Home(Box<HomeScreen>),
     Sim(Box<SimScreen>),
+    /// Simulation sans affichage.
+    Headless(Box<HeadlessScreen>),
     /// État transitoire pendant un changement d'écran.
     Switching,
 }
@@ -110,7 +113,9 @@ impl StellarApp {
                 stellar_domain::VelocityMode::CircularOrbital { spread: 0.05 };
         }
         config.physics = stellar_domain::PhysicsParams::suggested(&config.initial, 1.0);
+        let name = crate::home::default_name(&config.initial, chrono::Local::now(), |_| false);
         if let Ok(handle) = self.service.new_simulation(config) {
+            handle.set_name(&name);
             // `STELLAR_AUTORECORD=<intervalle>` : enregistrement immédiat.
             if let Some(interval) = std::env::var("STELLAR_AUTORECORD")
                 .ok()
@@ -118,7 +123,7 @@ impl StellarApp {
             {
                 let _ =
                     self.service
-                        .start_recording("autorecord", &handle, interval, Some(1_000_000));
+                        .start_recording(&name, &handle, interval, Some(1_000_000));
             }
             self.screen = Screen::sim(SimScreen::new(
                 Source::Live(Box::new(handle)),
@@ -135,13 +140,10 @@ impl StellarApp {
             return None;
         };
         sim.suspend_recording().map(|r| match r {
-            Ok(path) => format!(
-                "Enregistrement suspendu. Il reprendra en rechargeant la sauvegarde « {} ».",
-                path.file_stem()
+            Ok(path) => tr!("Enregistrement suspendu. Il reprendra en rechargeant la sauvegarde « {} ».", path.file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            ),
-            Err(e) => format!("La suspension de l'enregistrement a échoué : {e}"),
+                    .unwrap_or_default()),
+            Err(e) => tr!("La suspension de l'enregistrement a échoué : {}", e),
         })
     }
 
@@ -172,6 +174,11 @@ impl eframe::App for StellarApp {
         // Fermeture de la fenêtre pendant un enregistrement : suspension et
         // sauvegarde de reprise avant de quitter.
         if ctx.input(|i| i.viewport().close_requested()) {
+            if let Screen::Headless(h) = &mut self.screen {
+                if h.is_running() {
+                    h.finish_now();
+                }
+            }
             if let Screen::Sim(sim) = &self.screen {
                 if sim.is_recording() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -186,18 +193,28 @@ impl eframe::App for StellarApp {
             Screen::Home(home) => match home.show(ctx, &self.service) {
                 HomeAction::None => {}
                 HomeAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                HomeAction::Start(config, record) => match self.service.new_simulation(config) {
+                HomeAction::StartHeadless(config, record, name, target) => {
+                    match stellar_application::HeadlessRun::start(&self.service, config, &name, record, target) {
+                        Ok(run) => {
+                            self.screen = Screen::Headless(Box::new(HeadlessScreen::new(
+                                self.service.clone(),
+                                run,
+                            )));
+                        }
+                        Err(e) => home.message = Some(e.to_string()),
+                    }
+                }
+                HomeAction::Start(config, record, name) => match self.service.new_simulation(config) {
                     Ok(handle) => {
+                        handle.set_name(&name);
                         if let Some(r) = record {
-                            let name =
-                                format!("rec_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
                             if let Err(e) = self.service.start_recording(
                                 &name,
                                 &handle,
                                 r.interval,
                                 r.dust_budget,
                             ) {
-                                home.message = Some(format!("Enregistrement impossible : {e}"));
+                                home.message = Some(tr!("Enregistrement impossible : {}", e));
                             }
                         }
                         self.screen = Screen::sim(SimScreen::new(
@@ -209,8 +226,10 @@ impl eframe::App for StellarApp {
                     Err(e) => home.message = Some(e.to_string()),
                 },
                 a @ (HomeAction::Load(_) | HomeAction::LoadContinuing(..)) => match match a {
-                    HomeAction::LoadContinuing(data, path) => {
-                        self.service.start_loaded(*data, Some(&path))
+                    HomeAction::LoadContinuing(data, path, save_name) => {
+                        self.service.start_loaded(*data, Some(&path)).inspect(|l| {
+                            l.handle.set_name(&stellar_application::name_from_file(&save_name))
+                        })
                     }
                     HomeAction::Load(path) => self.service.load_simulation(&path),
                     _ => unreachable!(),
@@ -222,16 +241,13 @@ impl eframe::App for StellarApp {
                             loaded.view,
                         );
                         match loaded.recording {
-                            Some(Ok(p)) => sim.notify(format!(
-                                "Enregistrement « {} » poursuivi : il reprend dès la relance du calcul (Espace).",
-                                p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
-                            )),
-                            Some(Err(e)) => sim.notify(format!("Reprise de l'enregistrement impossible : {e}")),
+                            Some(Ok(p)) => sim.notify(tr!("Enregistrement « {} » poursuivi : il reprend dès la relance du calcul (Espace).", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())),
+                            Some(Err(e)) => sim.notify(tr!("Reprise de l'enregistrement impossible : {}", e)),
                             None => {}
                         }
                         self.screen = Screen::sim(sim);
                     }
-                    Err(e) => home.message = Some(format!("Chargement impossible : {e}")),
+                    Err(e) => home.message = Some(tr!("Chargement impossible : {}", e)),
                 },
                 HomeAction::Replay(path) => match self.service.open_replay(&path) {
                     Ok(player) => {
@@ -239,7 +255,7 @@ impl eframe::App for StellarApp {
                         self.screen =
                             Screen::sim(SimScreen::new(source, self.service.clone(), None));
                     }
-                    Err(e) => home.message = Some(format!("Relecture impossible : {e}")),
+                    Err(e) => home.message = Some(tr!("Relecture impossible : {}", e)),
                 },
             },
             Screen::Sim(sim) => match sim.show(ctx) {
@@ -248,6 +264,17 @@ impl eframe::App for StellarApp {
                 SimAction::Quit => {
                     let _ = self.suspend_recording();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            },
+            Screen::Headless(h) => match h.show(ctx) {
+                HeadlessAction::None => {}
+                HeadlessAction::BackHome => self.go_home(ctx, None),
+                HeadlessAction::Show(run) => {
+                    self.screen = Screen::sim(SimScreen::new(
+                        Source::Live(Box::new(run.into_handle())),
+                        self.service.clone(),
+                        None,
+                    ));
                 }
             },
             Screen::Switching => {}

@@ -91,3 +91,14 @@
 - Panneau « Corps » : liste des sous-simulations (repère, corps, masse, distance), sélection du repère par clic.
 - Formats : sauvegardes `.stellar` version 5 (plages de corps par sous-système ; versions 4 et 3 relues), enregistrements `.stellarec` version 3 (une boîte de quantification par sous-système ; versions 2 et 1 relues, un enregistrement repris garde sa version).
 
+## Évolutions (v1.5) — ergonomie
+- Création : nom de la simulation (par défaut `date_nombre_répartition_vitesse`, heure ajoutée si le nom existe), curseur du nombre de particules à crans 1-2-5 de 1 000 au maximum de la machine (limite du moteur, 80 % de la mémoire, un milliard) avec saisie exacte, vitesse orbitale par défaut, pastille d'aide « ? » sur chaque paramètre, durée estimée du premier pas.
+- Le nom de la simulation nomme ses sauvegardes F5 et ses enregistrements ; au chargement, il est tiré du nom de la sauvegarde.
+- Accueil : renommer et supprimer sauvegardes et enregistrements ; suppression confirmée, vers la corbeille, fichier lié en option ; renommage conjoint des fichiers liés, liens mis à jour.
+- Traces : plus de référentiel absolu — corps sélectionné, barycentre de la simulation ou barycentre de l'amas lié du corps sélectionné ; masse et part de la masse dans la légende.
+- Classement des plus massifs : ligne supplémentaire pour le corps sélectionné hors des dix premiers.
+
+## Évolutions (v1.6) — langue et calcul sans affichage
+- Interface en français ou en anglais : langue de Windows par défaut, choix dans l'accueil ou le menu Échap, mémorisé ; nombres mis en forme selon la langue. La documentation et les messages d'erreur des couches inférieures restent en français.
+- Simulation sans affichage, depuis l'accueil (écran de suivi, bascule possible vers l'affichage) ou en console (`stellar.exe --sans-affichage`) : enregistrement automatique, arrêt à un nombre de pas, un temps simulé, une durée réelle ou à la demande (Ctrl+C en console) ; à l'arrêt, enregistrement clos et état final sauvegardé sous le nom de la simulation.
+

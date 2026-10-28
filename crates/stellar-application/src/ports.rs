@@ -75,4 +75,15 @@ pub trait SimulationRepository: Send + Sync {
 
     /// Liste les sauvegardes disponibles, la plus récente d'abord.
     fn list(&self) -> Result<Vec<SaveSummary>, RepositoryError>;
+
+    /// Supprime une sauvegarde (corbeille si le dépôt la prévoit).
+    fn delete(&self, path: &Path) -> Result<(), RepositoryError>;
+
+    /// Renomme une sauvegarde (même dossier) ; renvoie le nouveau chemin.
+    /// Refuse d'écraser une sauvegarde existante.
+    fn rename(&self, path: &Path, name: &str) -> Result<PathBuf, RepositoryError>;
+
+    /// Remplace, dans une sauvegarde, le lien vers l'enregistrement `from`
+    /// (comparé par nom de fichier) par `to`.
+    fn relink(&self, path: &Path, from: &Path, to: &Path) -> Result<(), RepositoryError>;
 }

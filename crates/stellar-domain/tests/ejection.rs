@@ -1,6 +1,9 @@
 //! Règle de nettoyage des éjectés : amas liés conservés.
 
-use stellar_domain::ejection::{friends_of_friends, sort_out, Candidate, EjectionRules};
+use stellar_domain::ejection::{
+    friends_of_friends, local_cluster, sort_out, Candidate, EjectionRules,
+};
+use stellar_domain::BodySet;
 use stellar_domain::Vec3;
 
 fn rules() -> EjectionRules {
@@ -129,3 +132,22 @@ fn large_clusters_use_the_spherical_approximation() {
     assert_eq!(e.clusters.len(), 1);
     assert_eq!(e.clusters[0].bodies, 2_999);
 }
+
+#[test]
+fn local_cluster_of_a_body() {
+    let mut b = BodySet::default();
+    for c in cluster(0, 30, Vec3::ZERO, 0.3, Vec3::ZERO) {
+        b.push(c.id, c.position, c.velocity, c.mass);
+    }
+    for c in cluster(100, 20, Vec3::new(10.0, 0.0, 0.0), 0.3, Vec3::new(0.0, 3.0, 0.0)) {
+        b.push(c.id, c.position, c.velocity, c.mass);
+    }
+    // Un corps de passage, rapide, au milieu du second amas.
+    b.push(500, Vec3::new(10.1, 0.0, 0.0), Vec3::new(0.0, -400.0, 0.0), 1.0);
+    let mut members = local_cluster(&b, 35, &rules());
+    members.sort_unstable();
+    assert_eq!(members, (30..50).collect::<Vec<_>>());
+    assert_eq!(local_cluster(&b, 50, &rules()), vec![50]);
+    assert_eq!(local_cluster(&b, 3, &rules()).len(), 30);
+}
+

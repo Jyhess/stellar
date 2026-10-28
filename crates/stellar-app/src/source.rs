@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use stellar_application::recording::is_dust;
 use stellar_application::{
-    Phase, ReplayPlayer, SimulationHandle, Snapshot, TraceReference, TraceSet,
+    trace::cluster_members, Phase, ReplayPlayer, SimulationHandle, Snapshot, TraceReference,
+    TraceSet,
 };
 use stellar_domain::{BodyId, Diagnostics, SimulationConfig, SimulationState};
 use stellar_domain::{BodySet, Vec3};
@@ -89,6 +90,14 @@ impl Replay {
             }
             let player = &self.player;
             traces.resolve_with(|id| player.resolve(id));
+            if let Some(around) = traces.cluster_around() {
+                if traces.cluster_size() == 0 || self.trace_tick.is_multiple_of(25) {
+                    let params = player.info().header.config.physics;
+                    if let Some(m) = cluster_members(&state.bodies, around, &params) {
+                        traces.set_cluster_members(m);
+                    }
+                }
+            }
             let ids = traces.current_ids();
             let positions: Vec<_> = ids
                 .iter()

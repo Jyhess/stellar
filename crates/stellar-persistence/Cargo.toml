@@ -12,5 +12,8 @@ bincode.workspace = true
 serde.workspace = true
 zstd.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation"] }
+
 [dev-dependencies]
 stellar-engine-cpu.workspace = true

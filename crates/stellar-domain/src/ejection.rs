@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{BodyId, PhysicsParams, Vec3};
+use crate::{BodyId, BodySet, PhysicsParams, Vec3};
 
 /// Au-delà de cette taille, le potentiel propre d'un groupe est approché par
 /// une distribution à symétrie sphérique (O(n log n)) plutôt que sommé
@@ -327,3 +327,58 @@ fn describe(candidates: &[Candidate], members: &[usize], mass: f64) -> EjectedCl
         members: members.iter().map(|&i| candidates[i].id).collect(),
     }
 }
+
+/// Rayon de recherche de l'amas local, en distances de liaison.
+const LOCAL_SEARCH: f64 = 30.0;
+/// Corps examinés au plus pour l'amas local (les plus proches).
+const LOCAL_CAP: usize = 200_000;
+
+/// Amas lié auquel appartient le corps d'indice `around` : corps voisins
+/// (dans un rayon de 30 distances de liaison), groupe « amis d'amis » qui le
+/// contient, épuré de ses membres non liés (potentiel propre au groupe).
+/// Renvoie les indices des membres ; le corps seul s'il n'est lié à aucun
+/// groupe.
+pub fn local_cluster(bodies: &BodySet, around: usize, rules: &EjectionRules) -> Vec<usize> {
+    let center = bodies.positions[around];
+    let reach = LOCAL_SEARCH * rules.link_length;
+    let mut near: Vec<(f64, usize)> = bodies
+        .positions
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            let d2 = (*p - center).length_squared();
+            (d2 <= reach * reach).then_some((d2, i))
+        })
+        .collect();
+    if near.len() > LOCAL_CAP {
+        near.select_nth_unstable_by(LOCAL_CAP, |a, b| a.0.total_cmp(&b.0));
+        near.truncate(LOCAL_CAP);
+    }
+    let indices: Vec<usize> = near.iter().map(|&(_, i)| i).collect();
+    let candidates: Vec<Candidate> = indices
+        .iter()
+        .map(|&i| Candidate {
+            id: bodies.ids[i],
+            position: bodies.positions[i],
+            velocity: bodies.velocities[i],
+            mass: bodies.masses[i],
+            potential: 0.0,
+        })
+        .collect();
+    let Some(me) = indices.iter().position(|&i| i == around) else {
+        return vec![around];
+    };
+    let Some(group) = friends_of_friends(&candidates, rules.link_length)
+        .into_iter()
+        .find(|g| g.contains(&me))
+    else {
+        return vec![around];
+    };
+    let bound = unbind(&candidates, group, rules);
+    if bound.contains(&me) {
+        bound.into_iter().map(|k| indices[k]).collect()
+    } else {
+        vec![around]
+    }
+}
+

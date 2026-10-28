@@ -135,6 +135,12 @@ pub trait PhysicsEngine: Send {
 pub trait EngineFactory: Send + Sync {
     fn descriptor(&self) -> EngineDescriptor;
 
+    /// Nombre maximal de corps que ce moteur peut traiter sur cette machine
+    /// (`None` : seule la mémoire centrale le limite).
+    fn max_bodies(&self) -> Option<usize> {
+        None
+    }
+
     /// Construit un moteur à partir d'un état et de paramètres. Échoue si le
     /// matériel requis est absent ou insuffisant (message lisible).
     fn create(
