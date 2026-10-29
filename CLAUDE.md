@@ -24,7 +24,7 @@ La spécification validée est dans `SPEC.md`, l'usage et l'architecture dans
 ## Commandes
 
 ```powershell
-cargo build --release                      # exécutable : target\release\stellar.exe
+cargo build --release                      # target\release\stellar.exe et stellar-cli.exe
 cargo test --workspace                     # tests (les tests GPU s'ignorent sans carte)
 cargo clippy --workspace --all-targets
 cargo run --release --example bench -p stellar-engine-gpu   # banc d'essai CPU / GPU
@@ -40,9 +40,11 @@ Démarrage direct pour les essais (variables d'environnement, voir `app.rs`) :
 en rotation), `STELLAR_ENGINE=<id>` (`cpu-barnes-hut` ou `gpu-barnes-hut`),
 `STELLAR_AUTORECORD=<intervalle>`, `STELLAR_LOAD=<sauvegarde>`,
 `STELLAR_REPLAY=<enregistrement>`, `STELLAR_LANG=fr|en`. Mode console :
-`stellar.exe --sans-affichage --corps 2000 --pas 300` (voir `console.rs`,
-`--help`). Tout argument fait passer en mode console : un argument
-inconnu y est signalé (code de sortie 2) ; sans argument, l'interface. Les dossiers `saves\` et `recordings\` sont
+`stellar-cli.exe --corps 2000 --pas 300`, `--charger`, `--reprendre` (voir
+`console.rs`, `--help`). Deux exécutables sur une même bibliothèque
+(`stellar_app`, `lib.rs`) : `stellar.exe` (fenêtré, sans argument ; avec
+arguments, il renvoie vers stellar-cli) et `stellar-cli.exe` (console :
+l'invite attend sa fin). Argument inconnu : code de sortie 2. Les dossiers `saves\` et `recordings\` sont
 relatifs au répertoire courant. Mesures : `STELLAR_STATS=1` (une ligne par
 seconde sur la sortie d'erreur : pas/s, durée du pas, images/s ; lancer
 depuis un shell qui redirige `2>` pour la lire), `STELLAR_PRESENT=fifo|mailbox|immediate`

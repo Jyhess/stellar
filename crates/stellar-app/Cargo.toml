@@ -4,10 +4,19 @@ description = "Interface graphique du simulateur Stellar (wgpu + egui)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "stellar"
+
+[lib]
+name = "stellar_app"
+path = "src/lib.rs"
 
 [[bin]]
 name = "stellar"
 path = "src/main.rs"
+
+[[bin]]
+name = "stellar-cli"
+path = "src/cli.rs"
 
 [dependencies]
 stellar-domain.workspace = true

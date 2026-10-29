@@ -184,12 +184,64 @@ fn headless_run_stops_at_target_and_saves() {
     assert_eq!(outcome.step, 40);
     let data = saves.load(&outcome.save).unwrap();
     assert_eq!(data.state.step, 40);
-    let mut r = recordings.open(&outcome.recording.unwrap()).unwrap();
+    let mut r = recordings.open(outcome.recording.as_ref().unwrap()).unwrap();
     let steps: Vec<u64> = r.info().frames.iter().map(|f| f.step).collect();
     assert_eq!(steps.first(), Some(&0));
     assert_eq!(steps.last(), Some(&40), "{steps:?}");
     assert!(r.read_frame(steps.len() - 1).is_ok());
     assert_eq!(f_names(&dir), vec!["essai_sans_affichage".to_owned()]);
+    drop(r);
+
+    let wait = |run: &HeadlessRun| {
+        let t0 = std::time::Instant::now();
+        while !run.done() {
+            assert!(t0.elapsed().as_secs() < 60, "cible jamais atteinte");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    let record = RecordSettings {
+        interval: 5,
+        dust_budget: None,
+    };
+    // Reprise en poursuivant l'enregistrement : 20 pas de plus.
+    let rec = outcome.recording.clone().unwrap();
+    let (run, continued) = HeadlessRun::resume(
+        &service,
+        &outcome.save,
+        Some(&rec),
+        None,
+        record,
+        RunTarget::Steps(20),
+    )
+    .unwrap();
+    assert_eq!(continued.as_deref(), Some(rec.as_path()));
+    assert_eq!(run.handle().name(), "essai_sans_affichage");
+    wait(&run);
+    let second = run.finish(&service).unwrap();
+    assert_eq!(second.step, 60);
+    let r = recordings.open(&rec).unwrap();
+    let steps: Vec<u64> = r.info().frames.iter().map(|f| f.step).collect();
+    assert!(steps.windows(2).all(|w| w[0] < w[1]), "{steps:?}");
+    assert_eq!(steps.last(), Some(&60), "{steps:?}");
+    drop(r);
+
+    // Reprise d'une sauvegarde sans lien : nouvel enregistrement.
+    let (run, continued) = HeadlessRun::resume(
+        &service,
+        &second.save,
+        None,
+        Some("suite"),
+        record,
+        RunTarget::Steps(10),
+    )
+    .unwrap();
+    assert!(continued.is_none());
+    wait(&run);
+    let third = run.finish(&service).unwrap();
+    assert_eq!(third.step, 70);
+    let r = recordings.open(&third.recording.unwrap()).unwrap();
+    let steps: Vec<u64> = r.info().frames.iter().map(|f| f.step).collect();
+    assert_eq!((steps.first(), steps.last()), (Some(&60), Some(&70)), "{steps:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

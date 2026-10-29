@@ -1,8 +1,10 @@
-//! Mode console : `stellar.exe --sans-affichage [options]`.
+//! Ligne de commande (`stellar-cli.exe`) : simulation sans fenêtre, reprise
+//! d'une sauvegarde ou d'un enregistrement.
 //!
-//! Lance une simulation sans fenêtre, l'enregistre et s'arrête à la cible
-//! (ou à Ctrl+C), puis clôt l'enregistrement et sauvegarde l'état final.
+//! Lance la simulation, l'enregistre et s'arrête à la cible (ou à Ctrl+C),
+//! puis clôt l'enregistrement et sauvegarde l'état final.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,21 +22,19 @@ use stellar_persistence::{FileRecordingRepository, FileRepository};
 use crate::headless::hms;
 use crate::{format, RECORDINGS_DIR, SAVES_DIR};
 
-/// Option déclenchant le mode console.
-pub const FLAG: &str = "--sans-affichage";
-
 static STOP: AtomicBool = AtomicBool::new(false);
 
 /// Options d'aide.
 const HELP: [&str; 3] = ["--help", "-h", "--aide"];
 
 fn usage() -> String {
-    tr!("Usage : stellar.exe                         interface graphique
-        stellar.exe --sans-affichage [options]   simulation sans fenêtre
-        stellar.exe --help                       cette aide
+    tr!("Usage : stellar-cli [options]        nouvelle simulation sans fenêtre
+        stellar-cli --charger FICHIER     reprendre une sauvegarde (.stellar)
+        stellar-cli --reprendre FICHIER   reprendre un enregistrement (.stellarec)
+        stellar-cli --help                cette aide
+L'interface graphique est stellar.exe (sans argument).
 
-Options de --sans-affichage :
-
+Nouvelle simulation :
   --corps N          nombre de particules (défaut : 1000000)
   --rayon R          rayon du nuage (défaut : 100)
   --graine S         graine aléatoire (défaut : 42)
@@ -43,30 +43,60 @@ Options de --sans-affichage :
   --dispersion D     dispersion de la vitesse orbitale (défaut : 0,05)
   --vmin A --vmax B  plage de vitesse (alea, circ, rad)
   --moteur M         gpu | cpu (défaut : gpu si une carte convient)
-  --nom NOM          nom de la simulation (défaut : date et paramètres)
+
+Reprise :
+  --charger F        sauvegarde à reprendre ; son enregistrement lié est poursuivi,
+                     sinon un nouvel enregistrement commence
+  --poursuivre F     avec --charger : enregistrement compatible à prolonger depuis
+                     le pas de la sauvegarde (instantanés postérieurs supprimés)
+  --reprendre F      enregistrement à poursuivre depuis sa dernière sauvegarde liée
+
+Dans tous les cas :
+  --nom NOM          nom de la simulation (défaut : date et paramètres, ou nom du fichier)
   --intervalle N     un instantané tous les N pas (défaut : 10)
   --poussiere N      poussière enregistrée par instantané, ou « toutes » (défaut : 1000000)
-  --pas N            s'arrêter après N pas
-  --temps T          s'arrêter après un temps simulé T
+  --pas N            s'arrêter après N pas (de plus, en reprise)
+  --temps T          s'arrêter après un temps simulé T (de plus, en reprise)
   --duree M          s'arrêter après M minutes de calcul
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
 sauvegardé (dossiers « {} » et « {} »).", SAVES_DIR, RECORDINGS_DIR)
 }
 
+/// Point de départ de la simulation.
+#[derive(Debug, Clone, PartialEq)]
+enum Start {
+    New,
+    /// Sauvegarde, et enregistrement à poursuivre éventuel.
+    Save(PathBuf, Option<PathBuf>),
+    /// Enregistrement à poursuivre depuis sa dernière sauvegarde liée.
+    Recording(PathBuf),
+}
+
+#[derive(Debug)]
 struct Options {
+    start: Start,
     initial: InitialConditions,
+    /// Options de nouvelle simulation données (refusées en reprise).
+    new_options: Vec<String>,
     engine: Option<String>,
     name: Option<String>,
     record: RecordSettings,
     target: RunTarget,
 }
 
+/// Analyse la ligne de commande (`Err("")` : aide demandée ; `Err(message)` :
+/// erreur).
 fn parse(args: &[String]) -> Result<Options, String> {
+    if args.iter().any(|a| HELP.contains(&a.as_str())) {
+        return Err(String::new());
+    }
     let mut o = Options {
+        start: Start::New,
         initial: InitialConditions {
             velocity: VelocityMode::CircularOrbital { spread: 0.05 },
             ..Default::default()
         },
+        new_options: Vec::new(),
         engine: None,
         name: None,
         record: RecordSettings {
@@ -76,6 +106,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         target: RunTarget::Manual,
     };
     let (mut velocity, mut spread, mut vmin, mut vmax) = ("orb".to_owned(), 0.05, 0.0, 10.0);
+    let (mut load, mut follow, mut resume) = (None, None, None);
     let mut it = args.iter();
     let value = |it: &mut std::slice::Iter<String>, flag: &str| {
         it.next()
@@ -89,8 +120,17 @@ fn parse(args: &[String]) -> Result<Options, String> {
             .map_err(|_| tr!("valeur invalide pour {} : {}", flag, v))
     }
     while let Some(a) = it.next() {
+        let new_option = matches!(
+            a.as_str(),
+            "--corps" | "--rayon" | "--graine" | "--disque" | "--vitesse" | "--dispersion"
+                | "--vmin" | "--vmax" | "--moteur"
+        );
+        if new_option {
+            o.new_options.push(a.clone());
+        }
         match a.as_str() {
-            FLAG => {}
+            // Ancienne forme (`stellar.exe --sans-affichage`) : sans effet.
+            "--sans-affichage" => {}
             "--corps" => o.initial.count = num(&value(&mut it, a)?, a)?,
             "--rayon" => o.initial.radius = num(&value(&mut it, a)?, a)?,
             "--graine" => o.initial.seed = num(&value(&mut it, a)?, a)?,
@@ -105,6 +145,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--vmin" => vmin = num(&value(&mut it, a)?, a)?,
             "--vmax" => vmax = num(&value(&mut it, a)?, a)?,
             "--moteur" => o.engine = Some(value(&mut it, a)?),
+            "--charger" => load = Some(PathBuf::from(value(&mut it, a)?)),
+            "--poursuivre" => follow = Some(PathBuf::from(value(&mut it, a)?)),
+            "--reprendre" => resume = Some(PathBuf::from(value(&mut it, a)?)),
             "--nom" => o.name = Some(value(&mut it, a)?),
             "--intervalle" => o.record.interval = num::<u32>(&value(&mut it, a)?, a)?.max(1),
             "--poussiere" => {
@@ -117,8 +160,21 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let m: f64 = num(&value(&mut it, a)?, a)?;
                 o.target = RunTarget::WallTime(Duration::from_secs_f64(m.max(0.0) * 60.0));
             }
-            h if HELP.contains(&h) => return Err(String::new()),
             other => return Err(tr!("argument inconnu : {}", other)),
+        }
+    }
+    o.start = match (load, follow, resume) {
+        (None, None, None) => Start::New,
+        (Some(save), follow, None) => Start::Save(save, follow),
+        (None, None, Some(rec)) => Start::Recording(rec),
+        (None, Some(_), _) => return Err(crate::i18n::tr("--poursuivre s'emploie avec --charger").to_owned()),
+        (Some(_), _, Some(_)) => {
+            return Err(crate::i18n::tr("--charger et --reprendre s'excluent").to_owned())
+        }
+    };
+    if o.start != Start::New {
+        if let Some(opt) = o.new_options.first() {
+            return Err(tr!("{} ne s'applique qu'à une nouvelle simulation", opt));
         }
     }
     o.initial.velocity = match velocity.as_str() {
@@ -135,9 +191,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
 
 #[cfg(windows)]
 fn setup_console() {
-    use windows_sys::Win32::System::Console::{
-        AttachConsole, SetConsoleCtrlHandler, SetConsoleOutputCP, ATTACH_PARENT_PROCESS,
-    };
+    use windows_sys::Win32::System::Console::{SetConsoleCtrlHandler, SetConsoleOutputCP};
     unsafe extern "system" fn on_ctrl(_: u32) -> i32 {
         STOP.store(true, Ordering::Release);
         1
@@ -145,9 +199,6 @@ fn setup_console() {
     // SAFETY : appels Win32 sans pointeur à conserver ; le gestionnaire
     // ne fait que lever un drapeau atomique.
     unsafe {
-        // Exécutable fenêtré (sous-système Windows) : se rattacher à la
-        // console qui l'a lancé pour y écrire.
-        AttachConsole(ATTACH_PARENT_PROCESS);
         SetConsoleOutputCP(65001);
         SetConsoleCtrlHandler(Some(on_ctrl), 1);
     }
@@ -156,32 +207,29 @@ fn setup_console() {
 #[cfg(not(windows))]
 fn setup_console() {}
 
-/// Vérifie la ligne de commande : options de la simulation sans fenêtre
-/// (`Err("")` : aide demandée ; `Err(message)` : erreur).
-fn check(args: &[String]) -> Result<Options, String> {
-    if args.iter().any(|a| HELP.contains(&a.as_str())) {
-        return Err(String::new());
+/// `stellar.exe` lancé avec des arguments : l'exécutable fenêtré ne peut pas
+/// tenir l'invite ; renvoi vers `stellar-cli`. Renvoie le code de sortie.
+pub fn redirect() -> i32 {
+    #[cfg(windows)]
+    // SAFETY : rattachement à la console du parent, sans pointeur.
+    unsafe {
+        use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+        AttachConsole(ATTACH_PARENT_PROCESS);
     }
-    if !args.iter().any(|a| a == FLAG) {
-        let Some(first) = args.first() else {
-            return Err(String::new());
-        };
-        // Option de simulation (seule, ou suivie de sa valeur) sans le mode.
-        let known = parse(std::slice::from_ref(first)).is_ok()
-            || parse(&args[..args.len().min(2)]).is_ok();
-        return Err(if known {
-            tr!("l'option {} demande --sans-affichage", first)
-        } else {
-            tr!("argument inconnu : {}", first)
-        });
-    }
-    parse(args)
+    crate::i18n::init();
+    eprintln!(
+        "{}",
+        crate::i18n::tr(
+            "stellar.exe est l'interface graphique et ne prend pas d'argument. Ligne de commande : stellar-cli.exe (stellar-cli --help)."
+        )
+    );
+    2
 }
 
-/// Exécute le mode console ; renvoie le code de sortie.
+/// Exécute la ligne de commande ; renvoie le code de sortie.
 pub fn run(args: &[String]) -> i32 {
     setup_console();
-    let o = match check(args) {
+    let o = match parse(args) {
         Ok(o) => o,
         Err(e) if e.is_empty() => {
             println!("{}", usage());
@@ -189,7 +237,10 @@ pub fn run(args: &[String]) -> i32 {
         }
         Err(e) => {
             eprintln!("{}", tr!("Erreur : {}", e));
-            eprintln!("{}", crate::i18n::tr("Voir stellar.exe --help pour la liste des options."));
+            eprintln!(
+                "{}",
+                crate::i18n::tr("Voir stellar-cli --help pour la liste des options.")
+            );
             return 2;
         }
     };
@@ -210,30 +261,72 @@ pub fn run(args: &[String]) -> i32 {
         Arc::new(FileRepository::new(SAVES_DIR)),
         Arc::new(FileRecordingRepository::new(RECORDINGS_DIR)),
     );
-    let name = o
-        .name
-        .unwrap_or_else(|| crate::home::default_name(&o.initial, chrono::Local::now(), |_| false));
-    let config = SimulationConfig {
-        initial: o.initial,
-        physics: PhysicsParams::suggested(&o.initial, 1.0),
-        engine,
-    };
-    println!(
-        "{}",
-        tr!(
-            "Stellar sans affichage — « {} » : {} corps, moteur {}.",
-            name,
-            format::count(config.initial.count as u64),
-            config.engine
-        )
-    );
     if let Err(e) = &gpu {
         println!("{}", tr!("Moteur GPU indisponible : {}", e));
     }
-    let run = match HeadlessRun::start(&service, config, &name, o.record, o.target) {
-        Ok(r) => r,
+    let started = match &o.start {
+        Start::New => {
+            let name = o.name.clone().unwrap_or_else(|| {
+                crate::home::default_name(&o.initial, chrono::Local::now(), |_| false)
+            });
+            let config = SimulationConfig {
+                initial: o.initial,
+                physics: PhysicsParams::suggested(&o.initial, 1.0),
+                engine,
+            };
+            println!(
+                "{}",
+                tr!(
+                    "Nouvelle simulation « {} » : {} corps, moteur {}.",
+                    name,
+                    format::count(config.initial.count as u64),
+                    config.engine
+                )
+            );
+            HeadlessRun::start(&service, config, &name, o.record, o.target).map(|r| (r, None))
+        }
+        Start::Save(save, follow) => {
+            println!("{}", tr!("Reprise de la sauvegarde {}.", save.display()));
+            HeadlessRun::resume(&service, save, follow.as_deref(), o.name.as_deref(), o.record, o.target)
+        }
+        Start::Recording(rec) => {
+            // Dernière sauvegarde liée à l'enregistrement.
+            let save = service
+                .linked_saves(rec)
+                .into_iter()
+                .max_by_key(|s| (s.saved_at_unix, s.step))
+                .map(|s| s.path);
+            match save {
+                Some(save) => {
+                    println!(
+                        "{}",
+                        tr!("Reprise de l'enregistrement {} depuis la sauvegarde {}.", rec.display(), save.display())
+                    );
+                    HeadlessRun::resume(&service, &save, Some(rec), o.name.as_deref(), o.record, o.target)
+                }
+                None => {
+                    eprintln!(
+                        "{}",
+                        tr!(
+                            "Erreur : aucune sauvegarde du dossier « {} » n'est liée à {} ; utiliser --charger SAUVEGARDE --poursuivre ENREGISTREMENT.",
+                            SAVES_DIR,
+                            rec.display()
+                        )
+                    );
+                    return 1;
+                }
+            }
+        }
+    };
+    let run = match started {
+        Ok((run, continued)) => {
+            if let Some(p) = continued {
+                println!("{}", tr!("Enregistrement poursuivi : {}", p.display()));
+            }
+            run
+        }
         Err(e) => {
-            eprintln!("{e}");
+            eprintln!("{}", tr!("Erreur : {}", e));
             return 1;
         }
     };
@@ -287,34 +380,49 @@ mod tests {
     }
 
     #[test]
-    fn parses_console_options() {
+    fn parses_new_simulation_options() {
         let o = parse(&args(
-            "--sans-affichage --corps 2000 --disque --vitesse repos --pas 500 --poussiere toutes --nom essai",
+            "--corps 2000 --disque --vitesse repos --pas 500 --poussiere toutes --nom essai",
         ))
         .unwrap();
+        assert_eq!(o.start, Start::New);
         assert_eq!(o.initial.count, 2000);
         assert!(matches!(o.initial.distribution, Distribution::Disk { .. }));
         assert_eq!(o.initial.velocity, VelocityMode::Rest);
         assert_eq!(o.target, RunTarget::Steps(500));
         assert_eq!(o.record.dust_budget, None);
         assert_eq!(o.name.as_deref(), Some("essai"));
-        let o = parse(&args("--duree 1,5 --dispersion 0,1")).unwrap();
+        let o = parse(&args("--sans-affichage --duree 1,5 --dispersion 0,1")).unwrap();
         assert_eq!(o.target, RunTarget::WallTime(Duration::from_secs(90)));
         assert_eq!(o.initial.velocity, VelocityMode::CircularOrbital { spread: 0.1 });
-        assert!(parse(&args("--inconnue")).is_err());
-        assert!(parse(&args("--corps")).is_err());
+    }
+
+    #[test]
+    fn parses_resume_options() {
+        let o = parse(&args("--charger saves/a.stellar --pas 100")).unwrap();
+        assert_eq!(o.start, Start::Save("saves/a.stellar".into(), None));
+        let o = parse(&args("--charger a.stellar --poursuivre r.stellarec")).unwrap();
+        assert_eq!(
+            o.start,
+            Start::Save("a.stellar".into(), Some("r.stellarec".into()))
+        );
+        let o = parse(&args("--reprendre r.stellarec --duree 10")).unwrap();
+        assert_eq!(o.start, Start::Recording("r.stellarec".into()));
+        assert!(parse(&args("--poursuivre r.stellarec")).is_err());
+        assert!(parse(&args("--charger a --reprendre b")).is_err());
+        let e = parse(&args("--charger a --corps 10")).unwrap_err();
+        assert!(e.contains("--corps"), "{e}");
     }
 
     #[test]
     fn help_and_unknown_arguments() {
-        assert_eq!(check(&args("--help")).err().as_deref(), Some(""));
-        assert_eq!(check(&args("--sans-affichage -h")).err().as_deref(), Some(""));
-        let e = check(&args("--bidule")).err().unwrap();
+        assert_eq!(parse(&args("--help")).err().as_deref(), Some(""));
+        assert_eq!(parse(&args("--pas 10 -h")).err().as_deref(), Some(""));
+        let e = parse(&args("--bidule")).unwrap_err();
         assert!(e.contains("--bidule"), "{e}");
-        let e = check(&args("--sans-affichage --pas 10 fichier.txt")).err().unwrap();
+        let e = parse(&args("--pas 10 fichier.txt")).unwrap_err();
         assert!(e.contains("fichier.txt"), "{e}");
-        let e = check(&args("--corps 1000")).err().unwrap();
-        assert!(e.contains("--sans-affichage"), "{e}");
-        assert!(check(&args("--sans-affichage --pas 10")).is_ok());
+        assert!(parse(&args("--corps")).is_err());
+        assert!(parse(&args("--pas 10")).is_ok());
     }
 }

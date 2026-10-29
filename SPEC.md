@@ -102,3 +102,7 @@
 - Interface en français ou en anglais : langue de Windows par défaut, choix dans l'accueil ou le menu Échap, mémorisé ; nombres mis en forme selon la langue. La documentation et les messages d'erreur des couches inférieures restent en français.
 - Simulation sans affichage, depuis l'accueil (écran de suivi, bascule possible vers l'affichage) ou en console (`stellar.exe --sans-affichage`) : enregistrement automatique, arrêt à un nombre de pas, un temps simulé, une durée réelle ou à la demande (Ctrl+C en console) ; à l'arrêt, enregistrement clos et état final sauvegardé sous le nom de la simulation.
 
+## Évolutions (v1.7) — ligne de commande
+- `stellar-cli.exe`, application console distincte de l'interface (`stellar.exe`, qui renvoie vers elle si on lui passe des arguments) : aide `--help`, argument inconnu signalé (code de sortie 2).
+- Reprise sans affichage d'une sauvegarde (`--charger`, enregistrement lié poursuivi, sinon nouvel enregistrement, ou `--poursuivre` un enregistrement compatible) ou d'un enregistrement (`--reprendre`, depuis sa dernière sauvegarde liée) ; cibles `--pas` et `--temps` comptées à partir du pas de la sauvegarde.
+

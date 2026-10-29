@@ -237,7 +237,7 @@ const EN: &[(&str, &str)] = &[
     ("Vitesse caractéristique √(GM/R) ≈ {} · temps de chute libre ≈ {}", "Characteristic speed √(GM/R) ≈ {} · free-fall time ≈ {}"),
     ("Paramètres avancés", "Advanced parameters"),
     ("Sans affichage (enregistrement automatique)", "Without display (automatic recording)"),
-    ("Calcule sans dessiner les corps, toute la carte graphique pour le calcul. Un écran de suivi montre l'avancement ; à la cible (ou à l'arrêt), l'enregistrement est clos et l'état final sauvegardé. Aussi en console : stellar.exe --sans-affichage (voir le README).", "Computes without drawing the bodies, the whole graphics card for the computation. A monitoring screen shows the progress; at the target (or when stopped), the recording is closed and the final state saved. Also from the console: stellar.exe --sans-affichage (see the README)."),
+    ("Calcule sans dessiner les corps, toute la carte graphique pour le calcul. Un écran de suivi montre l'avancement ; à la cible (ou à l'arrêt), l'enregistrement est clos et l'état final sauvegardé. Aussi en ligne de commande : stellar-cli.exe (stellar-cli --help).", "Computes without drawing the bodies, the whole graphics card for the computation. A monitoring screen shows the progress; at the target (or when stopped), the recording is closed and the final state saved. Also from the command line: stellar-cli.exe (stellar-cli --help)."),
     ("   Arrêt :", "   Stop:"),
     ("pas", "steps"),
     ("(≈ {} pas)", "(≈ {} steps)"),
@@ -460,17 +460,13 @@ Vitesse : {}", "Half-mass radius: {}\nVelocity: {}"),
     ("Échap", "Esc"),
     ("ce menu", "this menu"),
     ("Amas local", "Local cluster"),
-    ("[{}] Plantage dans le thread « {} »\n{}\n\n{}\n", "[{}] Crash in thread “{}”\n{}\n\n{}\n"),
-    ("Stellar — erreur fatale", "Stellar — fatal error"),
-    ("{}\n\nDétails enregistrés dans {}.", "{}\n\nDetails written to {}."),
-    ("Carte graphique : {}", "Graphics card: {}"),
-    ("Moteur GPU indisponible : {}", "GPU engine unavailable: {}"),
-    ("Usage : stellar.exe                         interface graphique
-        stellar.exe --sans-affichage [options]   simulation sans fenêtre
-        stellar.exe --help                       cette aide
+    ("Usage : stellar-cli [options]        nouvelle simulation sans fenêtre
+        stellar-cli --charger FICHIER     reprendre une sauvegarde (.stellar)
+        stellar-cli --reprendre FICHIER   reprendre un enregistrement (.stellarec)
+        stellar-cli --help                cette aide
+L'interface graphique est stellar.exe (sans argument).
 
-Options de --sans-affichage :
-
+Nouvelle simulation :
   --corps N          nombre de particules (défaut : 1000000)
   --rayon R          rayon du nuage (défaut : 100)
   --graine S         graine aléatoire (défaut : 42)
@@ -479,21 +475,40 @@ Options de --sans-affichage :
   --dispersion D     dispersion de la vitesse orbitale (défaut : 0,05)
   --vmin A --vmax B  plage de vitesse (alea, circ, rad)
   --moteur M         gpu | cpu (défaut : gpu si une carte convient)
-  --nom NOM          nom de la simulation (défaut : date et paramètres)
+
+Reprise :
+  --charger F        sauvegarde à reprendre ; son enregistrement lié est poursuivi,
+                     sinon un nouvel enregistrement commence
+  --poursuivre F     avec --charger : enregistrement compatible à prolonger depuis
+                     le pas de la sauvegarde (instantanés postérieurs supprimés)
+  --reprendre F      enregistrement à poursuivre depuis sa dernière sauvegarde liée
+
+Dans tous les cas :
+  --nom NOM          nom de la simulation (défaut : date et paramètres, ou nom du fichier)
   --intervalle N     un instantané tous les N pas (défaut : 10)
   --poussiere N      poussière enregistrée par instantané, ou « toutes » (défaut : 1000000)
-  --pas N            s'arrêter après N pas
-  --temps T          s'arrêter après un temps simulé T
+  --pas N            s'arrêter après N pas (de plus, en reprise)
+  --temps T          s'arrêter après un temps simulé T (de plus, en reprise)
   --duree M          s'arrêter après M minutes de calcul
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
-sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar.exe                         graphical interface\n       stellar.exe --sans-affichage [options]   simulation without a window\n       stellar.exe --help                       this help\n\nOptions of --sans-affichage:\n\n  --corps N          number of particles (default: 1000000)\n  --rayon R          cloud radius (default: 100)\n  --graine S         random seed (default: 42)\n  --disque           rotating disc (otherwise a sphere)\n  --vitesse V        repos | alea | circ | orb | rad (default: orb)\n  --dispersion D     spread of the orbital speed (default: 0.05)\n  --vmin A --vmax B  speed range (alea, circ, rad)\n  --moteur M         gpu | cpu (default: gpu if a suitable card is present)\n  --nom NOM          simulation name (default: date and parameters)\n  --intervalle N     one snapshot every N steps (default: 10)\n  --poussiere N      dust recorded per snapshot, or “toutes” for all (default: 1000000)\n  --pas N            stop after N steps\n  --temps T          stop after a simulated time T\n  --duree M          stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
+sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --charger FILE        resume a save (.stellar)\n       stellar-cli --reprendre FILE      resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --corps N          number of particles (default: 1000000)\n  --rayon R          cloud radius (default: 100)\n  --graine S         random seed (default: 42)\n  --disque           rotating disc (otherwise a sphere)\n  --vitesse V        repos | alea | circ | orb | rad (default: orb)\n  --dispersion D     spread of the orbital speed (default: 0.05)\n  --vmin A --vmax B  speed range (alea, circ, rad)\n  --moteur M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --charger F        save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --poursuivre F     with --charger: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --reprendre F      recording to continue from its latest linked save\n\nIn all cases:\n  --nom NOM          simulation name (default: date and parameters, or file name)\n  --intervalle N     one snapshot every N steps (default: 10)\n  --poussiere N      dust recorded per snapshot, or “toutes” for all (default: 1000000)\n  --pas N            stop after N steps (more, when resuming)\n  --temps T          stop after a simulated time T (more, when resuming)\n  --duree M          stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
     ("valeur manquante après {}", "missing value after {}"),
     ("valeur invalide pour {} : {}", "invalid value for {}: {}"),
     ("argument inconnu : {}", "unknown argument: {}"),
+    ("--poursuivre s'emploie avec --charger", "--poursuivre is used with --charger"),
+    ("--charger et --reprendre s'excluent", "--charger and --reprendre are mutually exclusive"),
+    ("{} ne s'applique qu'à une nouvelle simulation", "{} only applies to a new simulation"),
     ("vitesse inconnue : {}", "unknown velocity: {}"),
-    ("l'option {} demande --sans-affichage", "option {} requires --sans-affichage"),
+    ("stellar.exe est l'interface graphique et ne prend pas d'argument. Ligne de commande : stellar-cli.exe (stellar-cli --help).", "stellar.exe is the graphical interface and takes no argument. Command line: stellar-cli.exe (stellar-cli --help)."),
     ("Erreur : {}", "Error: {}"),
-    ("Voir stellar.exe --help pour la liste des options.", "See stellar.exe --help for the list of options."),
+    ("Voir stellar-cli --help pour la liste des options.", "See stellar-cli --help for the list of options."),
+    ("Moteur GPU indisponible : {}", "GPU engine unavailable: {}"),
+    ("Nouvelle simulation « {} » : {} corps, moteur {}.", "New simulation “{}”: {} bodies, engine {}."),
+    ("Reprise de la sauvegarde {}.", "Resuming the save {}."),
+    ("Reprise de l'enregistrement {} depuis la sauvegarde {}.", "Resuming the recording {} from the save {}."),
+    ("Erreur : aucune sauvegarde du dossier « {} » n'est liée à {} ; utiliser --charger SAUVEGARDE --poursuivre ENREGISTREMENT.", "Error: no save in the “{}” folder is linked to {}; use --charger SAVE --poursuivre RECORDING."),
+    ("Enregistrement poursuivi : {}", "Recording continued: {}"),
+    ("pas {} · t = {} · {} corps · {} pas/s · {} instantanés · {}", "step {} · t = {} · {} bodies · {} steps/s · {} snapshots · {}"),
     ("Arrêt : clôture de l'enregistrement et sauvegarde…", "Stopping: closing the recording and saving…"),
     ("Terminé au pas {}.", "Finished at step {}."),
     ("Sauvegarde : {}", "Save: {}"),
@@ -509,6 +524,7 @@ sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar.exe              
     ("durée {}", "duration {}"),
     ("Durée écoulée", "Elapsed time"),
     ("Enregistrement", "Recording"),
+    ("{} instantanés · {}", "{} snapshots · {}"),
     ("■ Arrêter et sauvegarder", "■ Stop and save"),
     ("Afficher la simulation", "Show the simulation"),
     ("Le calcul et l'enregistrement continuent ; la cible n'est plus surveillée.", "The computation and the recording go on; the target is no longer watched."),

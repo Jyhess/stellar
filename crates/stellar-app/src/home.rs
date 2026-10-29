@@ -695,7 +695,7 @@ impl HomeScreen {
             ui.checkbox(&mut self.headless, tr("Sans affichage (enregistrement automatique)"));
             help(
                 ui,
-                tr("Calcule sans dessiner les corps, toute la carte graphique pour le calcul. Un écran de suivi montre l'avancement ; à la cible (ou à l'arrêt), l'enregistrement est clos et l'état final sauvegardé. Aussi en console : stellar.exe --sans-affichage (voir le README)."),
+                tr("Calcule sans dessiner les corps, toute la carte graphique pour le calcul. Un écran de suivi montre l'avancement ; à la cible (ou à l'arrêt), l'enregistrement est clos et l'état final sauvegardé. Aussi en ligne de commande : stellar-cli.exe (stellar-cli --help)."),
             );
         });
         if self.headless {

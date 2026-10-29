@@ -4,14 +4,15 @@
 //!
 //! Utilisée par l'écran de suivi de l'interface et par le mode console.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use stellar_domain::SimulationConfig;
 
+use crate::ports::RepositoryError;
 use crate::runner::{Phase, SimulationHandle};
-use crate::service::{AppError, SimulatorService};
+use crate::service::{name_from_file, AppError, SimulatorService};
 
 /// Condition d'arrêt.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,6 +66,15 @@ pub struct HeadlessRun {
     origin: (u64, f64),
 }
 
+/// Pas d'arrêt d'une cible comptée à partir du pas `from`.
+fn stop_step(target: RunTarget, from: u64, dt: f64) -> Option<u64> {
+    match target {
+        RunTarget::Steps(n) => Some(from + n),
+        RunTarget::SimTime(t) => Some(from + (t / dt.max(1e-300)).ceil().max(0.0) as u64),
+        _ => None,
+    }
+}
+
 impl HeadlessRun {
     /// Crée la simulation et démarre l'enregistrement (sous le nom `name`).
     pub fn start(
@@ -74,23 +84,65 @@ impl HeadlessRun {
         record: RecordSettings,
         target: RunTarget,
     ) -> Result<Self, AppError> {
-        let dt = config.physics.dt.max(1e-300);
-        let handle = service.new_simulation(config)?;
+        let dt = config.physics.dt;
+        // En pause : pas d'arrêt et enregistrement armés avant le premier pas.
+        let handle = service.new_simulation_paused(config)?;
         handle.set_name(name);
-        // Nouvelle simulation : départ au pas 0, au temps 0. Le pas d'arrêt
-        // est transmis avant le premier pas.
-        handle.stop_at(match target {
-            RunTarget::Steps(n) => Some(n),
-            RunTarget::SimTime(t) => Some((t / dt).ceil().max(0.0) as u64),
-            _ => None,
-        });
+        handle.stop_at(stop_step(target, 0, dt));
         service.start_recording(name, &handle, record.interval, record.dust_budget)?;
+        handle.resume();
         Ok(Self {
             handle,
             target,
             started: Instant::now(),
             origin: (0, 0.0),
         })
+    }
+
+    /// Reprend la sauvegarde `save`. Enregistrement : `continue_with` s'il est
+    /// donné (poursuivi à partir du pas de la sauvegarde), sinon celui auquel
+    /// la sauvegarde est liée, sinon un nouvel enregistrement `record`. Nom :
+    /// `name`, ou celui de la sauvegarde. La cible se compte à partir du pas
+    /// de la sauvegarde. Renvoie aussi l'enregistrement poursuivi.
+    pub fn resume(
+        service: &SimulatorService,
+        save: &Path,
+        continue_with: Option<&Path>,
+        name: Option<&str>,
+        record: RecordSettings,
+        target: RunTarget,
+    ) -> Result<(Self, Option<PathBuf>), AppError> {
+        let data = service.read_save(save)?;
+        let (step, time, dt) = (data.state.step, data.state.time, data.config.physics.dt);
+        let loaded = service.start_loaded(data, continue_with)?;
+        let handle = loaded.handle;
+        let name = name.map(str::to_owned).unwrap_or_else(|| {
+            name_from_file(&save.file_stem().unwrap_or_default().to_string_lossy())
+        });
+        handle.set_name(&name);
+        handle.stop_at(stop_step(target, step, dt));
+        let continued = match loaded.recording {
+            Some(Ok(path)) => Some(path),
+            Some(Err(e)) => {
+                handle.shutdown();
+                return Err(AppError::Repository(RepositoryError::Format(e)));
+            }
+            None => {
+                service.start_recording(&name, &handle, record.interval, record.dust_budget)?;
+                None
+            }
+        };
+        // Une sauvegarde chargée démarre en pause.
+        handle.resume();
+        Ok((
+            Self {
+                handle,
+                target,
+                started: Instant::now(),
+                origin: (step, time),
+            },
+            continued,
+        ))
     }
 
     pub fn handle(&self) -> &SimulationHandle {

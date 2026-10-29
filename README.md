@@ -27,7 +27,7 @@ Depuis le dossier `stellar` :
 cargo run --release
 ```
 
-La première compilation prend quelques minutes, le temps de télécharger et de compiler les dépendances. Les suivantes sont rapides. L'exécutable produit se trouve dans `target\release\stellar.exe`.
+La première compilation prend quelques minutes, le temps de télécharger et de compiler les dépendances. Les suivantes sont rapides. Les exécutables produits se trouvent dans `target\release\` : `stellar.exe` (l'interface) et `stellar-cli.exe` (la ligne de commande, voir « Simulation sans affichage »).
 
 > Lancez toujours en `--release` : en mode debug, le calcul est plusieurs dizaines de fois plus lent.
 
@@ -63,13 +63,18 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 Pour les longs calculs : aucun rendu des corps, toute la carte graphique pour le calcul, enregistrement automatique (intervalle et budget de poussière réglables).
 
 - **Depuis l'accueil** : case « Sans affichage », puis condition d'arrêt — nombre de pas, temps simulé, durée réelle, ou manuel. Un écran de suivi montre l'avancement (pas, pas/s, temps restant estimé, enregistrement) ; « Arrêter et sauvegarder » clôt l'enregistrement et sauvegarde l'état final sous le nom de la simulation, « Afficher la simulation » bascule vers l'affichage habituel (le calcul et l'enregistrement continuent). Fermer la fenêtre arrête proprement.
-- **En console** : `stellar.exe --sans-affichage [options]` (liste complète avec `--help`, aussi `-h` ou `--aide` ; un argument inconnu est signalé, avec un code de sortie 2) :
+- **En ligne de commande** : `stellar-cli.exe`, application console installée à côté de `stellar.exe` (l'invite attend sa fin, Ctrl+C l'arrête proprement). `stellar-cli --help` liste les options ; un argument inconnu est signalé avec un code de sortie 2. `stellar.exe` lancé avec des arguments renvoie vers `stellar-cli`.
 
   ```powershell
-  .\stellar.exe --sans-affichage --corps 4000000 --disque --pas 200000 --intervalle 20 --nom galaxie
+  .\stellar-cli.exe --corps 4000000 --disque --pas 200000 --intervalle 20 --nom galaxie
+  .\stellar-cli.exe --charger saves\galaxie.stellar --pas 100000
+  .\stellar-cli.exe --reprendre recordings\galaxie.stellarec --duree 120
   ```
 
-  Options : `--corps`, `--rayon`, `--graine`, `--disque`, `--vitesse repos|alea|circ|orb|rad`, `--dispersion`, `--vmin`/`--vmax`, `--moteur gpu|cpu`, `--nom`, `--intervalle`, `--poussiere N|toutes`, et une cible `--pas N`, `--temps T` ou `--duree minutes` (sans cible : jusqu'à Ctrl+C). L'avancement s'affiche toutes les cinq secondes ; à l'arrêt, l'enregistrement est clos et l'état final sauvegardé.
+  - **Nouvelle simulation** : `--corps`, `--rayon`, `--graine`, `--disque`, `--vitesse repos|alea|circ|orb|rad`, `--dispersion`, `--vmin`/`--vmax`, `--moteur gpu|cpu`.
+  - **Reprise d'une sauvegarde** : `--charger FICHIER` ; l'enregistrement lié à la sauvegarde est poursuivi, sinon un nouvel enregistrement commence ; `--poursuivre FICHIER` prolonge à la place un enregistrement compatible à partir du pas de la sauvegarde (instantanés postérieurs supprimés).
+  - **Reprise d'un enregistrement** : `--reprendre FICHIER` charge la dernière sauvegarde liée à l'enregistrement (sauvegarde de reprise ou F5 faite pendant l'enregistrement) et le poursuit.
+  - **Dans tous les cas** : `--nom`, `--intervalle`, `--poussiere N|toutes`, et une cible `--pas N`, `--temps T` (comptés à partir du pas de la sauvegarde en reprise) ou `--duree minutes` ; sans cible, jusqu'à Ctrl+C. L'avancement s'affiche toutes les cinq secondes ; à l'arrêt, l'enregistrement est clos et l'état final sauvegardé.
 
 ### Commandes
 

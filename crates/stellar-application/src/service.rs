@@ -104,6 +104,23 @@ impl SimulatorService {
     /// Crée et démarre une nouvelle simulation. La génération du nuage a lieu
     /// dans le thread de simulation.
     pub fn new_simulation(&self, config: SimulationConfig) -> Result<SimulationHandle, AppError> {
+        self.create_simulation(config, false)
+    }
+
+    /// Comme [`Self::new_simulation`], mais en pause : de quoi armer un
+    /// enregistrement avant le premier pas, puis relancer le calcul.
+    pub fn new_simulation_paused(
+        &self,
+        config: SimulationConfig,
+    ) -> Result<SimulationHandle, AppError> {
+        self.create_simulation(config, true)
+    }
+
+    fn create_simulation(
+        &self,
+        config: SimulationConfig,
+        paused: bool,
+    ) -> Result<SimulationHandle, AppError> {
         let factory = self
             .registry
             .get(&config.engine)
@@ -114,7 +131,7 @@ impl SimulatorService {
             config,
             factory,
             move || generate_state(&initial, g),
-            false,
+            paused,
         ))
     }
 

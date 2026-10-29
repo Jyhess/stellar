@@ -204,7 +204,8 @@ impl eframe::App for StellarApp {
                         Err(e) => home.message = Some(e.to_string()),
                     }
                 }
-                HomeAction::Start(config, record, name) => match self.service.new_simulation(config) {
+                // En pause, pour armer l'enregistrement avant le premier pas.
+                HomeAction::Start(config, record, name) => match self.service.new_simulation_paused(config) {
                     Ok(handle) => {
                         handle.set_name(&name);
                         if let Some(r) = record {
@@ -217,6 +218,7 @@ impl eframe::App for StellarApp {
                                 home.message = Some(tr!("Enregistrement impossible : {}", e));
                             }
                         }
+                        handle.resume();
                         self.screen = Screen::sim(SimScreen::new(
                             Source::Live(Box::new(handle)),
                             self.service.clone(),
