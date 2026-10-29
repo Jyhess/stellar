@@ -54,7 +54,7 @@ fn main() {
             thickness: 0.05,
             profile: DensityProfile::Exponential { scale: 0.3 },
         };
-        ic.velocity = VelocityMode::CircularOrbital { spread: 0.05 };
+        ic.velocity = VelocityMode::CircularOrbital { spread: 0.05, factor: 1.0 };
     }
     let params = PhysicsParams::suggested(&ic, 1.0);
     println!("{n} corps, {steps} pas");

@@ -130,7 +130,7 @@ fn assign_velocities(rng: &mut impl Rng, ic: &InitialConditions, g: f64, b: &mut
                 }
             }
         }
-        VelocityMode::CircularOrbital { spread } => {
+        VelocityMode::CircularOrbital { spread, factor: scale } => {
             // Masse intérieure M(<r) : rang dans le tri par rayon sphérique.
             let n = b.len();
             let mut order: Vec<usize> = (0..n).collect();
@@ -162,7 +162,7 @@ fn assign_velocities(rng: &mut impl Rng, ic: &InitialConditions, g: f64, b: &mut
                 } else {
                     1.0
                 };
-                b.velocities[i] = t * v_circ * factor;
+                b.velocities[i] = t * v_circ * scale * factor;
             }
         }
     }
@@ -227,7 +227,7 @@ mod tests {
         for v in [
             VelocityMode::Random { min: 1.0, max: 3.0 },
             VelocityMode::CircularFixed { min: 1.0, max: 2.0 },
-            VelocityMode::CircularOrbital { spread: 0.1 },
+            VelocityMode::CircularOrbital { spread: 0.1, factor: 0.8 },
             VelocityMode::Radial { min: 0.5, max: 1.0 },
         ] {
             let b = generate_bodies(&ic(Distribution::Sphere, v), 1.0);
@@ -242,7 +242,7 @@ mod tests {
                 thickness: 0.0,
                 profile: DensityProfile::Uniform,
             },
-            VelocityMode::CircularOrbital { spread: 0.0 },
+            VelocityMode::CircularOrbital { spread: 0.0, factor: 1.0 },
         );
         let b = generate_bodies(&c, 2.0);
         // Pour le corps le plus extérieur, M(<r) ≈ N − 1.
@@ -259,5 +259,14 @@ mod tests {
             (got - expected).abs() / expected < 0.05,
             "{got} vs {expected}"
         );
+
+        // Le facteur multiplie la vitesse d'équilibre.
+        let slow = InitialConditions {
+            velocity: VelocityMode::CircularOrbital { spread: 0.0, factor: 0.7 },
+            ..c
+        };
+        let s = generate_bodies(&slow, 2.0);
+        let ratio = s.velocities[i].length() / got;
+        assert!((ratio - 0.7).abs() < 1e-9, "{ratio}");
     }
 }

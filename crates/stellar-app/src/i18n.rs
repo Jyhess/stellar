@@ -232,6 +232,8 @@ const EN: &[(&str, &str)] = &[
     ("Repos : effondrement libre. Aléatoire : directions isotropes. Circulaire : rotation autour de Oz, à vitesse imposée ou à la vitesse d'équilibre orbital (calculée sur la masse intérieure). Radiale : chute vers le centre.", "At rest: free collapse. Random: isotropic directions. Circular: rotation about Oz, at a set speed or at the orbital equilibrium speed (computed from the enclosed mass). Radial: fall towards the centre."),
     ("   Dispersion (±)", "   Spread (±)"),
     ("Écart aléatoire autour de la vitesse orbitale d'équilibre (± ce pourcentage).", "Random deviation around the orbital equilibrium speed (± this percentage)."),
+    ("   Facteur", "   Factor"),
+    ("Multiple de la vitesse orbitale d'équilibre : 1 donne des orbites circulaires, moins fait s'effondrer le nuage, plus le fait s'étendre.", "Multiple of the equilibrium orbital speed: 1 gives circular orbits, less makes the cloud collapse, more makes it expand."),
     ("   Norme : plage", "   Magnitude: range"),
     ("Norme de la vitesse, tirée uniformément entre le minimum et le maximum.", "Speed magnitude, drawn uniformly between the minimum and the maximum."),
     ("Vitesse caractéristique √(GM/R) ≈ {} · temps de chute libre ≈ {}", "Characteristic speed √(GM/R) ≈ {} · free-fall time ≈ {}"),
@@ -310,6 +312,9 @@ const EN: &[(&str, &str)] = &[
     (" — sélectionnez un corps (barycentre en attendant)", " — select a body (barycentre meanwhile)"),
     ("Barycentre vu de face au disque (axe incliné de {}° sur Oz).", "Barycentre seen face-on to the disc (axis tilted {}° from Oz)."),
     ("Barycentre : aucune rotation d'ensemble, vue selon l'axe Oz.", "Barycentre: no overall rotation, view along the Oz axis."),
+    ("Barycentre de la sous-simulation #{} sélectionné.", "Barycentre of sub-simulation #{} selected."),
+    ("Sous-simulation réunie : suivi de l'ensemble #{}.", "Sub-simulation merged: following the combined set #{}."),
+    ("Sous-simulation réunie à la simulation : suivi du barycentre global.", "Sub-simulation merged back into the simulation: following the overall barycentre."),
     ("Visée selon la normale au disque : rien à redresser.", "Looking along the disc normal: nothing to level."),
     ("Suivi interrompu : vol libre.", "Following stopped: free flight."),
     ("Suivi du barycentre.", "Following the barycentre."),
@@ -331,9 +336,13 @@ const EN: &[(&str, &str)] = &[
     ("Souris libre — clic gauche : suivre un corps · clic droit ou Tab : reprendre la visée · Échap : menu", "Mouse released — left click: follow a body · right click or Tab: resume aiming · Esc: menu"),
     ("Relecture", "Playback"),
     ("Corps", "Bodies"),
+    ("Barycentre de la sous-simulation #{}", "Barycentre of sub-simulation #{}"),
     ("Barycentre sélectionné", "Barycentre selected"),
-    ("Masse présente", "Mass present"),
+    ("Masse", "Mass"),
     ("Vitesse", "Velocity"),
+    ("Taille", "Size"),
+    ("Distance au barycentre global", "Distance to the overall barycentre"),
+    ("Masse présente", "Mass present"),
     ("Distance caméra", "Camera distance"),
     ("Axe de rotation", "Rotation axis"),
     ("{}° sur Oz", "{}° from Oz"),
@@ -345,7 +354,6 @@ const EN: &[(&str, &str)] = &[
     ("Corps sélectionné", "Selected body"),
     ("Identifiant", "Identifier"),
     ("Rang (masse)", "Rank (mass)"),
-    ("Masse", "Mass"),
     ("Rayon", "Radius"),
     ("Dist. barycentre", "Dist. to barycentre"),
     ("Aucun — visez et cliquez, ou touches Origine ou B (barycentre).", "None — aim and click, or press Home or B (barycentre)."),
@@ -354,7 +362,8 @@ const EN: &[(&str, &str)] = &[
     ("Amas éjectés détachés : chacun est calculé à part, dans son propre repère, et ressent les autres par leur champ de marée. Deux sous-simulations qui se rapprochent sont réunies.", "Detached ejected clusters: each is computed separately, in its own frame, and feels the others through their tidal field. Two sub-simulations that come close are merged."),
     ("Repère", "Anchor"),
     ("Taille : {}
-Vitesse : {}", "Size: {}\nVelocity: {}"),
+Vitesse : {}
+Cliquer pour centrer la caméra sur son barycentre.", "Size: {}\nSpeed: {}\nClick to centre the camera on its barycentre."),
     ("Amas éjectés", "Ejected clusters"),
     ("Groupes liés de corps lointains, conservés par le nettoyage (seuils dans les paramètres avancés). Cliquer sur un amas sélectionne son corps le plus massif.", "Bound groups of distant bodies, kept by the clean-up (thresholds in the advanced parameters). Clicking a cluster selects its most massive body."),
     ("Aucun nettoyage effectué pour l'instant.", "No clean-up performed yet."),
@@ -460,6 +469,11 @@ Vitesse : {}", "Half-mass radius: {}\nVelocity: {}"),
     ("Échap", "Esc"),
     ("ce menu", "this menu"),
     ("Amas local", "Local cluster"),
+    ("[{}] Plantage dans le thread « {} »\n{}\n\n{}\n", "[{}] Crash in thread “{}”\n{}\n\n{}\n"),
+    ("Stellar — erreur fatale", "Stellar — fatal error"),
+    ("{}\n\nDétails enregistrés dans {}.", "{}\n\nDetails written to {}."),
+    ("Carte graphique : {}", "Graphics card: {}"),
+    ("Moteur GPU indisponible : {}", "GPU engine unavailable: {}"),
     ("Usage : stellar-cli [options]        nouvelle simulation sans fenêtre
         stellar-cli --charger FICHIER     reprendre une sauvegarde (.stellar)
         stellar-cli --reprendre FICHIER   reprendre un enregistrement (.stellarec)
@@ -473,6 +487,8 @@ Nouvelle simulation :
   --disque           disque en rotation (sinon sphère)
   --vitesse V        repos | alea | circ | orb | rad (défaut : orb)
   --dispersion D     dispersion de la vitesse orbitale (défaut : 0,05)
+  --facteur F        multiple de la vitesse orbitale : < 1 effondrement,
+                     > 1 expansion (défaut : 1)
   --vmin A --vmax B  plage de vitesse (alea, circ, rad)
   --moteur M         gpu | cpu (défaut : gpu si une carte convient)
 
@@ -491,7 +507,7 @@ Dans tous les cas :
   --temps T          s'arrêter après un temps simulé T (de plus, en reprise)
   --duree M          s'arrêter après M minutes de calcul
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
-sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --charger FILE        resume a save (.stellar)\n       stellar-cli --reprendre FILE      resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --corps N          number of particles (default: 1000000)\n  --rayon R          cloud radius (default: 100)\n  --graine S         random seed (default: 42)\n  --disque           rotating disc (otherwise a sphere)\n  --vitesse V        repos | alea | circ | orb | rad (default: orb)\n  --dispersion D     spread of the orbital speed (default: 0.05)\n  --vmin A --vmax B  speed range (alea, circ, rad)\n  --moteur M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --charger F        save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --poursuivre F     with --charger: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --reprendre F      recording to continue from its latest linked save\n\nIn all cases:\n  --nom NOM          simulation name (default: date and parameters, or file name)\n  --intervalle N     one snapshot every N steps (default: 10)\n  --poussiere N      dust recorded per snapshot, or “toutes” for all (default: 1000000)\n  --pas N            stop after N steps (more, when resuming)\n  --temps T          stop after a simulated time T (more, when resuming)\n  --duree M          stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
+sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --charger FILE        resume a save (.stellar)\n       stellar-cli --reprendre FILE      resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --corps N          number of particles (default: 1000000)\n  --rayon R          cloud radius (default: 100)\n  --graine S         random seed (default: 42)\n  --disque           rotating disc (otherwise a sphere)\n  --vitesse V        repos | alea | circ | orb | rad (default: orb)\n  --dispersion D     spread of the orbital speed (default: 0.05)\n  --facteur F        multiple of the orbital speed: < 1 collapse,\n                     > 1 expansion (default: 1)\n  --vmin A --vmax B  speed range (alea, circ, rad)\n  --moteur M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --charger F        save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --poursuivre F     with --charger: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --reprendre F      recording to continue from its latest linked save\n\nIn all cases:\n  --nom NOM          simulation name (default: date and parameters, or file name)\n  --intervalle N     one snapshot every N steps (default: 10)\n  --poussiere N      dust recorded per snapshot, or “toutes” for all (default: 1000000)\n  --pas N            stop after N steps (more, when resuming)\n  --temps T          stop after a simulated time T (more, when resuming)\n  --duree M          stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
     ("valeur manquante après {}", "missing value after {}"),
     ("valeur invalide pour {} : {}", "invalid value for {}: {}"),
     ("argument inconnu : {}", "unknown argument: {}"),
@@ -502,7 +518,6 @@ sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]    
     ("stellar.exe est l'interface graphique et ne prend pas d'argument. Ligne de commande : stellar-cli.exe (stellar-cli --help).", "stellar.exe is the graphical interface and takes no argument. Command line: stellar-cli.exe (stellar-cli --help)."),
     ("Erreur : {}", "Error: {}"),
     ("Voir stellar-cli --help pour la liste des options.", "See stellar-cli --help for the list of options."),
-    ("Moteur GPU indisponible : {}", "GPU engine unavailable: {}"),
     ("Nouvelle simulation « {} » : {} corps, moteur {}.", "New simulation “{}”: {} bodies, engine {}."),
     ("Reprise de la sauvegarde {}.", "Resuming the save {}."),
     ("Reprise de l'enregistrement {} depuis la sauvegarde {}.", "Resuming the recording {} from the save {}."),

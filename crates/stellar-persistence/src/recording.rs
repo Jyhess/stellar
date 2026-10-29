@@ -1,5 +1,5 @@
-//! Format d'enregistrement `.stellarec` (version 3 ; versions 1 et 2
-//! relues : en-tête de la version 1 dans [`crate::legacy`], instantanés des
+//! Format d'enregistrement `.stellarec` (version 4 ; versions 1 à 3
+//! relues : en-têtes des versions 1 à 3 dans [`crate::legacy`], instantanés des
 //! versions 1 et 2 sans sous-systèmes ; un enregistrement repris garde la
 //! version de son fichier).
 //!
@@ -42,9 +42,10 @@ pub const EXTENSION: &str = "stellarec";
 const MAGIC: &[u8; 8] = b"STELREC\0";
 const INDEX_MAGIC: &[u8; 8] = b"STLRIDX\0";
 const FRAME_MAGIC: u32 = u32::from_le_bytes(*b"FRAM");
-/// Version écrite ; les versions 1 (paramètres sans les amas éjectés) et 2
-/// (instantanés sans sous-systèmes) sont lues.
-pub const VERSION: u32 = 3;
+/// Version écrite ; les versions 1 (paramètres sans les amas éjectés), 2
+/// (instantanés sans sous-systèmes) et 3 (vitesse orbitale sans facteur)
+/// sont lues. Les instantanés des versions 3 et 4 ont la même forme.
+pub const VERSION: u32 = 4;
 const ZSTD_LEVEL: i32 = 3;
 const POS_BITS: u32 = 21;
 const POS_MAX: f64 = ((1u32 << POS_BITS) - 1) as f64;
@@ -431,6 +432,10 @@ impl FileRecordingReader {
         file.read_exact(&mut hb).map_err(io)?;
         let header: RecordingHeader = if version == 1 {
             bincode::deserialize::<crate::legacy::RecordingHeaderV1>(&hb)
+                .map_err(fmt)?
+                .into()
+        } else if version <= 3 {
+            bincode::deserialize::<crate::legacy::RecordingHeaderV3>(&hb)
                 .map_err(fmt)?
                 .into()
         } else {
@@ -839,7 +844,7 @@ mod tests {
         let p = h.config.physics;
         let old = crate::legacy::RecordingHeaderV1 {
             config: crate::legacy::SimulationConfigV3 {
-                initial: h.config.initial,
+                initial: h.config.initial.into(),
                 physics: crate::legacy::PhysicsParamsV3 {
                     g: p.g,
                     dt: p.dt,
@@ -870,6 +875,29 @@ mod tests {
         assert_eq!(r.info().header, header());
         assert_eq!(r.info().frames.len(), 3);
         assert_eq!(r.read_frame(2).unwrap().step, 20);
+        drop(r);
+
+        // Version 3 : en-tête sans facteur de vitesse orbitale (1).
+        let old = crate::legacy::RecordingHeaderV3 {
+            config: crate::legacy::SimulationConfigV5 {
+                initial: h.config.initial.into(),
+                physics: h.config.physics,
+                engine: h.config.engine.clone(),
+            },
+            interval: h.interval,
+            start_step: h.start_step,
+            created_at_unix: h.created_at_unix,
+            dust_budget: h.dust_budget,
+        };
+        let hb = bincode::serialize(&old).unwrap();
+        let mut v3 = Vec::new();
+        v3.extend_from_slice(MAGIC);
+        v3.extend_from_slice(&3u32.to_le_bytes());
+        v3.extend_from_slice(&(hb.len() as u32).to_le_bytes());
+        v3.extend_from_slice(&hb);
+        fs::write(&path, v3).unwrap();
+        let r = repo.open(&path).unwrap();
+        assert_eq!(r.info().header, header());
         let _ = fs::remove_dir_all(&dir);
     }
 

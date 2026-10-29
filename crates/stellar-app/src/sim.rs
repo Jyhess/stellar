@@ -13,7 +13,7 @@ use stellar_application::recording::is_dust;
 use stellar_application::trace::{relative_to, MAX_TAIL};
 use stellar_application::{Phase, SimulatorService, Snapshot, TraceReference, ViewState};
 use stellar_domain::physics::body_radius;
-use stellar_domain::{ranking, BodyId, SystemsView};
+use stellar_domain::{ranking, BodyId, SystemSummary, SystemsView};
 
 use crate::camera::{Camera, Mode, MAX_FOV, MIN_FOV};
 use crate::format;
@@ -136,6 +136,12 @@ pub struct SimScreen {
     selected: Option<BodyId>,
     /// Le barycentre est sélectionné (à la place d'un corps).
     bary_selected: bool,
+    /// Sous-simulation dont le barycentre est sélectionné (corps repère) ;
+    /// `None` : barycentre de toute la simulation.
+    bary_system: Option<BodyId>,
+    /// Dernier barycentre connu de cette sous-simulation (pour la retrouver
+    /// après une réunion).
+    bary_system_center: DVec3,
     paused: bool,
 
     snapshot: Arc<Snapshot>,
@@ -224,6 +230,8 @@ impl SimScreen {
             menu_open: false,
             selected,
             bary_selected,
+            bary_system: None,
+            bary_system_center: DVec3::ZERO,
             paused,
             seen_sequence: u64::MAX,
             snapshot,
@@ -335,11 +343,7 @@ impl SimScreen {
                 .map(|(&m, &v)| v * if is_dust(m) { m * w } else { m })
                 .sum::<DVec3>()
                 / total;
-            self.cache.rotation_axis = if self.bary_selected {
-                rotation_axis(bodies, w, self.cache.barycenter)
-            } else {
-                None
-            };
+            self.cache.rotation_axis = if self.bary_selected { self.bary_axis() } else { None };
             if self.bary_selected {
                 self.disk_normal = self.cache.rotation_axis;
                 self.disk_normal_at = Some(Instant::now());
@@ -350,6 +354,7 @@ impl SimScreen {
         if let Some(c) = self.snapshot.center_of_mass {
             self.cache.barycenter = c;
         }
+        self.track_bary_system();
         let selected_before = self.selected;
 
         // Suivi de la sélection à travers fusions et éjections.
@@ -441,6 +446,7 @@ impl SimScreen {
         let distance = distance.max(1.5 * r).max(1e-9);
         self.selected = Some(id);
         self.bary_selected = false;
+        self.bary_system = None;
         self.camera.mode = Mode::Orbit {
             target: id,
             distance,
@@ -533,14 +539,17 @@ impl SimScreen {
     /// Sélectionne le barycentre et le regarde perpendiculairement au plan
     /// du disque (selon l'axe du moment cinétique total), en conservant la
     /// distance à la cible. Sans rotation d'ensemble, la vue suit l'axe Oz.
+    /// Si le barycentre d'une sous-simulation est déjà sélectionné, c'est
+    /// lui qui est vu de face.
     fn view_barycenter_from_axis(&mut self) {
-        let bodies = &self.snapshot.state.bodies;
-        if bodies.is_empty() {
+        if self.snapshot.state.bodies.is_empty() {
             return;
         }
-        let c = self.cache.barycenter;
-        let w = self.source.dust_weight() as f64;
-        let axis = rotation_axis(bodies, w, c);
+        if !self.bary_selected {
+            self.bary_system = None;
+        }
+        let c = self.bary_center();
+        let axis = self.bary_axis();
         let distance = self
             .camera
             .orbit_distance()
@@ -561,6 +570,105 @@ impl SimScreen {
             .replace('.', crate::format::decimal_sep()),
             None => tr("Barycentre : aucune rotation d'ensemble, vue selon l'axe Oz.").to_owned(),
         });
+    }
+
+    /// Résumé de la sous-simulation dont le barycentre est sélectionné.
+    fn bary_summary(&self) -> Option<&SystemSummary> {
+        let anchor = self.bary_system?;
+        self.snapshot.systems.iter().find(|s| s.anchor == anchor)
+    }
+
+    /// Barycentre sélectionné : celui de la sous-simulation choisie, sinon
+    /// celui de toute la simulation.
+    fn bary_center(&self) -> DVec3 {
+        self.bary_summary().map_or(self.cache.barycenter, |s| s.center)
+    }
+
+    /// Axe de rotation autour du barycentre sélectionné, tiré de l'état
+    /// complet (corps de la sous-simulation seulement, le cas échéant).
+    fn bary_axis(&self) -> Option<DVec3> {
+        let bodies = &self.snapshot.state.bodies;
+        let w = self.source.dust_weight() as f64;
+        let Some(anchor) = self.bary_system else {
+            return rotation_axis(bodies, w, self.cache.barycenter);
+        };
+        // Plage de la sous-simulation dans l'état complet : celle qui
+        // contient son corps repère.
+        let i = bodies.index_of(anchor)?;
+        let span = self
+            .snapshot
+            .state
+            .systems
+            .iter()
+            .find(|s| (s.start..s.start + s.len).contains(&i))?;
+        let mut part = stellar_domain::BodySet::default();
+        for k in span.start..span.start + span.len {
+            part.push(bodies.ids[k], bodies.positions[k], bodies.velocities[k], bodies.masses[k]);
+        }
+        let c = weighted_barycenter(&part, w)?;
+        rotation_axis(&part, w, c)
+    }
+
+    /// Sélectionne le barycentre de la sous-simulation de corps repère
+    /// `anchor` et centre la caméra dessus, à une distance qui la montre
+    /// en entier, sans changer la direction de visée.
+    fn select_system(&mut self, anchor: BodyId) {
+        let Some(s) = self.snapshot.systems.iter().find(|s| s.anchor == anchor) else {
+            return;
+        };
+        let (c, size) = (s.center, s.size);
+        self.bary_system = Some(anchor);
+        self.bary_system_center = c;
+        self.selected = None;
+        self.bary_selected = true;
+        self.cache.selected_index = None;
+        self.cache.selected_rank = None;
+        self.cache.rotation_axis = self.bary_axis();
+        let distance = (3.0 * size).max(1e-9);
+        self.camera.look_towards(c - self.camera.position);
+        self.camera.mode = Mode::Barycenter { distance };
+        self.camera.place_in_orbit(c);
+        self.notify(tr!("Barycentre de la sous-simulation #{} sélectionné.", anchor));
+    }
+
+    /// Suit la sous-simulation sélectionnée à travers les réunions : si son
+    /// corps repère a disparu de la liste, elle a été réunie à la plus
+    /// proche ; s'il ne reste qu'un seul système, retour au barycentre de
+    /// toute la simulation.
+    fn track_bary_system(&mut self) {
+        let Some(anchor) = self.bary_system else { return };
+        if self.snapshot.phase != Phase::Ready {
+            return;
+        }
+        if let Some(s) = self.snapshot.systems.iter().find(|s| s.anchor == anchor) {
+            self.bary_system_center = s.center;
+            return;
+        }
+        let last = self.bary_system_center;
+        let nearest = (self.snapshot.systems.len() > 1)
+            .then(|| {
+                self.snapshot.systems.iter().min_by(|a, b| {
+                    (a.center - last)
+                        .length_squared()
+                        .total_cmp(&(b.center - last).length_squared())
+                })
+            })
+            .flatten()
+            .map(|s| (s.anchor, s.center));
+        match nearest {
+            Some((a, c)) => {
+                self.bary_system = Some(a);
+                self.bary_system_center = c;
+                self.notify(tr!("Sous-simulation réunie : suivi de l'ensemble #{}.", a));
+            }
+            None => {
+                self.bary_system = None;
+                self.notify(tr("Sous-simulation réunie à la simulation : suivi du barycentre global."));
+            }
+        }
+        if self.bary_selected {
+            self.cache.rotation_axis = self.bary_axis();
+        }
     }
 
     /// Oriente la visée vers le centre de gravité (vol libre).
@@ -615,7 +723,8 @@ impl SimScreen {
                 return Some((p, r));
             }
         }
-        (!self.snapshot.state.bodies.is_empty()).then_some((self.cache.barycenter, 0.0))
+        let c = if self.bary_selected { self.bary_center() } else { self.cache.barycenter };
+        (!self.snapshot.state.bodies.is_empty()).then_some((c, 0.0))
     }
 
     /// Vitesse de déplacement en vol libre (unités/s), avant Maj / Ctrl :
@@ -638,7 +747,7 @@ impl SimScreen {
             return;
         }
         if self.bary_selected {
-            let c = self.cache.barycenter;
+            let c = self.bary_center();
             let distance = (c - self.camera.position).length().max(1e-9);
             self.camera.look_towards(c - self.camera.position);
             self.camera.mode = Mode::Barycenter { distance };
@@ -1027,7 +1136,7 @@ impl SimScreen {
             self.camera.place_in_orbit(p);
         }
         if let Mode::Barycenter { .. } = self.camera.mode {
-            self.camera.place_in_orbit(self.cache.barycenter);
+            self.camera.place_in_orbit(self.bary_center());
         }
     }
 
@@ -1198,7 +1307,7 @@ impl SimScreen {
 
         // Repère du barycentre sélectionné : réticule doré.
         if self.bary_selected {
-            if let Some(ndc) = self.camera.project(self.cache.barycenter, aspect) {
+            if let Some(ndc) = self.camera.project(self.bary_center(), aspect) {
                 let c = to_screen(ndc);
                 let gold = Color32::from_rgb(255, 200, 80);
                 let s = Stroke::new(1.5_f32, gold);
@@ -1212,10 +1321,14 @@ impl SimScreen {
                     painter.line_segment([c + a, c + b], s);
                 }
                 painter.circle_filled(c, 2.0, gold);
+                let label = match self.bary_system {
+                    Some(a) => tr!("barycentre #{}", a),
+                    None => tr("barycentre").to_owned(),
+                };
                 painter.text(
                     c + egui::vec2(0.0, 26.0),
                     egui::Align2::CENTER_TOP,
-                    "barycentre",
+                    label,
                     egui::FontId::proportional(12.0),
                     gold,
                 );
@@ -1249,9 +1362,13 @@ impl SimScreen {
                 rect,
                 aspect,
                 self.cache.barycenter,
-                "barycentre",
+                tr("barycentre"),
                 gold,
             );
+            if let (true, Some(a)) = (self.bary_selected, self.bary_system) {
+                let label = tr!("barycentre #{}", a);
+                self.paint_edge_marker(&painter, rect, aspect, self.bary_center(), &label, gold);
+            }
         }
         if let (Some(id), Some(p)) = (self.selected, self.selected_position()) {
             if !self.bary_selected {
@@ -1588,13 +1705,19 @@ impl SimScreen {
             });
 
         let mut clicked_id: Option<BodyId> = None;
+        let mut clicked_system: Option<BodyId> = None;
         egui::Window::new(tr("Corps"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .resizable(false)
             .default_width(240.0)
             .show(ctx, |ui| {
                 if self.bary_selected {
-                    ui.label(RichText::new(tr("Barycentre sélectionné")).strong());
+                    let summary = self.bary_summary().cloned();
+                    let title = match &summary {
+                        Some(s) => tr!("Barycentre de la sous-simulation #{}", s.anchor),
+                        None => tr("Barycentre sélectionné").to_owned(),
+                    };
+                    ui.label(RichText::new(title).strong());
                     egui::Grid::new("bary")
                         .num_columns(2)
                         .spacing([14.0, 3.0])
@@ -1604,10 +1727,21 @@ impl SimScreen {
                                 ui.label(RichText::new(v).monospace());
                                 ui.end_row();
                             };
-                            let c = self.cache.barycenter;
+                            let c = self.bary_center();
                             row(ui, tr("Position"), format!("{} ; {} ; {}", format::real(c.x), format::real(c.y), format::real(c.z)));
-                            row(ui, tr("Masse présente"), format::real(snap.total_mass));
-                            row(ui, tr("Vitesse"), format::real(self.cache.barycenter_velocity.length()));
+                            match &summary {
+                                Some(s) => {
+                                    row(ui, tr("Corps"), format::count(s.bodies as u64));
+                                    row(ui, tr("Masse"), format::real(s.mass));
+                                    row(ui, tr("Vitesse"), format::real(s.velocity.length()));
+                                    row(ui, tr("Taille"), format::real(s.size));
+                                    row(ui, tr("Distance au barycentre global"), format::real((c - self.cache.barycenter).length()));
+                                }
+                                None => {
+                                    row(ui, tr("Masse présente"), format::real(snap.total_mass));
+                                    row(ui, tr("Vitesse"), format::real(self.cache.barycenter_velocity.length()));
+                                }
+                            }
                             row(ui, tr("Distance caméra"), format::real((c - self.camera.position).length()));
                             match self.cache.rotation_axis {
                                 Some(a) => row(
@@ -1628,6 +1762,7 @@ impl SimScreen {
                         }
                         if ui.button(tr("Désélectionner")).clicked() {
                             self.bary_selected = false;
+                            self.bary_system = None;
                             self.camera.mode = Mode::Free;
                         }
                     });
@@ -1737,8 +1872,10 @@ impl SimScreen {
                     });
                 if self.source.replay().is_none() {
                     ui.separator();
-                    if let Some(id) = self.clusters_panel(ui, &snap) {
-                        clicked_id = Some(id);
+                    match self.clusters_panel(ui, &snap) {
+                        Some(PanelClick::Body(id)) => clicked_id = Some(id),
+                        Some(PanelClick::System(a)) => clicked_system = Some(a),
+                        None => {}
                     }
                 }
             });
@@ -1747,11 +1884,14 @@ impl SimScreen {
                 self.select_index(i);
             }
         }
+        if let Some(anchor) = clicked_system {
+            self.select_system(anchor);
+        }
     }
 
-    /// Amas éjectés conservés par le nettoyage ; renvoie le corps repère
-    /// de l'amas cliqué.
-    fn clusters_panel(&self, ui: &mut egui::Ui, snap: &Snapshot) -> Option<BodyId> {
+    /// Sous-simulations et amas éjectés conservés par le nettoyage ;
+    /// renvoie la ligne cliquée.
+    fn clusters_panel(&self, ui: &mut egui::Ui, snap: &Snapshot) -> Option<PanelClick> {
         /// Amas affichés au plus.
         const SHOWN: usize = 10;
         let mut clicked = None;
@@ -1769,14 +1909,15 @@ impl SimScreen {
                     ui.label(RichText::new(tr("Distance")).weak());
                     ui.end_row();
                     for s in &snap.systems {
-                        let sel = self.selected == Some(s.anchor);
+                        let sel = self.bary_selected && self.bary_system == Some(s.anchor);
                         if ui
                             .selectable_label(sel, format!("#{}", s.anchor))
                             .on_hover_text(tr!("Taille : {}
-Vitesse : {}", format::real(s.size), format::real(s.velocity.length())))
+Vitesse : {}
+Cliquer pour centrer la caméra sur son barycentre.", format::real(s.size), format::real(s.velocity.length())))
                             .clicked()
                         {
-                            clicked = Some(s.anchor);
+                            clicked = Some(PanelClick::System(s.anchor));
                         }
                         ui.label(RichText::new(format::count(s.bodies as u64)).monospace());
                         ui.label(RichText::new(format::real(s.mass)).monospace());
@@ -1795,14 +1936,14 @@ Vitesse : {}", format::real(s.size), format::real(s.velocity.length())))
             );
         let Some(step) = snap.clusters_step else {
             ui.label(RichText::new(tr("Aucun nettoyage effectué pour l'instant.")).weak());
-            return None;
+            return clicked;
         };
         if snap.clusters.is_empty() {
             ui.label(
                 RichText::new(tr!("Aucun au dernier nettoyage (pas {}).", format::count(step)))
                     .weak(),
             );
-            return None;
+            return clicked;
         }
         ui.label(
             RichText::new(tr!("Au dernier nettoyage (pas {}) :", format::count(step))).weak(),
@@ -1824,7 +1965,7 @@ Vitesse : {}", format::real(s.size), format::real(s.velocity.length())))
 Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length())))
                         .clicked()
                     {
-                        clicked = Some(c.anchor);
+                        clicked = Some(PanelClick::Body(c.anchor));
                     }
                     ui.label(RichText::new(format::count(c.bodies as u64)).monospace());
                     ui.label(RichText::new(format::real(c.mass)).monospace());
@@ -2411,6 +2552,15 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
         self.source.shutdown();
     }
+}
+
+/// Ligne cliquée dans le panneau des amas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelClick {
+    /// Amas éjecté : son corps repère.
+    Body(BodyId),
+    /// Sous-simulation : son corps repère.
+    System(BodyId),
 }
 
 /// Référentiel d'affichage des traces.

@@ -2,7 +2,7 @@
 //!
 //! Implémentation de [`SimulationRepository`] sur le système de fichiers.
 //!
-//! ## Format `.stellar` (version 5)
+//! ## Format `.stellar` (version 6)
 //!
 //! | Octets      | Contenu                                         |
 //! |-------------|-------------------------------------------------|
@@ -16,7 +16,8 @@
 //!
 //! bincode n'étant pas auto-descriptif, tout changement de [`SaveData`] ou
 //! de [`SaveSummary`] impose une nouvelle version. Versions lues :
-//! - 5 : sous-systèmes (plages de corps) dans l'état ;
+//! - 6 : facteur de la vitesse orbitale dans les conditions initiales ;
+//! - 5 : relue par [`legacy`] (facteur 1) ;
 //! - 4 : relue par [`legacy`] (un seul système) ;
 //! - 3 : relue par [`legacy`] (seuils des amas complétés par les valeurs
 //!   suggérées, un seul système).
@@ -39,7 +40,7 @@ use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepo
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
 /// Version écrite.
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 /// Plus ancienne version lue ([`legacy`]).
 const OLDEST: u32 = 3;
 const MAX_HEADER: u32 = 1 << 20;
@@ -221,6 +222,10 @@ impl SimulationRepository for FileRepository {
             bincode::deserialize_from::<_, legacy::SaveDataV4>(dec)
                 .map_err(fmt)?
                 .into()
+        } else if version == 5 {
+            bincode::deserialize_from::<_, legacy::SaveDataV5>(dec)
+                .map_err(fmt)?
+                .into()
         } else {
             bincode::deserialize_from(dec).map_err(fmt)?
         };
@@ -381,14 +386,14 @@ mod tests {
     }
 
     #[test]
-    fn reads_versions_3_and_4() {
+    fn reads_versions_3_to_5() {
         let dir = temp_dir("v3");
         fs::create_dir_all(&dir).unwrap();
         let data = sample();
         let p = data.config.physics;
         let old = legacy::SaveDataV3 {
             config: legacy::SimulationConfigV3 {
-                initial: data.config.initial,
+                initial: data.config.initial.into(),
                 physics: legacy::PhysicsParamsV3 {
                     g: p.g,
                     dt: p.dt,
@@ -426,8 +431,13 @@ mod tests {
         expected.state.systems.clear();
         assert_eq!(repo.load(&path).unwrap(), expected);
 
+        let config_v5 = legacy::SimulationConfigV5 {
+            initial: data.config.initial.into(),
+            physics: data.config.physics,
+            engine: data.config.engine.clone(),
+        };
         let v4 = legacy::SaveDataV4 {
-            config: data.config.clone(),
+            config: config_v5.clone(),
             state: old_state(&data.state),
             view: data.view,
             recording: data.recording.clone(),
@@ -435,6 +445,17 @@ mod tests {
         };
         write_old(&path, 4, &summary, &v4);
         assert_eq!(repo.load(&path).unwrap(), expected);
+
+        // Version 5 : sous-systèmes, vitesse orbitale sans facteur (1).
+        let v5 = legacy::SaveDataV5 {
+            config: config_v5,
+            state: data.state.clone(),
+            view: data.view,
+            recording: data.recording.clone(),
+            continue_recording: None,
+        };
+        write_old(&path, 5, &summary, &v5);
+        assert_eq!(repo.load(&path).unwrap(), data);
         let _ = fs::remove_dir_all(&dir);
     }
 

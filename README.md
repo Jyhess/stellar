@@ -45,7 +45,7 @@ Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de la
 
 ### Écran d'accueil
 
-- **Nouvelle simulation** : nom, nombre de particules, rayon du nuage, graine aléatoire, répartition (sphère ou disque, avec épaisseur et profil de densité), vitesse initiale (repos, aléatoire, circulaire imposée, circulaire orbitale ± dispersion — choix par défaut —, radiale). Chaque paramètre porte une pastille « ? » qui explique son rôle.
+- **Nouvelle simulation** : nom, nombre de particules, rayon du nuage, graine aléatoire, répartition (sphère ou disque, avec épaisseur et profil de densité), vitesse initiale (repos, aléatoire, circulaire imposée, circulaire orbitale × facteur ± dispersion — choix par défaut ; facteur de 0,5 à 1,5 : 1 pour des orbites circulaires, moins pour un effondrement, plus pour une expansion —, radiale). Chaque paramètre porte une pastille « ? » qui explique son rôle.
   - **Nom** : celui des sauvegardes (F5) et des enregistrements de la simulation. Par défaut, date, nombre de particules abrégé, répartition et vitesse initiale (`2026-10-28_1M_sph_orb`), avec l'heure si ce nom existe déjà ; il suit les paramètres tant qu'il n'est pas saisi (bouton « Auto » pour y revenir). Une simulation chargée reprend le nom de sa sauvegarde (sans « _reprise » ni numéro).
   - **Nombre de particules** : curseur à crans 1-2-5 (1 000, 2 000, 5 000, 10 000…) jusqu'au maximum de la machine (limite du moteur, 80 % de la mémoire centrale, un milliard au plus), et champ de saisie exacte.
   - Sous le formulaire : mémoire estimée et **durée estimée du premier pas** (d'après le banc d'essai).
@@ -71,7 +71,7 @@ Pour les longs calculs : aucun rendu des corps, toute la carte graphique pour le
   .\stellar-cli.exe --reprendre recordings\galaxie.stellarec --duree 120
   ```
 
-  - **Nouvelle simulation** : `--corps`, `--rayon`, `--graine`, `--disque`, `--vitesse repos|alea|circ|orb|rad`, `--dispersion`, `--vmin`/`--vmax`, `--moteur gpu|cpu`.
+  - **Nouvelle simulation** : `--corps`, `--rayon`, `--graine`, `--disque`, `--vitesse repos|alea|circ|orb|rad`, `--dispersion`, `--facteur` (multiple de la vitesse orbitale), `--vmin`/`--vmax`, `--moteur gpu|cpu`.
   - **Reprise d'une sauvegarde** : `--charger FICHIER` ; l'enregistrement lié à la sauvegarde est poursuivi, sinon un nouvel enregistrement commence ; `--poursuivre FICHIER` prolonge à la place un enregistrement compatible à partir du pas de la sauvegarde (instantanés postérieurs supprimés).
   - **Reprise d'un enregistrement** : `--reprendre FICHIER` charge la dernière sauvegarde liée à l'enregistrement (sauvegarde de reprise ou F5 faite pendant l'enregistrement) et le poursuit.
   - **Dans tous les cas** : `--nom`, `--intervalle`, `--poussiere N|toutes`, et une cible `--pas N`, `--temps T` (comptés à partir du pas de la sauvegarde en reprise) ou `--duree minutes` ; sans cible, jusqu'à Ctrl+C. L'avancement s'affiche toutes les cinq secondes ; à l'arrêt, l'enregistrement est clos et l'état final sauvegardé.
@@ -116,7 +116,7 @@ Les traces ne sont pas sauvegardées.
 
 Le panneau « Simulation » indique la masse présente et la masse éjectée, c'est-à-dire sortie de la simulation par le nettoyage, avec sa part de la masse initiale. Le classement des corps les plus massifs donne la part de chacun dans la masse présente.
 
-Le panneau « Corps » liste aussi les **sous-simulations** et les **amas éjectés** que le nettoyage a conservés (voir plus bas) : corps repère (le plus massif), nombre de corps, masse et distance au barycentre ; un clic sélectionne le repère pour le suivre. La liste des amas est mise à jour à chaque nettoyage ; ces listes n'existent pas en relecture.
+Le panneau « Corps » liste aussi les **sous-simulations** et les **amas éjectés** que le nettoyage a conservés (voir plus bas) : corps repère (le plus massif), nombre de corps, masse et distance au barycentre. Un clic sur une sous-simulation sélectionne son **barycentre** et y centre la caméra, à une distance qui la montre en entier (B la montre de face ; le panneau donne ses corps, sa masse, sa vitesse, sa taille). Si elle se réunit à une autre, la caméra suit l'ensemble réuni ; réunie à la simulation principale sans autre sous-simulation, elle revient au barycentre global. Un clic sur un amas éjecté sélectionne son corps repère. La liste des amas est mise à jour à chaque nettoyage ; ces listes n'existent pas en relecture.
 
 En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la direction de visée, le zoom et la distance à la cible sont conservés.
 
@@ -202,7 +202,7 @@ stellar-app (présentation + racine de composition : egui, wgpu)
 | `stellar-application` | Génération des conditions initiales, thread de simulation découplé (`SimulationHandle`, instantanés publiés à ≤ 60 Hz ; copie complète de l'état espacée quand le moteur est affiché directement), registre des moteurs, ports `SimulationRepository`, façade `SimulatorService`. |
 | `stellar-engine-cpu` | Moteur de calcul CPU. Optimisé librement, comme prévu par la spécification (voir ci-dessous). |
 | `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau et réajusté entre deux constructions, parcours de Barnes-Hut par groupes de 128 corps, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. Sur la carte de l'interface, expose ses tampons de corps (`BodiesView`) pour l'affichage. |
-| `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. Versions lues : 5 (courante, sous-systèmes), 4 et 3 ; enregistrements `.stellarec` : 3 (une boîte de quantification par sous-système), 2 et 1 (`legacy.rs`). Un enregistrement repris garde la version de son fichier. |
+| `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. Versions lues : 6 (courante, facteur de la vitesse orbitale), 5 (sous-systèmes), 4 et 3 ; enregistrements `.stellarec` : 4 (facteur dans l'en-tête), 3 (une boîte de quantification par sous-système), 2 et 1 (`legacy.rs`). Un enregistrement repris garde la version de son fichier. |
 | `stellar-app` | Écrans egui, caméra, sélection, rendu GPU des corps (billboards additifs, positions relatives à une ancre pour garder la précision en `f32`), lus directement dans les tampons du moteur GPU ou téléversés depuis les instantanés. |
 
 ### Moteur CPU

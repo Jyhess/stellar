@@ -41,6 +41,8 @@ Nouvelle simulation :
   --disque           disque en rotation (sinon sphère)
   --vitesse V        repos | alea | circ | orb | rad (défaut : orb)
   --dispersion D     dispersion de la vitesse orbitale (défaut : 0,05)
+  --facteur F        multiple de la vitesse orbitale : < 1 effondrement,
+                     > 1 expansion (défaut : 1)
   --vmin A --vmax B  plage de vitesse (alea, circ, rad)
   --moteur M         gpu | cpu (défaut : gpu si une carte convient)
 
@@ -93,7 +95,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
     let mut o = Options {
         start: Start::New,
         initial: InitialConditions {
-            velocity: VelocityMode::CircularOrbital { spread: 0.05 },
+            velocity: VelocityMode::CircularOrbital { spread: 0.05, factor: 1.0 },
             ..Default::default()
         },
         new_options: Vec::new(),
@@ -105,7 +107,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
         },
         target: RunTarget::Manual,
     };
-    let (mut velocity, mut spread, mut vmin, mut vmax) = ("orb".to_owned(), 0.05, 0.0, 10.0);
+    let (mut velocity, mut spread, mut factor, mut vmin, mut vmax) =
+        ("orb".to_owned(), 0.05, 1.0, 0.0, 10.0);
     let (mut load, mut follow, mut resume) = (None, None, None);
     let mut it = args.iter();
     let value = |it: &mut std::slice::Iter<String>, flag: &str| {
@@ -123,7 +126,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         let new_option = matches!(
             a.as_str(),
             "--corps" | "--rayon" | "--graine" | "--disque" | "--vitesse" | "--dispersion"
-                | "--vmin" | "--vmax" | "--moteur"
+                | "--facteur" | "--vmin" | "--vmax" | "--moteur"
         );
         if new_option {
             o.new_options.push(a.clone());
@@ -142,6 +145,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--vitesse" => velocity = value(&mut it, a)?,
             "--dispersion" => spread = num(&value(&mut it, a)?, a)?,
+            "--facteur" => factor = num(&value(&mut it, a)?, a)?,
             "--vmin" => vmin = num(&value(&mut it, a)?, a)?,
             "--vmax" => vmax = num(&value(&mut it, a)?, a)?,
             "--moteur" => o.engine = Some(value(&mut it, a)?),
@@ -181,7 +185,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         "repos" => VelocityMode::Rest,
         "alea" => VelocityMode::Random { min: vmin, max: vmax },
         "circ" => VelocityMode::CircularFixed { min: vmin, max: vmax },
-        "orb" => VelocityMode::CircularOrbital { spread },
+        "orb" => VelocityMode::CircularOrbital { spread, factor },
         "rad" => VelocityMode::Radial { min: vmin, max: vmax },
         v => return Err(tr!("vitesse inconnue : {}", v)),
     };
@@ -392,9 +396,12 @@ mod tests {
         assert_eq!(o.target, RunTarget::Steps(500));
         assert_eq!(o.record.dust_budget, None);
         assert_eq!(o.name.as_deref(), Some("essai"));
-        let o = parse(&args("--sans-affichage --duree 1,5 --dispersion 0,1")).unwrap();
+        let o = parse(&args("--sans-affichage --duree 1,5 --dispersion 0,1 --facteur 0,8")).unwrap();
         assert_eq!(o.target, RunTarget::WallTime(Duration::from_secs(90)));
-        assert_eq!(o.initial.velocity, VelocityMode::CircularOrbital { spread: 0.1 });
+        assert_eq!(
+            o.initial.velocity,
+            VelocityMode::CircularOrbital { spread: 0.1, factor: 0.8 }
+        );
     }
 
     #[test]

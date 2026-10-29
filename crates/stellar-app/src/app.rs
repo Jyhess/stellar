@@ -110,7 +110,7 @@ impl StellarApp {
                 profile: stellar_domain::DensityProfile::Exponential { scale: 0.3 },
             };
             config.initial.velocity =
-                stellar_domain::VelocityMode::CircularOrbital { spread: 0.05 };
+                stellar_domain::VelocityMode::CircularOrbital { spread: 0.05, factor: 1.0 };
         }
         config.physics = stellar_domain::PhysicsParams::suggested(&config.initial, 1.0);
         let name = crate::home::default_name(&config.initial, chrono::Local::now(), |_| false);

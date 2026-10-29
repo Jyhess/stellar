@@ -34,9 +34,10 @@ pub enum VelocityMode {
     /// Rotation autour de Oz, norme uniforme dans [min, max].
     CircularFixed { min: f64, max: f64 },
     /// Rotation autour de Oz à la vitesse d'équilibre orbital (calculée sur la
-    /// masse intérieure), multipliée par un facteur uniforme dans
-    /// [1 − spread, 1 + spread].
-    CircularOrbital { spread: f64 },
+    /// masse intérieure), multipliée par `factor` (1 : orbites circulaires ;
+    /// moins : effondrement ; plus : expansion) puis par un facteur uniforme
+    /// dans [1 − spread, 1 + spread].
+    CircularOrbital { spread: f64, factor: f64 },
     /// Vitesse dirigée vers le centre, norme uniforme dans [min, max].
     Radial { min: f64, max: f64 },
 }

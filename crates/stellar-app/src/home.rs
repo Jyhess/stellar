@@ -81,6 +81,8 @@ pub struct HomeScreen {
     vel_min: f64,
     vel_max: f64,
     vel_spread: f64,
+    /// Multiple de la vitesse orbitale d'équilibre.
+    vel_factor: f64,
     g: f64,
     auto_physics: bool,
     physics: PhysicsParams,
@@ -186,6 +188,7 @@ impl HomeScreen {
             vel_min: 0.0,
             vel_max: 10.0,
             vel_spread: 0.05,
+            vel_factor: 1.0,
             g: 1.0,
             auto_physics: true,
             physics: PhysicsParams::suggested(&ic, 1.0),
@@ -246,6 +249,7 @@ impl HomeScreen {
             VelKind::CircularFixed => VelocityMode::CircularFixed { min, max },
             VelKind::CircularOrbital => VelocityMode::CircularOrbital {
                 spread: self.vel_spread,
+                factor: self.vel_factor,
             },
             VelKind::Radial => VelocityMode::Radial { min, max },
         };
@@ -658,6 +662,18 @@ impl HomeScreen {
                                 self.vel_spread = pct / 100.0;
                             }
                         });
+                        ui.end_row();
+                        param(ui, tr("   Facteur"), tr("Multiple de la vitesse orbitale d'équilibre : 1 donne des orbites circulaires, moins fait s'effondrer le nuage, plus le fait s'étendre."));
+                        ui.add(
+                            egui::Slider::new(&mut self.vel_factor, 0.5..=1.5)
+                                .step_by(0.01)
+                                .custom_formatter(|v, _| {
+                                    format!("× {v:.2}").replace('.', crate::format::decimal_sep())
+                                })
+                                .custom_parser(|s| {
+                                    s.trim_start_matches(['×', ' ']).replace(',', ".").parse().ok()
+                                }),
+                        );
                         ui.end_row();
                     }
                     _ => {
@@ -1316,7 +1332,7 @@ mod tests {
         let now = chrono::Local.with_ymd_and_hms(2026, 10, 28, 14, 5, 0).unwrap();
         let ic = InitialConditions {
             count: 1_000_000,
-            velocity: VelocityMode::CircularOrbital { spread: 0.05 },
+            velocity: VelocityMode::CircularOrbital { spread: 0.05, factor: 1.0 },
             ..Default::default()
         };
         assert_eq!(default_name(&ic, now, |_| false), "2026-10-28_1M_sph_orb");

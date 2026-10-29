@@ -14,7 +14,7 @@ fn main() {
         .unwrap_or(1_000_000);
     let ic = InitialConditions {
         count: n,
-        velocity: VelocityMode::CircularOrbital { spread: 0.1 },
+        velocity: VelocityMode::CircularOrbital { spread: 0.1, factor: 1.0 },
         ..Default::default()
     };
     let s = generate_state(&ic, 1.0);

@@ -106,3 +106,8 @@
 - `stellar-cli.exe`, application console distincte de l'interface (`stellar.exe`, qui renvoie vers elle si on lui passe des arguments) : aide `--help`, argument inconnu signalé (code de sortie 2).
 - Reprise sans affichage d'une sauvegarde (`--charger`, enregistrement lié poursuivi, sinon nouvel enregistrement, ou `--poursuivre` un enregistrement compatible) ou d'un enregistrement (`--reprendre`, depuis sa dernière sauvegarde liée) ; cibles `--pas` et `--temps` comptées à partir du pas de la sauvegarde.
 
+## Évolutions (v1.8) — sous-simulations et vitesse orbitale
+- Clic sur une sous-simulation (panneau « Corps ») : sélection de son barycentre, caméra centrée dessus en orbite (direction de visée conservée, distance de trois fois sa taille) ; panneau propre (corps, masse, vitesse, taille, distance au barycentre global), vue de face (B) selon son propre moment cinétique. Après une réunion, la sélection passe à la sous-simulation la plus proche de sa dernière position ; s'il ne reste qu'un système, au barycentre global.
+- Vitesse « circulaire orbitale » : facteur multiplicatif de la vitesse d'équilibre (0,5 à 1,5 dans l'interface, `--facteur` en ligne de commande, 1 par défaut), appliqué avant la dispersion.
+- Formats : sauvegardes `.stellar` version 6 (versions 5, 4 et 3 relues avec un facteur 1), enregistrements `.stellarec` version 4 (en-tête ; versions 3, 2 et 1 relues).
+

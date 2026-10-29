@@ -130,7 +130,7 @@ Règles :
 
 ## Formats de fichiers
 
-- **`.stellar`** (version 5 ; versions 4 et 3 relues) : signature, version, en-tête
+- **`.stellar`** (version 6 ; versions 5, 4 et 3 relues) : signature, version, en-tête
   `SaveSummary` lisible sans décompression, puis `SaveData` en bincode
   compressé zstd. bincode n'est pas auto-descriptif : **tout ajout de champ
   impose une nouvelle version** et une copie de l'ancienne forme dans
@@ -140,8 +140,11 @@ Règles :
   - Version 4 : seuils des amas éjectés (`cluster_link_length`,
     `cluster_min_bodies`, `cluster_min_mass`).
   - Version 5 : sous-systèmes dans l'état (`SystemSpan` : plage, taille).
-- **`.stellarec`** (version 3 ; versions 2 et 1 relues — en-tête de la
-  version 1, instantanés sans sous-systèmes avant la version 3 ; un
+  - Version 6 : facteur de la vitesse orbitale
+    (`VelocityMode::CircularOrbital { spread, factor }`) ; les conditions
+    initiales figurent aussi dans l'en-tête des enregistrements (version 4).
+- **`.stellarec`** (version 4 ; versions 3, 2 et 1 relues — en-têtes des
+  versions 1 et 2-3, instantanés sans sous-systèmes avant la version 3 ; un
   enregistrement repris garde la version de son fichier) : instantanés tous
   les N pas, une boîte de quantification par sous-système (positions 21 bits, vitesses
   16 bits, masses, devenir des corps disparus), zstd, index en fin de fichier
