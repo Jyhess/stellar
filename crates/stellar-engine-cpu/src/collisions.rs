@@ -1,12 +1,12 @@
-//! Détection des contacts « balayés » sur un pas.
+//! Detection of "swept" contacts over a step.
 //!
-//! Chaque corps décrit un segment (position de début → position de fin) ;
-//! deux corps sont en contact si la distance minimale entre eux au cours du
-//! pas est inférieure à la somme de leurs rayons.
+//! Each body describes a segment (start position → end position); two
+//! bodies are in contact if their minimum distance during the step is less
+//! than the sum of their radii.
 //!
-//! - Phase large : grille hiérarchique sur les boîtes englobantes balayées
-//!   (voir [`find_contacts`]).
-//! - Phase fine : distance minimale exacte entre trajectoires rectilignes.
+//! - Broad phase: hierarchical grid over the swept bounding boxes (see
+//!   [`find_contacts`]).
+//! - Narrow phase: exact minimum distance between straight trajectories.
 
 use glam::DVec3;
 use rayon::prelude::*;
@@ -46,8 +46,8 @@ fn pack(c: [i64; 3]) -> u64 {
     (c[0] as u64) | ((c[1] as u64) << AXIS_BITS) | ((c[2] as u64) << (2 * AXIS_BITS))
 }
 
-/// Décalages « vers l'avant » : chaque paire de cellules voisines n'est
-/// examinée qu'une seule fois.
+/// "Forward" offsets: each pair of neighbouring cells is examined only
+/// once.
 fn forward_offsets() -> Vec<[i64; 3]> {
     let mut v = Vec::with_capacity(13);
     for dz in -1..=1i64 {
@@ -62,12 +62,12 @@ fn forward_offsets() -> Vec<[i64; 3]> {
     v
 }
 
-/// Rapport entre les tailles de cellule de deux niveaux consécutifs.
+/// Ratio between the cell sizes of two consecutive levels.
 const LEVEL_RATIO: f64 = 4.0;
-/// Au-delà, les corps (démesurément étendus) sont testés contre tous les autres.
+/// Beyond it, bodies (oversized) are tested against all the others.
 const MAX_LEVEL: u32 = 12;
 
-/// Grille uniforme : entrées (clé de cellule, indice) triées par clé.
+/// Uniform grid: entries (cell key, index) sorted by key.
 struct Grid {
     cell: f64,
     origin: DVec3,
@@ -92,20 +92,19 @@ impl Grid {
         coord(p, self.origin, self.cell)
     }
 
-    /// Membres d'une cellule (recherche dichotomique).
+    /// Members of a cell (binary search).
     fn cell_members(&self, key: u64) -> &[(u64, u32)] {
         let s = self.entries.partition_point(|e| e.0 < key);
         let e = s + self.entries[s..].partition_point(|e| e.0 == key);
         &self.entries[s..e]
     }
 
-    /// Paires entre membres de la grille (cellule et 13 voisines « en avant »).
+    /// Pairs between members of the grid (cell and its 13 "forward" neighbours).
     ///
-    /// La clé d'une cellule est linéaire en ses coordonnées : la voisine de
-    /// décalage `off` a pour clé `clé + δ(off)`, et l'ordre des clés est
-    /// conservé. Pour chaque décalage, un curseur avance donc avec les
-    /// cellules (fusion de deux listes triées) : ni table de hachage, ni
-    /// recherche, des accès séquentiels.
+    /// A cell's key is linear in its coordinates: the neighbour at offset
+    /// `off` has key `key + δ(off)`, and key order is preserved. For each
+    /// offset, a cursor therefore advances along with the cells (merge of two
+    /// sorted lists): no hash table, no search, only sequential accesses.
     fn self_pairs(&self, touches: &(impl Fn(usize, usize) -> bool + Sync)) -> Vec<(u32, u32)> {
         let entries = &self.entries;
         let mut cells: Vec<(u64, u32, u32)> = Vec::new();
@@ -129,7 +128,7 @@ impl Grid {
             .par_chunks(CHUNK)
             .flat_map_iter(|chunk| {
                 let mut local = Vec::new();
-                // Curseurs : première cellule de clé ≥ clé du bloc + δ.
+                // Cursors: first cell whose key is ≥ the chunk's key + δ.
                 let first = chunk[0].0 as i64;
                 let mut cursor: Vec<usize> = deltas
                     .iter()
@@ -194,14 +193,15 @@ fn in_range(c: [i64; 3]) -> bool {
     c.iter().all(|&v| (0..AXIS_LIMIT).contains(&v))
 }
 
-/// Renvoie les paires (i, j), i ≠ j, de corps entrés en contact durant le pas.
+/// Returns the pairs (i, j), i ≠ j, of bodies that came into contact during
+/// the step.
 ///
-/// Grille hiérarchique : un corps de demi-extension e est rangé au plus petit
-/// niveau L tel que e ≤ h_L / 2 (h_L = h₀·4^L, h₀ = 2 × 99ᵉ centile). Deux
-/// corps d'un même niveau en contact occupent des cellules voisines ; un
-/// corps de niveau L est confronté aux corps des niveaux inférieurs via les
-/// 27 cellules voisines d'une grille de pas h_L. Les niveaux supérieurs sont
-/// peu peuplés : leur coût reste marginal.
+/// Hierarchical grid: a body of half-extent e goes to the lowest level L
+/// such that e ≤ h_L / 2 (h_L = h₀·4^L, h₀ = 2 × 99th percentile). Two
+/// bodies of the same level in contact occupy neighbouring cells; a body of
+/// level L is tested against the bodies of lower levels through the 27
+/// neighbouring cells of a grid of cell size h_L. Upper levels are sparsely
+/// populated: their cost stays marginal.
 pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, u32)> {
     let n = new.len();
     if n < 2 {
@@ -224,8 +224,8 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
     };
 
     let ext: Vec<f64> = boxes.par_iter().map(Swept::extent).collect();
-    // 99ᵉ centile des extensions, estimé sur un échantillon régulier : il ne
-    // fixe que la taille des cellules, pas l'exactitude du résultat.
+    // 99th percentile of the extents, estimated on a regular sample: it only
+    // sets the cell size, not the accuracy of the result.
     let p99 = {
         let stride = (n / 65_536).max(1);
         let mut e: Vec<f64> = ext.iter().step_by(stride).copied().collect();
@@ -247,7 +247,7 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
     let span = (hi - lo).max_element();
     let h0 = (2.0 * p99).max(span / (AXIS_LIMIT - 2) as f64).max(1e-12);
 
-    // Niveau de chaque corps ; u32::MAX = démesuré.
+    // Level of each body; u32::MAX = oversized.
     let level: Vec<u32> = ext
         .par_iter()
         .map(|&e| {
@@ -271,7 +271,7 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
         .unwrap_or(0);
 
     let mut pairs: Vec<(u32, u32)> = Vec::new();
-    let mut lower: Vec<u32> = Vec::new(); // corps des niveaux déjà traités
+    let mut lower: Vec<u32> = Vec::new(); // bodies of the levels already processed
     for l in 0..=top {
         let members: Vec<u32> = (0..n as u32)
             .into_par_iter()
@@ -314,7 +314,7 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
         lower.extend_from_slice(&members);
     }
 
-    // Corps démesurés : test contre tous les autres.
+    // Oversized bodies: tested against all the others.
     let huge: Vec<usize> = (0..n).filter(|&i| level[i] == u32::MAX).collect();
     for &b in &huge {
         let found: Vec<(u32, u32)> = (0..n)
@@ -327,8 +327,8 @@ pub fn find_contacts(old: &[DVec3], new: &[DVec3], radius: &[f64]) -> Vec<(u32, 
     pairs
 }
 
-/// Union-find avec compression de chemin, pour regrouper les fusions en
-/// chaîne (A touche B qui touche C ⇒ un seul corps).
+/// Union-find with path compression, to group chained mergers (A touches B,
+/// which touches C ⇒ a single body).
 pub struct DisjointSets {
     parent: Vec<u32>,
 }
@@ -399,7 +399,7 @@ mod tests {
                 )
             })
             .collect();
-        // Quelques corps très rapides pour solliciter la voie « étendus ».
+        // A few very fast bodies to exercise the "extended" path.
         let new: Vec<DVec3> = old
             .iter()
             .enumerate()

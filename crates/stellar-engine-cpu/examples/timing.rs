@@ -1,5 +1,5 @@
-//! Mesure rapide du moteur :
-//! `cargo run --release -p stellar-engine-cpu --example timing -- <particules> <pas>`
+//! Quick measurement of the engine:
+//! `cargo run --release -p stellar-engine-cpu --example timing -- <particles> <steps>`
 use std::time::Instant;
 
 use stellar_application::generator::generate_state;

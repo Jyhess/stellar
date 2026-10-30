@@ -1,4 +1,4 @@
-//! Tests physiques du moteur CPU.
+//! Physics tests of the CPU engine.
 
 use glam::DVec3;
 use stellar_application::generator::generate_state;
@@ -74,8 +74,8 @@ fn barnes_hut_matches_direct_sum() {
 
 #[test]
 fn two_body_orbit_conserves_energy() {
-    // Orbite circulaire : masses 1, séparation 2, v = √(G·m_total/(4·r))... calcul direct :
-    // chaque corps tourne à r = 1 autour du barycentre ; force G·1·1/4 = v²/1 ⇒ v = 0,5.
+    // Circular orbit: masses 1, separation 2. Each body turns at r = 1 around
+    // the barycenter; force G·1·1/2² = v²/1 ⇒ v = 0.5.
     let mut b = BodySet::default();
     b.push(0, DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 0.5, 0.0), 1.0);
     b.push(
@@ -133,7 +133,7 @@ fn head_on_collision_merges_and_conserves_momentum() {
 
 #[test]
 fn fast_bodies_crossing_within_one_step_merge() {
-    // Sans balayage, ces corps se « traverseraient » sans jamais se recouvrir.
+    // Without the sweep, these bodies would "pass through" each other without ever overlapping.
     let mut b = BodySet::default();
     b.push(
         1,
@@ -178,7 +178,7 @@ fn chain_collision_merges_into_single_body() {
 #[test]
 fn cleanup_removes_only_unbound_distant_bodies() {
     let mut b = BodySet::default();
-    // Un amas central lié…
+    // A bound central cluster…
     for i in 0..50 {
         let a = i as f64 * 0.7;
         b.push(
@@ -188,9 +188,9 @@ fn cleanup_removes_only_unbound_distant_bodies() {
             1.0,
         );
     }
-    // … un corps lointain mais lié (au repos) …
+    // … a distant but bound body (at rest) …
     b.push(100, DVec3::new(30.0, 0.0, 0.0), DVec3::ZERO, 1.0);
-    // … et un corps lointain non lié (très rapide).
+    // … and a distant unbound body (very fast).
     b.push(
         200,
         DVec3::new(0.0, 30.0, 0.0),
@@ -219,7 +219,7 @@ fn collapse_conserves_mass_through_merges() {
     };
     let initial = generate_state(&ic, 1.0);
     let mut p = PhysicsParams::suggested(&ic, 1.0);
-    p.base_radius *= 20.0; // fusions fréquentes
+    p.base_radius *= 20.0; // frequent mergers
     p.cleanup_period = 0;
     let mut e = CpuEngine::new(initial, p);
     let mut merged = 0;
@@ -230,23 +230,23 @@ fn collapse_conserves_mass_through_merges() {
     assert!(merged > 0, "aucune fusion observée");
     assert_eq!(s.bodies.len() + merged, 2_000);
     assert!((s.bodies.total_mass() - 2_000.0).abs() < 1e-9);
-    // Barnes-Hut n'est pas exactement antisymétrique : tolérance relative à
-    // l'échelle M·v_caractéristique.
+    // Barnes-Hut is not exactly antisymmetric: tolerance relative to the
+    // scale M·v_characteristic.
     let scale = 2_000.0 * ic.characteristic_speed(1.0);
     assert!(
         s.bodies.momentum().length() < 1e-3 * scale,
         "P = {}",
         s.bodies.momentum().length()
     );
-    // Identifiants uniques.
+    // Unique identifiers.
     let mut ids = s.bodies.ids.clone();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), s.bodies.len());
 }
 
-/// Système central, amas compact éjecté (lié à lui-même, pas au système) et
-/// corps isolé éjecté.
+/// Central system, compact ejected cluster (bound to itself, not to the
+/// system) and an isolated ejected body.
 fn ejection_scene(cluster: u64) -> BodySet {
     let mut b = BodySet::default();
     for i in 0..50 {

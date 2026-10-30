@@ -1,4 +1,4 @@
-//! Codes de Morton 3D sur 63 bits (21 bits par axe).
+//! 3D Morton codes on 63 bits (21 bits per axis).
 
 use glam::DVec3;
 
@@ -6,7 +6,7 @@ pub const BITS_PER_AXIS: u32 = 21;
 const AXIS_CELLS: f64 = (1u64 << BITS_PER_AXIS) as f64;
 const AXIS_MAX: u64 = (1u64 << BITS_PER_AXIS) - 1;
 
-/// Étale les 21 bits de poids faible de `v` un bit sur trois.
+/// Spreads the 21 low bits of `v` one bit in three.
 #[inline]
 pub fn spread_bits(v: u64) -> u64 {
     let mut x = v & 0x1f_ffff;
@@ -18,14 +18,14 @@ pub fn spread_bits(v: u64) -> u64 {
     x
 }
 
-/// Code de Morton de coordonnées entières (x sur le bit 0 de chaque triplet,
-/// y sur le bit 1, z sur le bit 2).
+/// Morton code of integer coordinates (x on bit 0 of each triplet, y on
+/// bit 1, z on bit 2).
 #[inline]
 pub fn encode(ix: u64, iy: u64, iz: u64) -> u64 {
     spread_bits(ix) | (spread_bits(iy) << 1) | (spread_bits(iz) << 2)
 }
 
-/// Cube englobant : coin minimal et côté.
+/// Bounding cube: minimum corner and side.
 #[derive(Debug, Clone, Copy)]
 pub struct Cube {
     pub min: DVec3,
@@ -33,7 +33,7 @@ pub struct Cube {
 }
 
 impl Cube {
-    /// Plus petit cube (légèrement dilaté) contenant tous les points.
+    /// Smallest cube (slightly enlarged) containing every point.
     pub fn bounding(points: &[DVec3]) -> Self {
         use rayon::prelude::*;
         let (lo, hi) = points
@@ -56,7 +56,7 @@ impl Cube {
         Self { min: lo, side }
     }
 
-    /// Code de Morton d'un point du cube.
+    /// Morton code of a point of the cube.
     #[inline]
     pub fn code(&self, p: DVec3) -> u64 {
         let t = (p - self.min) / self.side * AXIS_CELLS;

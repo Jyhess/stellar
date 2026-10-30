@@ -1,16 +1,16 @@
 //! # stellar-engine-cpu
 //!
-//! Moteur de calcul CPU :
-//! - forces gravitationnelles par **Barnes-Hut** (octree de Morton, critère
-//!   d'ouverture θ, adoucissement de Plummer ε), parallélisées avec `rayon` ;
-//! - intégration **Leapfrog KDK** à pas fixe ;
-//! - **fusions** sur contact balayé, regroupées par union-find ;
-//! - **nettoyage** périodique des corps éjectés (non liés et lointains),
-//!   amas liés préservés (règle du domaine, [`stellar_domain::ejection`]).
+//! CPU computation engine:
+//! - gravitational forces by **Barnes-Hut** (Morton octree, opening
+//!   criterion θ, Plummer softening ε), parallelized with `rayon`;
+//! - **KDK Leapfrog** integration with a fixed step;
+//! - **mergers** on swept contact, grouped by union-find;
+//! - periodic **cleanup** of ejected bodies (unbound and distant), bound
+//!   clusters preserved (domain rule, [`stellar_domain::ejection`]).
 //!
-//! Conformément à l'architecture retenue, ce module privilégie la
-//! performance (structure de tableaux, réordonnancement de Morton à chaque
-//! pas, parcours d'arbre sans pile) plutôt que l'abstraction.
+//! As the architecture allows, this module favours performance (structure
+//! of arrays, Morton reordering at every step, stackless tree traversal,
+//! AVX2 evaluation) over abstraction.
 
 pub mod collisions;
 pub mod morton;
@@ -34,7 +34,7 @@ use crate::octree::Node;
 
 pub const ENGINE_ID: &str = "cpu-barnes-hut";
 
-/// Fabrique du moteur CPU.
+/// Factory of the CPU engine.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CpuEngineFactory;
 
@@ -57,7 +57,7 @@ impl EngineFactory for CpuEngineFactory {
     }
 }
 
-/// Moteur Barnes-Hut sur CPU.
+/// Barnes-Hut engine on the CPU.
 pub struct CpuEngine {
     params: PhysicsParams,
     pool: Arc<rayon::ThreadPool>,
@@ -66,25 +66,25 @@ pub struct CpuEngine {
     vel: Vec<DVec3>,
     mass: Vec<f64>,
     acc: Vec<DVec3>,
-    /// Potentiel gravitationnel ressenti par chaque corps (G inclus).
+    /// Gravitational potential felt by each body (G included).
     pot: Vec<f64>,
     old_pos: Vec<DVec3>,
     nodes: Vec<Node>,
     step: u64,
     time: f64,
     diagnostics: Diagnostics,
-    /// Masse totale initiale (seuil de masse des amas éjectés).
+    /// Total initial mass (mass threshold of ejected clusters).
     initial_mass: f64,
     moments: Moments,
-    /// Champ extérieur (sous-systèmes) : celui du premier demi-kick, et
-    /// celui de la fin du pas.
+    /// External field (subsystems): the one of the first half kick, and the
+    /// one of the end of the step.
     field_prev: Option<ExternalField>,
     field_next: Option<ExternalField>,
 }
 
 impl CpuEngine {
     pub fn new(state: SimulationState, mut params: PhysicsParams) -> Self {
-        // θ ≤ 1 garantit qu'un corps n'est jamais approximé par un nœud qui le contient.
+        // θ ≤ 1 guarantees that a body is never approximated by a node that contains it.
         params.theta = params.theta.clamp(0.0, 1.0);
         let threads = std::thread::available_parallelism()
             .map(|n| n.get().saturating_sub(1).max(1))
@@ -133,24 +133,24 @@ impl CpuEngine {
         &self.params
     }
 
-    /// Identifiants et accélérations courants (ordre interne du moteur).
+    /// Current identifiers and accelerations (engine's internal order).
     pub fn accelerations(&self) -> (&[BodyId], &[DVec3]) {
         (&self.ids, &self.acc)
     }
 
-    /// Identifiants et potentiels courants (ordre interne du moteur).
+    /// Current identifiers and potentials (engine's internal order).
     pub fn potentials(&self) -> (&[BodyId], &[f64]) {
         (&self.ids, &self.pot)
     }
 
-    /// Exécute `f` dans le pool de calcul dédié.
+    /// Runs `f` in the dedicated thread pool.
     fn pool_install<R: Send>(&mut self, f: impl FnOnce(&mut Self) -> R + Send) -> R {
         let pool = Arc::clone(&self.pool);
         pool.install(|| f(self))
     }
 
-    /// Réordonne les corps selon leur code de Morton, construit l'octree et
-    /// calcule accélérations, potentiels et énergies.
+    /// Reorders the bodies by Morton code, builds the octree and computes
+    /// accelerations, potentials and energies.
     fn compute_forces(&mut self) {
         let n = self.pos.len();
         self.acc.resize(n, DVec3::ZERO);
@@ -161,7 +161,7 @@ impl CpuEngine {
             return;
         }
 
-        // 1. Tri de Morton (localité spatiale ⇒ localité mémoire).
+        // 1. Morton sort (spatial locality ⇒ memory locality).
         let cube = Cube::bounding(&self.pos);
         let mut keyed: Vec<(u64, u32)> = self
             .pos
@@ -188,9 +188,9 @@ impl CpuEngine {
         // 2. Octree.
         self.nodes = octree::build(&codes, &self.pos, &self.mass, cube, self.params.theta);
 
-        // 3. Champ en chaque corps, par groupes de corps voisins. Les
-        //    groupes, en ordre préfixe, couvrent les corps dans l'ordre :
-        //    leurs plages de sortie se découpent sans recouvrement.
+        // 3. Field at each body, by groups of neighbouring bodies. The groups,
+        //    in pre-order, cover the bodies in order: their output ranges split
+        //    without overlap.
         let eps2 = self.params.softening * self.params.softening;
         let g = self.params.g;
         let (nodes, pos, mass) = (&self.nodes, &self.pos, &self.mass);
@@ -248,7 +248,7 @@ impl CpuEngine {
         };
     }
 
-    /// Demi-kick, champ extérieur compris.
+    /// Half kick, external field included.
     fn kick(&mut self, field: Option<ExternalField>, half: f64) {
         match field {
             Some(f) => self
@@ -264,7 +264,7 @@ impl CpuEngine {
         }
     }
 
-    /// Fusionne les corps entrés en contact durant la phase de dérive.
+    /// Merges the bodies that came into contact during the drift.
     fn resolve_collisions(&mut self) -> Vec<(BodyId, BodyId)> {
         let r0 = self.params.base_radius;
         if r0 <= 0.0 || self.pos.len() < 2 {
@@ -323,8 +323,8 @@ impl CpuEngine {
         merges
     }
 
-    /// Supprime les corps éjectés : non liés ET au-delà de k × R du
-    /// barycentre, sauf s'ils appartiennent à un amas lié significatif.
+    /// Removes ejected bodies: unbound AND beyond k × R from the barycenter,
+    /// unless they belong to a significant bound cluster.
     fn cleanup(&mut self) -> (BodySet, Vec<EjectedCluster>) {
         let n = self.pos.len();
         if n < 2 {
@@ -378,7 +378,7 @@ impl CpuEngine {
         (removed, ejection.clusters)
     }
 
-    /// Compacte tous les tableaux en ne gardant que les corps vivants.
+    /// Compacts every array, keeping only the living bodies.
     fn retain(&mut self, alive: &[bool]) {
         fn keep<T: Copy>(v: &mut Vec<T>, alive: &[bool]) {
             let mut k = 0;
@@ -410,7 +410,7 @@ impl CpuEngine {
         // Kick (½ dt)
         self.kick(self.field_prev.or(self.field_next), half);
 
-        // Drift (dt), en mémorisant les positions de départ pour le balayage.
+        // Drift (dt), keeping the start positions for the sweep.
         self.old_pos.clear();
         self.old_pos.extend_from_slice(&self.pos);
         self.pos
@@ -418,10 +418,10 @@ impl CpuEngine {
             .zip(self.vel.par_iter())
             .for_each(|(x, v)| *x += *v * dt);
 
-        // Contacts et fusions
+        // Contacts and mergers
         let merges = self.resolve_collisions();
 
-        // Forces au nouvel instant, puis Kick (½ dt)
+        // Forces at the new time, then Kick (½ dt)
         self.compute_forces();
         self.kick(self.field_next, half);
         self.field_prev = self.field_next;
@@ -487,7 +487,7 @@ impl PhysicsEngine for CpuEngine {
     }
 
     fn positions_of(&self, ids: &[BodyId]) -> Vec<Option<DVec3>> {
-        // Un seul passage, en s'arrêtant dès que tout est trouvé.
+        // A single pass, stopping as soon as everything is found.
         let mut out = vec![None; ids.len()];
         let mut remaining = ids.len();
         for (i, id) in self.ids.iter().enumerate() {
