@@ -161,7 +161,13 @@ Règles :
 
 - Ajouter des tests unitaires ou d'intégration pour toute logique nouvelle
   (`crates/*/tests/`), notamment les formats de fichiers et la physique.
-- Vérifier visuellement les changements d'interface en lançant l'application.
+- Deux temps de vérification :
+  1. **Avant de rendre la main** : tests ciblés seulement (`cargo test -p
+     <crate modifiée>`, plus `cargo build --release` si l'utilisateur doit
+     essayer l'application). Pas de vérification visuelle de mon côté :
+     l'utilisateur essaie lui-même et valide.
+  2. **Après sa validation, avant le commit** : `cargo test --workspace` et
+     `cargo clippy --workspace --all-targets` ; corriger avant de valider.
 - Les fichiers de l'utilisateur dans `saves\` et `recordings\` peuvent peser
   plusieurs dizaines de gigaoctets : ne jamais les modifier pour un essai.
 
