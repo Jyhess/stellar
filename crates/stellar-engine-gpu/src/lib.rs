@@ -1,38 +1,37 @@
 //! # stellar-engine-gpu
 //!
-//! Moteur de calcul sur carte graphique (shaders de calcul wgpu : Vulkan,
-//! DirectX 12, Metal), même algorithme que le moteur CPU :
+//! Computation engine on the graphics card (wgpu compute shaders: Vulkan,
+//! DirectX 12), with the same algorithm as the CPU engine:
 //!
-//! - **Barnes-Hut sur LBVH** : à chaque pas, boîte englobante, codes de
-//!   Morton (30 bits), tri radix GPU, construction parallèle de l'arbre
-//!   binaire radix (Karras 2012), agrégation niveau par niveau (centres de
-//!   masse, boîtes, rayons d'ouverture, boîtes balayées), puis parcours
-//!   **par groupes** de 128 corps voisins, qui partagent la descente de
-//!   l'arbre et une liste d'interactions en mémoire partagée ;
-//! - **Leapfrog KDK** à pas fixe ;
-//! - **fusions balayées** : les paires en contact sont détectées sur le GPU
-//!   (même arbre, boîtes balayées) ; le regroupement (union-find, rarement
-//!   plus de quelques milliers de paires) est fait sur le CPU, puis appliqué
-//!   sur le GPU ;
-//! - **nettoyage** des corps éjectés : les corps lointains sont repérés sur
-//!   le GPU et relus ; la règle du domaine ([`stellar_domain::ejection`])
-//!   désigne ceux à éliminer en préservant les amas liés ; élimination et
-//!   compaction sur le GPU.
+//! - **Barnes-Hut on an LBVH**: bounding box, 30-bit Morton codes, GPU radix
+//!   sort and parallel construction of the binary radix tree (Karras 2012),
+//!   redone every `REBUILD_EVERY` (4) steps; at every step, level-by-level
+//!   aggregation (centers of mass, boxes, opening radii, swept boxes), then
+//!   a traversal **by groups** of 128 neighbouring bodies, which share the
+//!   descent of the tree and an interaction list in shared memory;
+//! - **KDK Leapfrog** with a fixed step;
+//! - **swept mergers**: pairs in contact are detected on the GPU (same tree,
+//!   swept boxes); grouping (union-find, rarely more than a few thousand
+//!   pairs) is done on the CPU, then applied on the GPU;
+//! - **cleanup** of ejected bodies: distant bodies are found on the GPU and
+//!   read back; the domain rule ([`stellar_domain::ejection`]) picks those to
+//!   remove while preserving bound clusters; removal and compaction happen
+//!   on the GPU.
 //!
-//! Un pas ne coûte qu'**une soumission et une attente** : tout ce que
-//! l'application lit ensuite (paires de contact, éliminés, moments globaux,
-//! positions des corps suivis) est recopié en une fois dans un tampon de
-//! relecture. Les fusions planifiées sont appliquées dans une seconde
-//! soumission, sans attente. Les accesseurs ([`PhysicsEngine::positions_of`],
-//! [`PhysicsEngine::center_of_mass`], [`PhysicsEngine::diagnostics`])
-//! répondent alors sans solliciter la carte.
+//! A step costs only **one submission and one wait**: everything the
+//! application reads next (contact pairs, removed bodies, global moments,
+//! tracked positions) is copied at once into a readback buffer. The planned
+//! mergers are applied in a second submission, without waiting. Accessors
+//! ([`PhysicsEngine::positions_of`], [`PhysicsEngine::center_of_mass`],
+//! [`PhysicsEngine::diagnostics`]) then answer without touching the device.
 //!
-//! Les calculs sont en simple précision (f32) ; l'état est relu en double
-//! précision quand l'application le demande (sauvegarde, enregistrement…).
+//! Computation is in single precision (f32); the state is read back in
+//! double precision when the application asks for it (save, recording…).
 //!
-//! Construit sur la carte graphique de l'interface ([`GpuEngineFactory::attach`]),
-//! le moteur expose ses tampons de corps ([`BodiesView`]) : l'affichage les
-//! lit directement, sans aller-retour par la mémoire centrale.
+//! Built on the interface's device ([`GpuEngineFactory::attach`]), the
+//! engine exposes its body buffers ([`BodiesView`]): the display reads them
+//! directly, without a round trip through main memory. Details:
+//! `docs/gpu-engine.md`.
 
 mod gpu;
 
@@ -58,34 +57,34 @@ pub use crate::gpu::{SharedDevice, WG};
 
 pub const ENGINE_ID: &str = "gpu-barnes-hut";
 
-/// Nombre maximal de niveaux de l'arbre (clés 30 bits + départage 32 bits).
+/// Maximum number of tree levels (30-bit keys + 32-bit tie-break).
 const LEVELS: usize = 72;
-/// Nombre maximal de paires de contact traitées par pas.
+/// Maximum number of contact pairs handled per step.
 const MAX_PAIRS: usize = 1 << 18;
-/// Taille d'un nœud de l'arbre (centre de masse, boîte, rayon d'ouverture).
+/// Size of a tree node (center of mass, box, opening radius).
 const NODE_BYTES: usize = 48;
-/// La topologie de l'arbre (ordre de Morton, construction de Karras) est
-/// refaite tous les `REBUILD_EVERY` pas, ou après une compaction ; entre-temps
-/// l'arbre est seulement réajusté (centres de masse, boîtes, rayons
-/// d'ouverture), les corps ayant peu bougé.
+/// The tree topology (Morton order, Karras construction) is rebuilt every
+/// `REBUILD_EVERY` steps, or after a compaction; in between, the tree is
+/// only refitted (centers of mass, boxes, opening radii), since the bodies
+/// have moved little.
 const REBUILD_EVERY: u32 = 4;
-/// Corps par groupe du parcours de Barnes-Hut (`forces.wgsl`).
+/// Bodies per group in the Barnes-Hut traversal (`forces.wgsl`).
 const FORCE_GROUP: u32 = 128;
-/// Nombre maximal de corps (lancements 1D : 65 535 groupes de 256).
+/// Maximum number of bodies (1D dispatches: 65,535 workgroups of 256).
 pub const MAX_BODIES: usize = 65_535 * WG as usize;
-/// Identifiants dont la position est relue à chaque pas (traces, suivi).
+/// Identifiers whose position is read back at every step (traces, tracking).
 const QUERY_CAP: usize = 1024;
-/// Listes d'identifiants suivies à chaque pas (les plus récemment demandées).
+/// Identifier lists tracked at every step (the most recently requested).
 const QUERY_LISTS: usize = 4;
-/// Paires de contact et corps lointains (aux pas de nettoyage) relus avec
-/// chaque pas ; au-delà, une relecture complémentaire.
+/// Contact pairs and distant bodies (on cleanup steps) read back with every
+/// step; beyond that, an additional readback.
 const PAIR_PREFIX: usize = 1024;
 const FAR_PREFIX: usize = 1024;
-/// Capacité initiale du tampon des corps lointains (agrandi au besoin).
+/// Initial capacity of the distant-body buffer (grown when needed).
 const FAR_INITIAL: usize = 1 << 14;
 
 // ----------------------------------------------------------------------
-// Structures partagées avec les shaders (disposition identique)
+// Structures shared with the shaders (identical layout)
 // ----------------------------------------------------------------------
 
 #[repr(C)]
@@ -118,7 +117,7 @@ struct Params {
     field_next: GpuField,
 }
 
-/// Champ extérieur linéaire (`common.wgsl`) ; `center[3] = 0` : aucun.
+/// Linear external field (`common.wgsl`); `center[3] = 0`: none.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 struct GpuField {
@@ -175,17 +174,17 @@ const PAIR_BYTES: usize = std::mem::size_of::<PairRec>();
 const BODY_BYTES: usize = std::mem::size_of::<GpuBody>();
 const OP_BYTES: u64 = std::mem::size_of::<MergeOp>() as u64;
 
-/// Disposition du tampon de relecture d'un pas (octets).
+/// Layout of a step's readback buffer (bytes).
 mod readback {
     use super::*;
-    /// Nombre de paires de contact, nombre de corps lointains (u32).
+    /// Number of contact pairs, number of distant bodies (u32).
     pub const COUNTERS: u64 = 0;
-    /// Moments globaux : 3 × vec4<f32>.
+    /// Global moments: 3 × vec4<f32>.
     pub const MOMENTS: u64 = 16;
-    /// Positions des corps suivis : QUERY_CAP × vec4<f32>.
+    /// Positions of tracked bodies: QUERY_CAP × vec4<f32>.
     pub const QUERY: u64 = 64;
     pub const PAIRS: u64 = QUERY + 16 * QUERY_CAP as u64;
-    /// Premiers corps lointains (indices, puis enregistrements).
+    /// First distant bodies (indices, then records).
     pub const FAR_INDEX: u64 = PAIRS + (PAIR_PREFIX * PAIR_BYTES) as u64;
     pub const FAR: u64 = FAR_INDEX + 4 * FAR_PREFIX as u64;
     pub const SIZE: u64 = FAR + (FAR_PREFIX * BODY_BYTES) as u64;
@@ -204,14 +203,14 @@ fn u32_at(raw: &[u8], offset: usize) -> u32 {
 }
 
 // ----------------------------------------------------------------------
-// Fabrique
+// Factory
 // ----------------------------------------------------------------------
 
-/// Fabrique du moteur GPU.
+/// Factory of the GPU engine.
 ///
-/// Par défaut, chaque moteur ouvre sa propre carte graphique. Une fois
-/// [`attach`](Self::attach) appelé avec celle de l'interface, les moteurs
-/// créés la partagent et exposent leurs corps pour un affichage sans copie.
+/// By default, each engine opens its own device. Once [`attach`](Self::attach)
+/// has been called with the interface's device, the engines created share
+/// it and expose their bodies for display without copy.
 #[derive(Default)]
 pub struct GpuEngineFactory {
     shared: OnceLock<SharedDevice>,
@@ -222,21 +221,21 @@ impl GpuEngineFactory {
         Self::default()
     }
 
-    /// Vérifie qu'une carte graphique utilisable est présente ; renvoie son nom.
+    /// Checks that a usable graphics card is present; returns its name.
     pub fn probe() -> Result<String, String> {
         Gpu::open().map(|g| g.adapter_name)
     }
 
-    /// Partage la carte graphique de l'interface avec les moteurs créés
-    /// ensuite (sans effet si une carte est déjà attachée).
+    /// Shares the interface's device with the engines created afterwards (no
+    /// effect if a device is already attached).
     pub fn attach(&self, shared: SharedDevice) {
         let _ = self.shared.set(shared);
     }
 }
 
 impl EngineFactory for GpuEngineFactory {
-    /// Limite des lancements, et taille maximale d'un tampon de corps ou de
-    /// nœuds sur la carte de l'interface (si elle est connue).
+    /// Dispatch limit, and maximum size of a body or node buffer on the
+    /// interface's device (if known).
     fn max_bodies(&self) -> Option<usize> {
         let by_buffer = self.shared.get().map_or(usize::MAX, |s| {
             let l = s.device.limits();
@@ -259,8 +258,8 @@ impl EngineFactory for GpuEngineFactory {
         state: SimulationState,
         params: PhysicsParams,
     ) -> Result<Box<dyn PhysicsEngine>, String> {
-        // Carte de l'interface inadaptée au calcul (OpenGL, par exemple) :
-        // le moteur ouvre sa propre carte, sans affichage direct.
+        // Interface device unsuitable for computation (OpenGL, for example): the
+        // engine opens its own device, without live display.
         let shared = self.shared.get().filter(|s| Gpu::supports(s));
         let engine = match shared {
             Some(shared) => GpuEngine::with_device(state, params, shared)?,
@@ -271,7 +270,7 @@ impl EngineFactory for GpuEngineFactory {
 }
 
 // ----------------------------------------------------------------------
-// Moteur
+// Engine
 // ----------------------------------------------------------------------
 
 struct Kernels {
@@ -309,9 +308,9 @@ impl Kernels {
                 g.kernel($name, include_str!(concat!("shaders/", $name, ".wgsl")))
             };
         }
-        // Parcours de Barnes-Hut : liste d'interactions de 512 entrées, pile
-        // aussi grande que la mémoire partagée le permet (2 048 nœuds au
-        // plus, pour garder plusieurs groupes actifs par multiprocesseur).
+        // Barnes-Hut traversal: interaction list of 512 entries, stack as large
+        // as shared memory allows (between 256 and 2,048 nodes, to keep several
+        // workgroups active per multiprocessor).
         const LIST: u32 = 512;
         let shared = g.limits.max_compute_workgroup_storage_size;
         let fixed = 16 * (LIST + 4) + 4 * FORCE_GROUP + 64;
@@ -354,12 +353,12 @@ impl Kernels {
     }
 }
 
-/// Paramètres de passe (tri, scan, requêtes) : un petit tampon uniforme par
-/// usage, réécrit seulement quand sa valeur change. Les tampons restant les
-/// mêmes, leurs groupes de liaisons sont créés une fois pour toutes.
+/// Pass parameters (sort, scan, queries): a small uniform buffer per use,
+/// rewritten only when its value changes. Since the buffers stay the same,
+/// their bind groups are created once and for all.
 ///
-/// Un même emplacement ne doit servir qu'avec une seule valeur par
-/// soumission (les écritures de la file précèdent toute la soumission).
+/// A given slot must be used with a single value per submission (queue
+/// writes happen before the whole submission).
 struct PassSlots {
     buffers: Vec<wgpu::Buffer>,
     values: RefCell<Vec<Pass>>,
@@ -386,13 +385,13 @@ impl PassSlots {
     }
 }
 
-/// Emplacements des paramètres de passe.
+/// Slots of the pass parameters.
 mod slot {
-    /// Huit passes du tri radix.
+    /// Eight passes of the radix sort.
     pub const SORT: usize = 0;
-    /// Niveaux du scan des histogrammes du tri.
+    /// Levels of the scan of the sort histograms.
     pub const SORT_SCAN: usize = 8;
-    // Puis les niveaux du scan de la compaction, et enfin les requêtes.
+    // Then the levels of the compaction scan, and finally the queries.
 }
 
 struct Buffers {
@@ -419,36 +418,36 @@ struct Buffers {
     pairs: wgpu::Buffer,
     pair_counter: wgpu::Buffer,
     ops: wgpu::Buffer,
-    /// Corps lointains repérés au nettoyage : indices, enregistrements
-    /// (`far_cap` au plus), compteur.
+    /// Distant bodies found at cleanup: indices, records (`far_cap` at most),
+    /// counter.
     far_index: wgpu::Buffer,
     far: wgpu::Buffer,
     far_counter: wgpu::Buffer,
     index_of: wgpu::Buffer,
-    /// Identifiants couverts par `index_of`.
+    /// Identifiers covered by `index_of`.
     id_cap: u64,
     query_ids: wgpu::Buffer,
     query_results: wgpu::Buffer,
     params: wgpu::Buffer,
-    /// Tampon de relecture du pas (disposition : module [`readback`]).
+    /// Readback buffer of the step (layout: module [`readback`]).
     readback: wgpu::Buffer,
 }
 
-/// Accès direct aux corps du moteur, pour les dessiner sans copie.
+/// Direct access to the engine's bodies, to draw them without copy.
 ///
-/// Le moteur alterne entre deux tampons (tri, compaction) : [`current`](Self::current)
-/// désigne celui qui contient l'état publié en dernier. Comme le calcul et
-/// l'affichage partagent la même file de commandes, un dessin soumis après
-/// la lecture voit toujours un ensemble complet de corps. Seule exception,
-/// sans conséquence : pendant une image, un pas qui élimine des corps peut
-/// faire apparaître quelques doublons.
+/// The engine alternates between two buffers (sort, compaction):
+/// [`current`](Self::current) designates the one holding the last published
+/// state. Since computation and display share the same command queue, a draw
+/// submitted after the read always sees a complete set of bodies. The only
+/// exception, harmless: during one frame, a step that removes bodies may
+/// show a few duplicates.
 ///
-/// Chaque corps occupe [`STRIDE`](Self::STRIDE) octets ; position (3 × f32)
-/// et masse (f32) sont aux décalages [`POSITION_OFFSET`](Self::POSITION_OFFSET)
-/// et [`MASS_OFFSET`](Self::MASS_OFFSET). Un corps de masse nulle est mort.
+/// Each body takes [`STRIDE`](Self::STRIDE) bytes; position (3 × f32) and
+/// mass (f32) are at offsets [`POSITION_OFFSET`](Self::POSITION_OFFSET) and
+/// [`MASS_OFFSET`](Self::MASS_OFFSET). A body of zero mass is dead.
 pub struct BodiesView {
     buffers: [wgpu::Buffer; 2],
-    /// Indice du tampon courant (bit 32) et nombre de corps (32 bits bas).
+    /// Index of the current buffer (bit 32) and body count (low 32 bits).
     current: AtomicU64,
 }
 
@@ -457,7 +456,7 @@ impl BodiesView {
     pub const POSITION_OFFSET: u64 = 0;
     pub const MASS_OFFSET: u64 = 12;
 
-    /// Tampon courant et nombre de corps qu'il contient.
+    /// Current buffer and the number of bodies it holds.
     pub fn current(&self) -> (&wgpu::Buffer, u32) {
         let v = self.current.load(Ordering::Acquire);
         (&self.buffers[(v >> 32) as usize & 1], v as u32)
@@ -469,14 +468,14 @@ impl BodiesView {
     }
 }
 
-/// Listes d'identifiants dont les positions sont relues à chaque pas.
+/// Identifier lists whose positions are read back at every step.
 #[derive(Default)]
 struct Queries {
-    /// Listes suivies, la plus récemment demandée en dernier.
+    /// Tracked lists, the most recently requested last.
     lists: Vec<Vec<BodyId>>,
-    /// Positions relues, dans l'ordre de concaténation des listes.
+    /// Positions read back, in the order of the concatenated lists.
     results: Vec<Option<DVec3>>,
-    /// Pas auquel `results` correspond.
+    /// Step that `results` corresponds to.
     step: Option<u64>,
 }
 
@@ -485,7 +484,7 @@ impl Queries {
         self.lists.iter().map(Vec::len).sum()
     }
 
-    /// Positions de la liste `ids` si elle est suivie et à jour.
+    /// Positions of the list `ids` if it is tracked and up to date.
     fn cached(&self, ids: &[BodyId], step: u64) -> Option<Vec<Option<DVec3>>> {
         if self.step != Some(step) {
             return None;
@@ -501,22 +500,22 @@ impl Queries {
     }
 }
 
-/// Fusions d'un pas : opérations à appliquer sur le GPU, paires (absorbé,
-/// résultant) et position de chaque corps résultant.
+/// Mergers of a step: operations to apply on the GPU, pairs (absorbed,
+/// resulting) and position of each resulting body.
 struct MergePlan {
     ops: Vec<MergeOp>,
     merges: Vec<(BodyId, BodyId)>,
     survivors: Vec<(BodyId, DVec3)>,
 }
 
-/// Grandeurs relues à l'issue d'un pas.
+/// Quantities read back at the end of a step.
 #[derive(Clone, Copy, Default)]
 struct Moments {
-    /// (m, m·x), (m·v, ½ m v²), (½ m φ, 0, 0, 0), sommés sur tous les corps.
+    /// (m, m·x), (m·v, ½ m v²), (½ m φ, 0, 0, 0), summed over all bodies.
     raw: [[f32; 4]; 3],
 }
 
-/// Moteur Barnes-Hut sur GPU.
+/// Barnes-Hut engine on the GPU.
 pub struct GpuEngine {
     gpu: Gpu,
     k: Kernels,
@@ -525,38 +524,38 @@ pub struct GpuEngine {
     params: PhysicsParams,
     capacity: usize,
     pair_cap: usize,
-    /// Capacités courantes des tampons `far` et `ops` (en éléments).
+    /// Current capacities of the `far` and `ops` buffers (in elements).
     far_cap: usize,
     ops_cap: usize,
-    /// Masse totale initiale (seuil de masse des amas éjectés).
+    /// Total initial mass (mass threshold of ejected clusters).
     initial_mass: f64,
-    /// Champ extérieur du premier demi-kick et de la fin du pas.
+    /// External field of the first half kick and of the end of the step.
     field_prev: Option<ExternalField>,
     field_next: Option<ExternalField>,
-    /// Indice du tampon de corps courant (double tampon).
+    /// Index of the current body buffer (double buffering).
     cur: usize,
     n: usize,
     step: u64,
     time: f64,
-    /// Tampons exposés à l'affichage (carte partagée uniquement).
+    /// Buffers exposed to the display (shared device only).
     view: Option<Arc<BodiesView>>,
     moments: Moments,
     queries: RefCell<Queries>,
-    /// La table des indices est périmée (compaction depuis le dernier arbre).
+    /// The index table is stale (compaction since the last tree).
     map_stale: std::cell::Cell<bool>,
-    /// Pas écoulés depuis la dernière construction de la topologie de
-    /// l'arbre (`u32::MAX` : à refaire).
+    /// Steps since the tree topology was last built (`u32::MAX`: to be
+    /// rebuilt).
     tree_age: u32,
 }
 
 impl GpuEngine {
-    /// Moteur sur sa propre carte graphique (banc d'essai, tests, sans fenêtre).
+    /// Engine on its own device (benchmark, tests, no window).
     pub fn new(state: SimulationState, params: PhysicsParams) -> Result<Self, String> {
         Self::build(Gpu::open()?, state, params, false)
     }
 
-    /// Moteur sur la carte graphique de l'interface : ses corps peuvent être
-    /// dessinés directement ([`PhysicsEngine::live_view`]).
+    /// Engine on the interface's device: its bodies can be drawn directly
+    /// ([`PhysicsEngine::live_view`]).
     pub fn with_device(
         state: SimulationState,
         params: PhysicsParams,
@@ -582,8 +581,8 @@ impl GpuEngine {
         if max_id >= u32::MAX as u64 {
             return Err("identifiants de corps trop grands pour le moteur GPU".to_owned());
         }
-        // Marge pour les corps confiés par d'autres sous-systèmes
-        // ([`PhysicsEngine::insert`]), si la carte le permet.
+        // Margin for bodies handed over by other subsystems
+        // ([`PhysicsEngine::insert`]), if the device allows it.
         let limit = (gpu.limits.max_storage_buffer_binding_size as u64).min(gpu.limits.max_buffer_size);
         let largest_for = |capacity: usize| {
             let body_bytes = (capacity * std::mem::size_of::<GpuBody>()) as u64;
@@ -610,8 +609,8 @@ impl GpuEngine {
         let pair_cap = capacity.min(MAX_PAIRS);
         let wg = groups(capacity) as u64;
 
-        // Espace de travail du scan : la plus grande des deux utilisations
-        // (histogrammes du tri : 16 × groupes ; drapeaux de compaction : n).
+        // Scan workspace: the larger of its two uses (sort histograms: 16 ×
+        // workgroups; compaction flags: n).
         let scan_len = (capacity as u64).max(16 * wg);
         let mut scan_sums = Vec::new();
         let mut len = scan_len;
@@ -684,7 +683,7 @@ impl GpuEngine {
             readback: gpu.readback("readback", readback::SIZE),
         };
 
-        // Téléversement de l'état initial.
+        // Upload of the initial state.
         let bodies: Vec<GpuBody> = (0..n)
             .map(|i| {
                 let s = &state.bodies;
@@ -733,7 +732,7 @@ impl GpuEngine {
             map_stale: Default::default(),
             tree_age: u32::MAX,
         };
-        // Premier calcul du champ (le premier kick en a besoin) et des moments.
+        // First computation of the field (the first kick needs it) and of the moments.
         engine.write_params(0);
         let mut enc = engine.gpu.encoder();
         engine.encode_tree_and_forces(&mut enc);
@@ -757,14 +756,14 @@ impl GpuEngine {
         Ok(engine)
     }
 
-    /// Désigne à l'affichage le tampon courant (après soumission des travaux).
+    /// Points the display to the current buffer (after the work is submitted).
     fn publish_view(&self) {
         if let Some(v) = &self.view {
             v.publish(self.cur, self.n);
         }
     }
 
-    /// Nom de la carte graphique utilisée.
+    /// Name of the graphics card in use.
     pub fn adapter_name(&self) -> &str {
         &self.gpu.adapter_name
     }
@@ -773,8 +772,8 @@ impl GpuEngine {
         self.capacity
     }
 
-    /// Temps GPU cumulés par noyau (ms, lancements), si le profilage est
-    /// actif (`STELLAR_GPU_PROFILE=1`, carte propre au moteur).
+    /// Cumulative GPU times per kernel (ms, dispatches), if profiling is on
+    /// (`STELLAR_GPU_PROFILE=1`, engine on its own device).
     pub fn profile(&self) -> Vec<(&'static str, f64, u64)> {
         self.gpu.profile()
     }
@@ -803,8 +802,8 @@ impl GpuEngine {
             .write_buffer(&self.b.params, 0, bytemuck::bytes_of(&params));
     }
 
-    /// Scan exclusif en place de `len` entiers de `data` (récursif) ;
-    /// `slot_base` : emplacements des paramètres, un par niveau.
+    /// In-place exclusive scan of `len` integers of `data` (recursive);
+    /// `slot_base`: parameter slots, one per level.
     fn encode_scan(
         &self,
         enc: &mut gpu::Encoder,
@@ -831,7 +830,7 @@ impl GpuEngine {
         }
     }
 
-    /// Tri radix (clé 30 bits, 4 bits par passe) de keys[0]/vals[0].
+    /// Radix sort (30-bit key, 4 bits per pass) of keys[0]/vals[0].
     fn encode_sort(&self, enc: &mut gpu::Encoder) {
         let n = self.n;
         let wg = groups(n);
@@ -870,9 +869,9 @@ impl GpuEngine {
         debug_assert_eq!(src, 0);
     }
 
-    /// Réordonne les corps (Morton) et construit l'arbre, ou le réajuste
-    /// seulement (voir [`REBUILD_EVERY`]), puis calcule le champ et tient à
-    /// jour la table des indices.
+    /// Reorders the bodies (Morton) and builds the tree, or only refits it (see
+    /// [`REBUILD_EVERY`]), then computes the field and keeps the index table up
+    /// to date.
     fn encode_tree_and_forces(&mut self, enc: &mut gpu::Encoder) {
         let n = self.n;
         if n == 0 {
@@ -978,7 +977,7 @@ impl GpuEngine {
         );
     }
 
-    /// Moments globaux (masse, centre de masse, quantité de mouvement, énergies).
+    /// Global moments (mass, center of mass, momentum, energies).
     fn encode_moments(&self, enc: &mut gpu::Encoder) {
         let b = &self.b;
         let wg = groups(self.n);
@@ -996,8 +995,8 @@ impl GpuEngine {
         );
     }
 
-    /// Positions des listes suivies (au plus `QUERY_CAP` identifiants,
-    /// déjà écrits dans `query_ids`).
+    /// Positions of the tracked lists (at most `QUERY_CAP` identifiers, already
+    /// written to `query_ids`).
     fn encode_queries(&self, enc: &mut gpu::Encoder, count: usize) {
         if count == 0 {
             return;
@@ -1026,11 +1025,11 @@ impl GpuEngine {
         );
     }
 
-    /// Supprime les corps de masse nulle (compaction par scan).
+    /// Removes the bodies of zero mass (compaction by scan).
     fn encode_compaction(&mut self, enc: &mut gpu::Encoder) {
         let b = &self.b;
         let wg = groups(self.n);
-        // Les drapeaux réutilisent le tampon des histogrammes du tri.
+        // The flags reuse the buffer of the sort histograms.
         self.gpu.run(
             enc,
             &self.k.alive_flags,
@@ -1058,11 +1057,11 @@ impl GpuEngine {
         self.cur = 1 - self.cur;
     }
 
-    /// Regroupe les paires en contact et prépare les opérations de fusion.
+    /// Groups the pairs in contact and prepares the merge operations.
     ///
-    /// Les corps éliminés au même pas par le nettoyage sont écartés des
-    /// paires (ils ont déjà disparu). Renvoie aussi, pour chaque groupe,
-    /// l'identifiant du corps résultant et sa position.
+    /// Bodies removed by the cleanup in the same step are left out of the pairs
+    /// (they are already gone). Also returns, for each group, the identifier of
+    /// the resulting body and its position.
     fn plan_merges(&self, pairs: &[PairRec], removed: &HashSet<BodyId>) -> MergePlan {
         let mut index_of: HashMap<u32, usize> = HashMap::new();
         let mut members: Vec<(u32, GpuBody)> = Vec::new();
@@ -1081,7 +1080,7 @@ impl GpuEngine {
             let b = slot(p.ib, p.b, &mut members);
             links.push((a, b));
         }
-        // Union-find sur les indices locaux.
+        // Union-find on local indices.
         let mut parent: Vec<usize> = (0..members.len()).collect();
         fn find(parent: &mut [usize], mut x: usize) -> usize {
             while parent[x] != x {
@@ -1172,8 +1171,8 @@ impl GpuEngine {
         let period = self.params.cleanup_period as u64;
         let cleanup = period > 0 && self.step.is_multiple_of(period);
 
-        // 1. Kick ½, drift, arbre, champ, contacts, kick ½, nettoyage,
-        //    moments et positions suivies : une soumission, une attente.
+        // 1. Kick ½, drift, tree, field, contacts, kick ½, cleanup, moments and
+        //    tracked positions: one submission, one wait.
         self.write_params(0);
         let mut enc = self.gpu.encoder();
         {
@@ -1202,7 +1201,7 @@ impl GpuEngine {
                 ],
                 wg,
             );
-            // Kick ½ et moments globaux en une lecture des corps.
+            // Kick ½ and global moments in a single read of the bodies.
             self.gpu.run(
                 &mut enc,
                 &self.k.kick_moments,
@@ -1247,7 +1246,7 @@ impl GpuEngine {
         };
         self.publish_view();
 
-        // 2. Relecture : compteurs, moments, positions, premières paires.
+        // 2. Readback: counters, moments, positions, first pairs.
         let mut found = 0usize;
         let mut far_count = 0usize;
         let mut pairs: Vec<PairRec> = Vec::new();
@@ -1273,7 +1272,7 @@ impl GpuEngine {
                     far = bytemuck::cast_slice(&raw[r..r + BODY_BYTES * count]).to_vec();
                 }
             });
-        // Au-delà des premiers enregistrements (rare) : relecture du reste.
+        // Beyond the first records (rare): read back the rest.
         let total_pairs = found.min(self.pair_cap);
         if total_pairs > pairs.len() {
             let start = pairs.len();
@@ -1286,7 +1285,7 @@ impl GpuEngine {
         }
         self.moments = Moments { raw: moments };
 
-        // 3. Nettoyage : la règle du domaine trie les corps lointains.
+        // 3. Cleanup: the domain rule sorts out the distant bodies.
         let mut kills = Vec::new();
         if cleanup {
             if far_count > far.len() {
@@ -1304,7 +1303,7 @@ impl GpuEngine {
             kills = ops;
         }
 
-        // 4. Fusions : regroupement sur le CPU, application sans attente.
+        // 4. Mergers: grouped on the CPU, applied without waiting.
         let mut dead = kills.len();
         let mut survivors = Vec::new();
         let mut ops = Vec::new();
@@ -1339,8 +1338,8 @@ impl GpuEngine {
             }
             self.encode_compaction(&mut enc);
             self.gpu.submit(enc);
-            // Les paramètres suivants ne valent qu'à partir de la prochaine
-            // soumission, une fois la compaction faite.
+            // The following parameters only apply from the next submission, once the
+            // compaction is done.
             self.n -= dead.min(self.n);
             self.write_params(0);
             self.map_stale.set(true);
@@ -1348,7 +1347,7 @@ impl GpuEngine {
             self.publish_view();
         }
 
-        // 5. Positions suivies, corrigées des fusions et éliminations du pas.
+        // 5. Tracked positions, corrected for the step's mergers and removals.
         let gone: HashSet<BodyId> = report
             .merges
             .iter()
@@ -1376,8 +1375,8 @@ impl GpuEngine {
         report
     }
 
-    /// Repère les corps lointains (au-delà de k × R du barycentre) : indices
-    /// et enregistrements (dans la limite de `far_cap`), sans rien éliminer.
+    /// Finds the distant bodies (beyond k × R from the barycenter): indices and
+    /// records (up to `far_cap`), without removing anything.
     fn encode_far(&self, enc: &mut gpu::Encoder) {
         let b = &self.b;
         enc.clear_buffer(&b.far_counter, 0, None);
@@ -1396,9 +1395,9 @@ impl GpuEngine {
         );
     }
 
-    /// Relit tous les corps lointains quand la relecture du pas n'en
-    /// contenait qu'une partie ; agrandit leur tampon au besoin (les corps
-    /// n'ont pas bougé depuis : le repérage est simplement refait).
+    /// Reads back all distant bodies when the step's readback held only part of
+    /// them; grows their buffer if needed (the bodies have not moved since: the
+    /// search is simply redone).
     fn read_far(&mut self, count: usize, index: &mut Vec<u32>, far: &mut Vec<GpuBody>) {
         if count > self.far_cap {
             self.gpu.forget(&self.b.far);
@@ -1414,9 +1413,9 @@ impl GpuEngine {
         *far = bytemuck::cast_slice(&raw).to_vec();
     }
 
-    /// Applique la règle du domaine aux corps lointains ; renvoie les
-    /// opérations d'élimination (masse nulle) et les amas conservés. Les
-    /// moments relus sont corrigés des corps éliminés.
+    /// Applies the domain rule to the distant bodies; returns the removal
+    /// operations (zero mass) and the kept clusters. The moments read back are
+    /// corrected for the removed bodies.
     fn sort_out_far(
         &mut self,
         index: &[u32],
@@ -1465,7 +1464,7 @@ impl GpuEngine {
         (ops, ejection.clusters)
     }
 
-    /// Relit sur-le-champ les positions de toutes les listes suivies.
+    /// Reads back the positions of every tracked list right away.
     fn refresh_queries(&self) {
         let mut q = self.queries.borrow_mut();
         let ids: Vec<u32> = q
@@ -1494,7 +1493,7 @@ impl GpuEngine {
         q.step = Some(self.step);
     }
 
-    /// Relit tous les corps (ordre interne du moteur).
+    /// Reads back every body (engine's internal order).
     pub fn read_bodies(&self) -> Vec<GpuBody> {
         if self.n == 0 {
             return Vec::new();
@@ -1530,8 +1529,8 @@ impl PhysicsEngine for GpuEngine {
     }
 
     fn write_state(&self, out: &mut SimulationState) {
-        // Conversion directe depuis la mémoire projetée, en parallèle, dans
-        // les tableaux existants de `out` (pas de copie intermédiaire).
+        // Direct conversion from the mapped memory, in parallel, into the existing
+        // arrays of `out` (no intermediate copy).
         let b: &mut BodySet = &mut out.bodies;
         let n = self.n;
         b.ids.resize(n, 0);
@@ -1595,7 +1594,7 @@ impl PhysicsEngine for GpuEngine {
             return Vec::new();
         }
         if ids.len() > QUERY_CAP {
-            // Liste trop longue pour être suivie : relecture par l'état.
+            // List too long to be tracked: read through the state.
             let s = self.state();
             let index: HashMap<BodyId, usize> =
                 s.bodies.ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
@@ -1604,8 +1603,8 @@ impl PhysicsEngine for GpuEngine {
                 .map(|id| index.get(id).map(|&i| s.bodies.positions[i]))
                 .collect();
         }
-        // Nouvelle liste : suivie désormais à chaque pas (à la place de la
-        // plus ancienne), et relue tout de suite.
+        // New list: tracked at every step from now on (replacing the oldest one),
+        // and read back right away.
         {
             let mut q = self.queries.borrow_mut();
             q.lists.retain(|l| l.as_slice() != ids);

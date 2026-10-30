@@ -1,7 +1,7 @@
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read_write> bodies: array<Body>;
 
-// Kick ½ dt (champ extérieur compris) puis drift dt.
+// Kick ½ dt (external field included), then drift dt.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;

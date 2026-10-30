@@ -5,9 +5,9 @@
 @group(0) @binding(4) var<storage, read_write> far: array<Body>;
 @group(0) @binding(5) var<storage, read_write> counter: array<atomic<u32>>;
 
-// Repère les corps au-delà de la distance limite du barycentre : leur indice,
-// et leur enregistrement tant que le tampon le permet. Le tri (corps non
-// liés éliminés, amas liés conservés) est fait sur le CPU.
+// Finds the bodies beyond the distance limit from the barycenter: their
+// index, and their record while the buffer has room. The sorting (unbound
+// bodies removed, bound clusters kept) is done on the CPU.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;

@@ -5,7 +5,7 @@
 var<workgroup> smin: array<vec3<f32>, 256>;
 var<workgroup> smax: array<vec3<f32>, 256>;
 
-// Un seul groupe : réduit les partiels de bbox_partial.
+// A single workgroup: reduces the partial results of bbox_partial.
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
     var lo = vec3<f32>(3.0e38);

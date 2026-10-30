@@ -1,5 +1,5 @@
 @group(0) @binding(0) var<uniform> P: Params;
-@group(0) @binding(1) var<uniform> L: Pass; // a = niveau
+@group(0) @binding(1) var<uniform> L: Pass; // a = level
 @group(0) @binding(2) var<storage, read> bodies: array<Body>;
 @group(0) @binding(3) var<storage, read> children: array<vec2<u32>>;
 @group(0) @binding(4) var<storage, read> level_count: array<u32>;
@@ -8,10 +8,10 @@
 @group(0) @binding(7) var<storage, read_write> nodes: array<vec4<f32>>;
 @group(0) @binding(8) var<storage, read_write> swept: array<vec4<f32>>;
 
-// Nœud k : nodes[3k] = (centre de masse, masse), nodes[3k + 1] = (min, rc²),
-// nodes[3k + 2] = (max, 0) ; swept[2k], swept[2k + 1] = boîte balayée
-// (trajectoires du pas, rayons compris). rc est le rayon d'ouverture de
-// Barnes-Hut : plus grand côté / θ + |centre de masse − centre géométrique|.
+// Node k: nodes[3k] = (center of mass, mass), nodes[3k + 1] = (min, rc²),
+// nodes[3k + 2] = (max, 0); swept[2k], swept[2k + 1] = swept box (the
+// step's trajectories, radii included). rc is the Barnes-Hut opening
+// radius: longest side / θ + |center of mass − geometric center|.
 struct Agg {
     com: vec3<f32>,
     mass: f32,
@@ -45,8 +45,8 @@ fn load(c: u32) -> Agg {
     return a;
 }
 
-// Agrège un niveau de l'arbre (les niveaux sont traités du plus profond à
-// la racine, chacun dans son propre lancement : aucune course mémoire).
+// Aggregates one level of the tree (levels are processed from the deepest
+// to the root, each in its own dispatch: no memory race).
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let level = L.a;

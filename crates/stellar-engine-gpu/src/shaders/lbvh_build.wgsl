@@ -3,8 +3,8 @@
 @group(0) @binding(2) var<storage, read_write> children: array<vec2<u32>>;
 @group(0) @binding(3) var<storage, read_write> parents: array<u32>;
 
-// Longueur du préfixe commun des clés i et j (indices départageant les
-// clés égales) ; −1 hors limites.
+// Length of the common prefix of keys i and j (indices break ties between
+// equal keys); −1 out of bounds.
 fn delta(i: i32, j: i32) -> i32 {
     if (j < 0 || j >= i32(P.n)) {
         return -1;
@@ -17,9 +17,9 @@ fn delta(i: i32, j: i32) -> i32 {
     return i32(countLeadingZeros(ki ^ kj));
 }
 
-// Construction parallèle de l'arbre binaire radix (Karras, 2012).
-// Nœuds internes 0..n−2 (racine 0) ; feuilles = corps triés (bit LEAF).
-// parents : nœuds internes en [0, n−1), feuilles en [n−1, 2n−1).
+// Parallel construction of the binary radix tree (Karras, 2012).
+// Internal nodes 0..n−2 (root 0); leaves = sorted bodies (LEAF bit).
+// parents: internal nodes in [0, n−1), leaves in [n−1, 2n−1).
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = P.n;

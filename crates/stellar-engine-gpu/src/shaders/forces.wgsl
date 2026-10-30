@@ -3,43 +3,42 @@
 @group(0) @binding(2) var<storage, read> nodes: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> children: array<vec2<u32>>;
 
-// Parcours de Barnes-Hut par groupes : les 128 corps consécutifs d'un groupe
-// de travail (voisins dans l'ordre de Morton) parcourent l'arbre ensemble.
-// Un nœud est assimilé à un point s'il est assez loin de la boîte du groupe
-// entier (critère plus strict que pour chaque corps isolément) ; nœuds
-// acceptés et corps des feuilles s'accumulent dans une liste en mémoire
-// partagée, que chaque fil évalue ensuite pour son corps. Le parcours est
-// ainsi fait une fois pour 128 corps, et les lectures de l'arbre sont
-// partagées.
+// Barnes-Hut traversal by groups: the 128 consecutive bodies of a
+// workgroup (neighbours in Morton order) walk the tree together. A node is
+// treated as a point if it is far enough from the box of the whole group
+// (a stricter criterion than for each body alone); accepted nodes and
+// bodies of leaves accumulate in a list in shared memory, which each
+// thread then evaluates for its own body. The traversal is thus done once
+// for 128 bodies, and tree reads are shared.
 //
-// Le corps lui-même figure dans la liste (sa feuille n'est jamais acceptée
-// comme approximation) : sa contribution au potentiel, −m/ε, est retirée à
-// la fin ; celle à l'accélération est nulle.
+// The body itself is in the list (its leaf is never accepted as an
+// approximation): its contribution to the potential, −m/ε, is subtracted
+// at the end; its contribution to the acceleration is zero.
 //
-// La pile ne reçoit que des nœuds internes : à l'ouverture d'un nœud, ses
-// enfants feuilles passent directement dans la liste.
+// The stack receives only internal nodes: when a node is opened, its leaf
+// children go straight into the list.
 //
-// STACK (nœuds en attente, pile partagée parcourue par blocs de GROUP),
-// LIST et LIST_PAD sont fixés par le moteur selon la mémoire partagée de la
-// carte (préfixe du module).
+// STACK (pending nodes, shared stack walked in blocks of GROUP), LIST and
+// LIST_PAD are set by the engine according to the device's shared memory
+// (module prefix).
 
 const GROUP: u32 = 128u;
 
 var<workgroup> stack: array<u32, STACK>;
-// Interactions en attente d'évaluation ; vidée dès qu'elle dépasse
-// LIST − 2·GROUP (un tour en ajoute au plus deux par fil). LIST_PAD = LIST
-// + 4 : bourrage à un multiple de 4 pour la boucle déroulée.
+// Interactions waiting for evaluation; flushed as soon as it exceeds
+// LIST − 2·GROUP (one round adds at most two per thread). LIST_PAD = LIST
+// + 4: padding to a multiple of 4 for the unrolled loop.
 var<workgroup> list: array<vec4<f32>, LIST_PAD>;
-// Corps du groupe rencontrés comme feuilles (terme propre à retirer).
+// Bodies of the group met as leaves (self term to subtract).
 var<workgroup> seen: array<u32, GROUP>;
 var<workgroup> list_n: atomic<u32>;
 var<workgroup> push: atomic<u32>;
-// Fin de la dernière réservation réussie dans la pile.
+// End of the last successful reservation in the stack.
 var<workgroup> pushed: atomic<u32>;
 var<workgroup> top: u32;
 var<workgroup> pending: u32;
 
-// Ajoute le corps j à la liste.
+// Adds body j to the list.
 fn add_body(j: u32, g0: u32) {
     let s = atomicAdd(&list_n, 1u);
     list[s] = vec4<f32>(bodies[j].pos, bodies[j].mass);
@@ -48,7 +47,7 @@ fn add_body(j: u32, g0: u32) {
     }
 }
 
-// Attraction de e (position, masse) sur p : (accélération, m/r).
+// Attraction of e (position, mass) on p: (acceleration, m/r).
 fn interact(e: vec4<f32>, p: vec3<f32>) -> vec4<f32> {
     let d = e.xyz - p;
     let r2 = dot(d, d) + P.eps2;
@@ -57,9 +56,9 @@ fn interact(e: vec4<f32>, p: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(d * (mi * inv * inv), mi);
 }
 
-// Somme des interactions en attente (count arrondi au multiple de 4
-// supérieur, entrées de bourrage de masse nulle) ; quatre accumulateurs
-// indépendants pour masquer la latence.
+// Sum of the pending interactions (count rounded up to a multiple of 4,
+// padding entries of zero mass); four independent accumulators to hide
+// latency.
 fn evaluate(count: u32, p: vec3<f32>) -> vec4<f32> {
     var s0 = vec4<f32>(0.0);
     var s1 = vec4<f32>(0.0);
@@ -74,7 +73,7 @@ fn evaluate(count: u32, p: vec3<f32>) -> vec4<f32> {
     return (s0 + s1) + (s2 + s3);
 }
 
-// Fige le nombre d'interactions en attente et bourre la liste (fil 0).
+// Freezes the number of pending interactions and pads the list (thread 0).
 fn close_list() {
     let n = atomicLoad(&list_n);
     for (var k = n; k < (n + 3u) / 4u * 4u; k = k + 1u) {
@@ -101,7 +100,7 @@ fn main(
     }
     seen[t] = 0u;
 
-    // Boîte englobante du groupe (réduction dans la liste, encore libre).
+    // Bounding box of the group (reduction in the list, still free).
     list[t] = vec4<f32>(select(vec3<f32>(3.0e38), p, valid), 0.0);
     list[t + GROUP] = vec4<f32>(select(vec3<f32>(-3.0e38), p, valid), 0.0);
     workgroupBarrier();
@@ -122,7 +121,7 @@ fn main(
         atomicStore(&list_n, 0u);
     }
 
-    // (accélération, −potentiel)
+    // (acceleration, −potential)
     var sum = vec4<f32>(0.0);
     loop {
         let n_top = workgroupUniformLoad(&top);
@@ -143,7 +142,7 @@ fn main(
         if (c != NONE) {
             let v0 = nodes[3u * c];
             let rc2 = nodes[3u * c + 1u].w;
-            // Point de la boîte du groupe le plus proche du centre de masse.
+            // Point of the group's box closest to the center of mass.
             let d = clamp(v0.xyz, lo, hi) - v0.xyz;
             var accept = dot(d, d) > rc2;
             if (!accept) {
@@ -175,7 +174,7 @@ fn main(
                         add_body(ch.y & ~LEAF, g0);
                     }
                 } else {
-                    // Pile pleine (arbre pathologique) : approximation.
+                    // Stack full (pathological tree): approximation.
                     accept = true;
                 }
             }
@@ -186,7 +185,7 @@ fn main(
         }
         workgroupBarrier();
         if (t == 0u) {
-            // Les réservations réussies sont contiguës à partir de base.
+            // Successful reservations are contiguous from base.
             top = atomicLoad(&pushed);
             close_list();
         }

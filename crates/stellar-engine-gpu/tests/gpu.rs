@@ -1,8 +1,8 @@
-//! Tests du moteur GPU. Ignorés (avec un message) si aucune carte graphique
-//! compatible n'est disponible.
+//! Tests of the GPU engine. Skipped (with a message) if no compatible
+//! graphics card is available.
 //!
-//! Sans carte graphique (intégration continue), on peut utiliser le rendu
-//! logiciel : `WGPU_BACKEND=gl xvfb-run cargo test -p stellar-engine-gpu`.
+//! Without a graphics card (continuous integration), software rendering can
+//! be used: `WGPU_BACKEND=gl xvfb-run cargo test -p stellar-engine-gpu`.
 
 use glam::DVec3;
 use stellar_application::generator::generate_state;
@@ -36,7 +36,7 @@ fn state(bodies: BodySet) -> SimulationState {
     }
 }
 
-/// Construit le moteur, ou `None` (test ignoré) sans carte graphique.
+/// Builds the engine, or `None` (test skipped) without a graphics card.
 fn engine(s: SimulationState, p: PhysicsParams) -> Option<GpuEngine> {
     match GpuEngine::new(s, p) {
         Ok(e) => Some(e),
@@ -132,8 +132,8 @@ fn agrees_with_cpu_engine_over_steps() {
     for (id, p) in sg.bodies.ids.iter().zip(&sg.bodies.positions) {
         worst = worst.max((*p - pos_c[id]).length());
     }
-    // Écart dû à la simple précision et aux arbres différents : bien
-    // inférieur à la distance moyenne entre particules (~1,3).
+    // Gap due to single precision and to the different trees: well below the
+    // mean distance between particles (~1.3).
     assert!(worst < 0.05, "écart maximal CPU/GPU : {worst}");
     let (dg, dc) = (gpu.diagnostics(), cpu.diagnostics());
     let rel = (dg.total_energy() - dc.total_energy()).abs() / dc.total_energy().abs();
@@ -333,9 +333,10 @@ fn queries_positions_and_barycenter() {
     assert!((c - DVec3::new(-0.5, 0.5, 1.5)).length() < 1e-6);
 }
 
-/// Positions suivies : relues avec chaque pas (sans relecture à part),
-/// cohérentes avec l'état, corrigées des fusions du pas (corps absorbé
-/// absent, corps résultant au barycentre) ; le centre de masse suit aussi.
+/// Tracked positions: read back with every step (no separate readback),
+/// consistent with the state, corrected for the step's mergers (absorbed
+/// body absent, resulting body at the barycenter); the center of mass
+/// follows too.
 #[test]
 fn tracked_positions_follow_steps_and_merges() {
     let mut b = BodySet::default();
@@ -374,8 +375,8 @@ fn tracked_positions_follow_steps_and_merges() {
     assert!(merged, "le test doit provoquer une fusion");
 }
 
-/// Carte partagée : les tampons exposés à l'affichage contiennent, aux
-/// décalages annoncés, exactement les positions et masses de l'état.
+/// Shared device: the buffers exposed to the display contain, at the
+/// advertised offsets, exactly the positions and masses of the state.
 #[test]
 fn shared_device_exposes_current_bodies() {
     use stellar_engine_gpu::{BodiesView, SharedDevice};
@@ -407,7 +408,7 @@ fn shared_device_exposes_current_bodies() {
         queue: queue.clone(),
     };
 
-    // Nuage qui s'effondre, gros rayons : fusions, donc compactions.
+    // Collapsing cloud, large radii: mergers, hence compactions.
     let ic = InitialConditions {
         count: 2_000,
         radius: 10.0,
@@ -466,13 +467,13 @@ fn shared_device_exposes_current_bodies() {
         assert!(mass > 0.0, "corps mort dans l'état publié");
     }
 
-    // Sans carte partagée : pas de vue.
+    // Without a shared device: no view.
     let own = GpuEngine::new(sphere(100, 3), params()).expect("carte graphique");
     assert!(own.live_view().is_none());
 }
 
-/// Système central, amas compact éjecté (lié à lui-même, pas au système) et
-/// corps isolé éjecté.
+/// Central system, compact ejected cluster (bound to itself, not to the
+/// system) and an isolated ejected body.
 fn ejection_scene(cluster: u64) -> BodySet {
     let mut b = BodySet::default();
     for i in 0..50 {
@@ -523,7 +524,7 @@ fn cleanup_keeps_bound_ejected_cluster() {
     assert!((clusters[0].mass - 20.0).abs() < 1e-4);
     let ids = e.state().bodies.ids;
     assert!(ids.contains(&1_019) && !ids.contains(&200));
-    // Les moments relus sont corrigés du corps éliminé.
+    // The moments read back are corrected for the removed body.
     let com = e.center_of_mass().expect("barycentre");
     let expected = e.state().bodies.center_of_mass().expect("barycentre");
     assert!((com - expected).length() < 1e-2, "{com} ≠ {expected}");
@@ -541,7 +542,7 @@ fn cleanup_removes_small_ejected_groups() {
     assert_eq!(e.body_count(), 50);
 }
 
-/// Champ de marée et insertion : le moteur GPU suit le moteur CPU.
+/// Tidal field and insertion: the GPU engine follows the CPU engine.
 #[test]
 fn external_field_and_insertion_match_cpu() {
     use stellar_domain::ExternalField;
@@ -573,10 +574,9 @@ fn external_field_and_insertion_match_cpu() {
     assert_eq!(gpu.body_count(), 202);
     let (mg, mc) = (gpu.moments(), cpu.moments());
     assert!((mg.mass - mc.mass).abs() < 1e-3);
-    // Le champ accélère tout le système vers la source.
-    // Le champ accélère tout le système vers la source (≈ 1,67 en x) ; la
-    // dérive propre du moteur GPU (simple précision, parcours par groupes)
-    // reste de l'ordre du centième.
+    // The field accelerates the whole system towards the source (≈ 1.67 in x);
+    // the GPU engine's own drift (single precision, grouped traversal) stays
+    // of the order of a hundredth.
     assert!(mc.velocity.x > 1.5);
     assert!(
         (mg.velocity - mc.velocity).length() < 3e-2,
@@ -592,7 +592,7 @@ fn external_field_and_insertion_match_cpu() {
     }
 }
 
-/// Séparation d'un amas éjecté avec le moteur GPU.
+/// Split of an ejected cluster with the GPU engine.
 #[test]
 fn composite_split_on_gpu() {
     use stellar_application::MultiSystem;

@@ -13,7 +13,7 @@ fn expand(v: u32) -> u32 {
     return x;
 }
 
-// Code de Morton 30 bits (10 bits par axe) dans la boîte englobante.
+// 30-bit Morton code (10 bits per axis) within the bounding box.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;

@@ -9,7 +9,7 @@ fn radius(m: f32) -> f32 {
     return P.r0 * pow(max(m, 1.0e-30), 1.0 / 3.0);
 }
 
-// Distance minimale entre deux trajectoires rectilignes sur le pas.
+// Minimum distance between two straight trajectories over the step.
 fn swept_min_distance(a0: vec3<f32>, a1: vec3<f32>, b0: vec3<f32>, b1: vec3<f32>) -> f32 {
     let d0 = b0 - a0;
     let dv = (b1 - b0) - (a1 - a0);
@@ -25,9 +25,9 @@ fn overlaps(amin: vec3<f32>, amax: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>) 
     return all(amin <= bmax) && all(bmin <= amax);
 }
 
-// Contacts balayés : chaque corps parcourt l'arbre des boîtes balayées et
-// enregistre les paires (i < j) dont les trajectoires se rapprochent à
-// moins de la somme des rayons.
+// Swept contacts: each body walks the tree of swept boxes and records the
+// pairs (i < j) whose trajectories come closer than the sum of their
+// radii.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -42,7 +42,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var stack: array<u32, 72>;
     var sp = 1u;
     stack[0] = 0u;
-    // Plafond déjà atteint par d'autres fils : rien à enregistrer.
+    // Cap already reached by other threads: nothing to record.
     if (atomicLoad(&counter[0]) >= P.cap) {
         return;
     }
@@ -61,9 +61,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     && swept_min_distance(oi, bi.pos, oj, bj.pos) <= ri + rj) {
                     let slot = atomicAdd(&counter[0], 1u);
                     if (slot >= P.cap) {
-                        // Plafond atteint (effondrement d'un cœur dense) :
-                        // les paires suivantes seraient perdues, inutile de
-                        // poursuivre ; elles seront retrouvées au pas suivant.
+                        // Cap reached (collapse of a dense core): further pairs
+                        // would be lost, no point going on; they will be found
+                        // again at the next step.
                         return;
                     }
                     pairs[slot] = PairRec(bi, bj, i, j, 0u, 0u);

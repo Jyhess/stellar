@@ -2,7 +2,7 @@
 @group(0) @binding(1) var<storage, read> bodies: array<Body>;
 @group(0) @binding(2) var<storage, read_write> partial: array<vec4<f32>>;
 
-// Par corps : (m, m·x), (m·v, ½ m v²), (½ m φ, 0, 0, 0).
+// Per body: (m, m·x), (m·v, ½ m v²), (½ m φ, 0, 0, 0).
 var<workgroup> sa: array<vec4<f32>, 256>;
 var<workgroup> sb: array<vec4<f32>, 256>;
 var<workgroup> sc: array<vec4<f32>, 256>;

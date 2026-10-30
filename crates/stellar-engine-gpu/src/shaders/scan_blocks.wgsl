@@ -4,7 +4,7 @@
 
 var<workgroup> sh: array<u32, 256>;
 
-// Scan exclusif par blocs de 256 ; total de chaque bloc dans `sums`.
+// Exclusive scan by blocks of 256; total of each block in `sums`.
 @compute @workgroup_size(256)
 fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,

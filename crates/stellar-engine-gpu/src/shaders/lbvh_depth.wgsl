@@ -6,7 +6,7 @@
 
 const LEVELS: u32 = 72u;
 
-// Profondeur de chaque nœud interne et rang dans son niveau.
+// Depth of each internal node and its rank within its level.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (P.n < 2u || gid.x >= P.n - 1u) {

@@ -2,8 +2,8 @@
 @group(0) @binding(1) var<storage, read> ops: array<MergeOp>;
 @group(0) @binding(2) var<storage, read_write> bodies: array<Body>;
 
-// Applique les fusions calculées côté CPU : remplacement du corps
-// résultant, ou masse nulle pour les corps absorbés (supprimés ensuite).
+// Applies the mergers computed on the CPU: replacement of the resulting
+// body, or zero mass for absorbed bodies (removed afterwards).
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= P.n_ops) {

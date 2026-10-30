@@ -3,7 +3,7 @@
 @group(0) @binding(2) var<storage, read> src: array<Body>;
 @group(0) @binding(3) var<storage, read_write> dst: array<Body>;
 
-// Réordonne les corps selon le tri de Morton.
+// Reorders the bodies according to the Morton sort.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x < P.n) {

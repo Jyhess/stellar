@@ -3,7 +3,7 @@
 @group(0) @binding(2) var<storage, read> offsets: array<u32>;
 @group(0) @binding(3) var<storage, read_write> dst: array<Body>;
 
-// Ne garde que les corps de masse non nulle (scan exclusif des drapeaux).
+// Keeps only bodies of non-zero mass (exclusive scan of the flags).
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x < P.n && src[gid.x].mass > 0.0) {

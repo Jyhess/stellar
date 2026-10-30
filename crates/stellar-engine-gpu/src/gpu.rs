@@ -1,20 +1,20 @@
-//! Contexte wgpu et utilitaires : création des noyaux, lancements, relectures.
+//! wgpu context and utilities: kernel creation, dispatches, readbacks.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 use wgpu::util::DeviceExt;
 
-/// Taille des groupes de travail de tous les noyaux.
+/// Workgroup size of every kernel.
 pub const WG: u32 = 256;
 
-/// Nombre de groupes nécessaires pour `n` éléments.
+/// Number of workgroups needed for `n` elements.
 pub fn groups(n: usize) -> u32 {
     (n as u32).div_ceil(WG).max(1)
 }
 
-/// Grille de groupes de `size` fils couvrant `n` éléments, répartie sur
-/// deux dimensions au-delà de 65 535 groupes.
+/// Grid of workgroups of `size` threads covering `n` elements, spread over
+/// two dimensions beyond 65,535 workgroups.
 pub fn grid(n: usize, size: u32) -> (u32, u32) {
     let g = (n as u32).div_ceil(size).max(1);
     let gx = g.min(65_535);
@@ -23,22 +23,22 @@ pub fn grid(n: usize, size: u32) -> (u32, u32) {
 
 const COMMON: &str = include_str!("shaders/common.wgsl");
 
-/// Un noyau de calcul : pipeline à disposition automatique des liaisons.
+/// A compute kernel: pipeline with automatic bind group layout.
 pub struct Kernel {
     pub name: &'static str,
     pub pipeline: wgpu::ComputePipeline,
 }
 
-/// Enregistrement d'une soumission. Les lancements successifs partagent une
-/// même passe de calcul (en profilage, chaque noyau a sa passe horodatée) ;
-/// copies et effacements la referment.
+/// Recording of a submission. Successive dispatches share one compute pass
+/// (when profiling, each kernel gets its own timestamped pass); copies and
+/// clears close it.
 pub struct Encoder {
     enc: wgpu::CommandEncoder,
     pass: Option<wgpu::ComputePass<'static>>,
 }
 
 impl Encoder {
-    /// Encodeur sous-jacent (la passe en cours est refermée).
+    /// Underlying encoder (the current pass is closed).
     fn raw(&mut self) -> &mut wgpu::CommandEncoder {
         self.pass = None;
         &mut self.enc
@@ -61,7 +61,7 @@ impl Encoder {
     }
 }
 
-/// Carte graphique ouverte par l'interface, prêtée au moteur.
+/// Graphics device opened by the interface, lent to the engine.
 #[derive(Clone)]
 pub struct SharedDevice {
     pub adapter: wgpu::Adapter,
@@ -81,12 +81,12 @@ fn check_adapter(adapter: &wgpu::Adapter) -> Result<(), String> {
     }
 }
 
-/// Profilage par horodatage des passes (`STELLAR_GPU_PROFILE=1`, carte
-/// propre au moteur uniquement) : temps cumulé par noyau.
+/// Profiling by pass timestamps (`STELLAR_GPU_PROFILE=1`, engine on its own
+/// device only): cumulative time per kernel.
 struct Profiler {
     queries: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    /// Noyaux des passes horodatées depuis la dernière soumission.
+    /// Kernels of the timestamped passes since the last submission.
     pending: Vec<&'static str>,
     totals: HashMap<&'static str, (f64, u64)>,
     period_ns: f64,
@@ -95,8 +95,8 @@ struct Profiler {
 const PROFILE_PASSES: u32 = 2048;
 
 impl Profiler {
-    /// Horodatage du début et de la fin de la prochaine passe (si la
-    /// capacité n'est pas épuisée).
+    /// Timestamps of the start and end of the next pass (unless the capacity is
+    /// exhausted).
     fn slot(&mut self, name: &'static str) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
         let k = self.pending.len() as u32;
         if k >= PROFILE_PASSES {
@@ -116,14 +116,14 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pub adapter_name: String,
     pub limits: wgpu::Limits,
-    /// Groupes de liaisons déjà créés, par noyau et tampons liés : les
-    /// tampons du moteur sont fixes, chaque lancement réutilise le sien.
+    /// Bind groups already created, by kernel and bound buffers: the engine's
+    /// buffers are fixed, so each dispatch reuses its own.
     bind_groups: RefCell<HashMap<(&'static str, Vec<wgpu::Buffer>), wgpu::BindGroup>>,
     profiler: Option<RefCell<Profiler>>,
 }
 
 impl Gpu {
-    /// Ouvre la carte graphique la plus performante disponible.
+    /// Opens the most powerful graphics device available.
     pub fn open() -> Result<Self, String> {
         let backends =
             wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL);
@@ -185,8 +185,8 @@ impl Gpu {
         })
     }
 
-    /// Utilise une carte graphique déjà ouverte (celle de l'interface), pour
-    /// que ses tampons puissent être affichés sans copie.
+    /// Uses a device that is already open (the interface's), so that its buffers
+    /// can be displayed without copy.
     pub fn shared(shared: &SharedDevice) -> Result<Self, String> {
         check_adapter(&shared.adapter)?;
         let info = shared.adapter.get_info();
@@ -200,8 +200,8 @@ impl Gpu {
         })
     }
 
-    /// La carte partagée convient-elle au calcul ? (shaders de calcul, et
-    /// pas d'OpenGL, dont les limites sont trop étroites.)
+    /// Is the shared device suitable for computation? (Compute shaders, and not
+    /// OpenGL, whose limits are too narrow.)
     pub fn supports(shared: &SharedDevice) -> bool {
         shared.adapter.get_info().backend != wgpu::Backend::Gl
             && check_adapter(&shared.adapter).is_ok()
@@ -238,8 +238,8 @@ impl Gpu {
         })
     }
 
-    /// Tampon de stockage également lisible comme tampon de sommets
-    /// (affichage direct des corps).
+    /// Storage buffer that can also be read as a vertex buffer (live display of
+    /// the bodies).
     pub fn storage_vertex(&self, label: &str, size: u64) -> wgpu::Buffer {
         self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
@@ -264,7 +264,7 @@ impl Gpu {
         })
     }
 
-    /// Tampon de relecture (projetable en lecture).
+    /// Readback buffer (mappable for reading).
     pub fn readback(&self, label: &str, size: u64) -> wgpu::Buffer {
         self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
@@ -274,8 +274,8 @@ impl Gpu {
         })
     }
 
-    /// Attend la soumission `index`, puis passe à `f` les `size` premiers
-    /// octets du tampon de relecture `buffer` (projeté le temps de l'appel).
+    /// Waits for submission `index`, then passes to `f` the first `size` bytes
+    /// of the readback buffer `buffer` (mapped for the duration of the call).
     pub fn map_read(
         &self,
         buffer: &wgpu::Buffer,
@@ -307,8 +307,8 @@ impl Gpu {
             })
     }
 
-    /// Oublie les groupes de liaisons qui référencent `buffer` (tampon
-    /// remplacé par un plus grand) : sans quoi ils le garderaient en vie.
+    /// Forgets the bind groups that reference `buffer` (a buffer replaced by a
+    /// larger one): otherwise they would keep it alive.
     pub fn forget(&self, buffer: &wgpu::Buffer) {
         self.bind_groups
             .borrow_mut()
@@ -341,7 +341,7 @@ impl Gpu {
         })
     }
 
-    /// Enregistre un lancement de `k` sur `groups` groupes.
+    /// Records a dispatch of `k` on `groups` workgroups.
     pub fn run(
         &self,
         enc: &mut Encoder,
@@ -352,8 +352,8 @@ impl Gpu {
         self.run_2d(enc, k, buffers, (groups, 1));
     }
 
-    /// Lancement sur une grille de groupes à deux dimensions (au-delà de
-    /// 65 535 groupes).
+    /// Dispatch on a two-dimensional grid of workgroups (beyond 65,535
+    /// workgroups).
     pub fn run_2d(
         &self,
         enc: &mut Encoder,
@@ -371,7 +371,7 @@ impl Gpu {
         }
     }
 
-    /// Lancement indirect (nombre de groupes lu dans `args` à `offset`).
+    /// Indirect dispatch (workgroup count read from `args` at `offset`).
     pub fn run_indirect(
         &self,
         enc: &mut Encoder,
@@ -390,8 +390,8 @@ impl Gpu {
         }
     }
 
-    /// Passe de calcul où enregistrer le prochain lancement de `k` : la passe
-    /// en cours, ou, en profilage, une passe propre et horodatée.
+    /// Compute pass in which to record the next dispatch of `k`: the current
+    /// pass or, when profiling, a pass of its own with timestamps.
     fn pass<'e>(&self, enc: &'e mut Encoder, k: &Kernel) -> &'e mut wgpu::ComputePass<'static> {
         if let Some(prof) = &self.profiler {
             enc.pass = None;
@@ -468,8 +468,8 @@ impl Gpu {
         index
     }
 
-    /// Temps cumulés par noyau (ms, nombre de lancements), du plus coûteux
-    /// au moins coûteux ; vide sans profilage.
+    /// Cumulative times per kernel (ms, dispatch count), from most to least
+    /// expensive; empty without profiling.
     pub fn profile(&self) -> Vec<(&'static str, f64, u64)> {
         let Some(prof) = &self.profiler else {
             return Vec::new();
@@ -484,16 +484,16 @@ impl Gpu {
         v
     }
 
-    /// Relit `size` octets de `buffer` (attend la fin des travaux en cours).
+    /// Reads `size` bytes of `buffer` back (waits for the pending work).
     pub fn read(&self, buffer: &wgpu::Buffer, offset: u64, size: u64) -> Vec<u8> {
         self.read_with(buffer, offset, size, <[u8]>::to_vec)
     }
 
-    /// Relit `size` octets de `buffer` et les passe à `f` directement depuis
-    /// la mémoire projetée (sans copie intermédiaire).
+    /// Reads `size` bytes of `buffer` back and passes them to `f` straight from
+    /// the mapped memory (no intermediate copy).
     ///
-    /// N'attend que les travaux soumis jusqu'ici : quand la carte est
-    /// partagée avec l'interface, les images en cours ne sont pas attendues.
+    /// Waits only for the work submitted so far: when the device is shared with
+    /// the interface, frames in flight are not waited for.
     pub fn read_with<R>(
         &self,
         buffer: &wgpu::Buffer,

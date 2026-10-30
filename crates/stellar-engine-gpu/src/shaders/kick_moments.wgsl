@@ -2,8 +2,8 @@
 @group(0) @binding(1) var<storage, read_write> bodies: array<Body>;
 @group(0) @binding(2) var<storage, read_write> partial: array<vec4<f32>>;
 
-// Kick ½ dt, puis contribution du corps aux moments globaux (même réduction
-// que moments_partial) : une seule lecture des corps pour les deux.
+// Kick ½ dt, then the body's contribution to the global moments (same
+// reduction as moments_partial): a single read of the bodies for both.
 var<workgroup> sa: array<vec4<f32>, 256>;
 var<workgroup> sb: array<vec4<f32>, 256>;
 var<workgroup> sc: array<vec4<f32>, 256>;

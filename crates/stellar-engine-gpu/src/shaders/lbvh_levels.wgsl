@@ -4,7 +4,7 @@
 
 const LEVELS: u32 = 72u;
 
-// Décalages des niveaux et arguments de lancement indirect (un seul fil).
+// Level offsets and indirect dispatch arguments (a single thread).
 @compute @workgroup_size(1)
 fn main() {
     var acc = 0u;

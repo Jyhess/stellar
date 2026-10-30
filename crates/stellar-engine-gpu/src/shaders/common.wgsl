@@ -1,7 +1,7 @@
-// Structures partagées par tous les noyaux (préfixées à chaque module).
+// Structures shared by every kernel (prepended to each module).
 
-// Corps (48 octets). La position de début de pas, utile aux contacts
-// balayés, se déduit de la vitesse de dérive : pos − vel·dt.
+// Body (48 bytes). The start-of-step position, needed by swept contacts,
+// is derived from the drift velocity: pos − vel·dt.
 struct Body {
     pos: vec3<f32>,
     mass: f32,
@@ -24,12 +24,12 @@ struct Params {
     g: f32,
     limit2: f32,
     pad: f32,
-    // Champ extérieur (sous-systèmes) du premier et du second demi-kick.
+    // External field (subsystems) of the first and second half kicks.
     field_prev: Field,
     field_next: Field,
 };
 
-// Champ linéaire a(x) = acc + T·(x − center) ; center.w = 0 : aucun champ.
+// Linear field a(x) = acc + T·(x − center); center.w = 0: no field.
 struct Field {
     center: vec4<f32>,
     acc: vec4<f32>,
@@ -46,7 +46,7 @@ fn field_at(f: Field, x: vec3<f32>) -> vec3<f32> {
     return f.acc.xyz + vec3<f32>(dot(f.t0.xyz, d), dot(f.t1.xyz, d), dot(f.t2.xyz, d));
 }
 
-// Paramètres propres à une passe (tri, scan, niveau d'arbre).
+// Parameters specific to a pass (sort, scan, tree level).
 struct Pass {
     n: u32,
     a: u32,

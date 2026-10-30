@@ -8,8 +8,8 @@
 var<workgroup> sh: array<u32, 256>;
 var<workgroup> base: array<u32, 16>;
 
-// Dispersion stable : rang local de chaque élément parmi ceux de même
-// chiffre (scans par paires de chiffres, compteurs 16 bits empaquetés).
+// Stable scatter: local rank of each element among those with the same
+// digit (scans by pairs of digits, packed 16-bit counters).
 @compute @workgroup_size(256)
 fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,

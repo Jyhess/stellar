@@ -4,7 +4,7 @@
 
 var<workgroup> h: array<atomic<u32>, 16>;
 
-// Histogramme des chiffres (4 bits) par groupe ; disposition [chiffre][groupe].
+// Histogram of the digits (4 bits) per workgroup; layout [digit][workgroup].
 @compute @workgroup_size(256)
 fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,

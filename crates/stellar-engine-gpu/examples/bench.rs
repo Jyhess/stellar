@@ -1,9 +1,9 @@
-//! Banc d'essai CPU / GPU sur un nuage sphérique au repos :
+//! CPU / GPU benchmark on a spherical cloud at rest:
 //! `cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10`
-//! (nombre de corps, nombre de pas ; ajouter `gpu` ou `cpu` pour n'en tester
-//! qu'un, et `disque` pour un disque en rotation, comme `STELLAR_AUTODISK`).
+//! (body count, step count; add `gpu` or `cpu` to test only one engine, and
+//! `disque` for a rotating disc, like `STELLAR_AUTODISK`).
 //!
-//! Avec `STELLAR_GPU_PROFILE=1`, le temps de chaque noyau GPU est affiché.
+//! With `STELLAR_GPU_PROFILE=1`, the time of each GPU kernel is printed.
 use std::time::Instant;
 
 use stellar_application::generator::generate_state;
