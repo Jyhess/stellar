@@ -28,7 +28,7 @@ cargo clippy --workspace --all-targets
 
 Toolchain: Rust **1.89** at least (`rust-version` in `Cargo.toml`, imposed by locked dependencies: `uuid`, `icu_*`). GPU tests also run without a card with software rendering: `WGPU_BACKEND=gl` (plus `xvfb-run` under Linux).
 
-Quick starts for testing (full table in the README): `STELLAR_AUTOSTART=<n>`, `STELLAR_AUTODISK=1`, `STELLAR_ENGINE=cpu-barnes-hut|gpu-barnes-hut`, `STELLAR_AUTORECORD=<interval>`, `STELLAR_LOAD=<save>`, `STELLAR_REPLAY=<recording>`, `STELLAR_LANG=fr|en`. Console: `stellar-cli.exe --corps 2000 --pas 300`, `--charger`, `--reprendre`, `--help`; unknown argument gives exit code 2.
+Quick starts for testing (full table in the README): `STELLAR_AUTOSTART=<n>`, `STELLAR_AUTODISK=1`, `STELLAR_ENGINE=cpu-barnes-hut|gpu-barnes-hut`, `STELLAR_AUTORECORD=<interval>`, `STELLAR_LOAD=<save>`, `STELLAR_REPLAY=<recording>`, `STELLAR_LANG=fr|en`. Console: `stellar-cli.exe --bodies 2000 --steps 300`, `--load`, `--resume`, `--help`; unknown argument gives exit code 2.
 
 Two executables share one library (`stellar_app`, `lib.rs`): `stellar.exe` (windowed; with arguments it forwards to stellar-cli) and `stellar-cli.exe` (console; the prompt waits for it). The library is also the composition root: engine registration and `present_mode`. `saves\` and `recordings\` are relative to the current directory.
 

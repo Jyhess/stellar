@@ -24,44 +24,77 @@ use crate::{format, RECORDINGS_DIR, SAVES_DIR};
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
-/// Options d'aide.
-const HELP: [&str; 3] = ["--help", "-h", "--aide"];
-
 fn usage() -> String {
     tr!("Usage : stellar-cli [options]        nouvelle simulation sans fenêtre
-        stellar-cli --charger FICHIER     reprendre une sauvegarde (.stellar)
-        stellar-cli --reprendre FICHIER   reprendre un enregistrement (.stellarec)
+        stellar-cli --load FICHIER        reprendre une sauvegarde (.stellar)
+        stellar-cli --resume FICHIER      reprendre un enregistrement (.stellarec)
         stellar-cli --help                cette aide
 L'interface graphique est stellar.exe (sans argument).
 
 Nouvelle simulation :
-  --corps N          nombre de particules (défaut : 1000000)
-  --rayon R          rayon du nuage (défaut : 100)
-  --graine S         graine aléatoire (défaut : 42)
-  --disque           disque en rotation (sinon sphère)
-  --vitesse V        repos | alea | circ | orb | rad (défaut : orb)
-  --dispersion D     dispersion de la vitesse orbitale (défaut : 0,05)
-  --facteur F        multiple de la vitesse orbitale : < 1 effondrement,
+  --bodies N         nombre de particules (défaut : 1000000)
+  --radius R         rayon du nuage (défaut : 100)
+  --seed S           graine aléatoire (défaut : 42)
+  --disc             disque en rotation (sinon sphère)
+  --velocity V       rest | random | circ | orb | rad (défaut : orb)
+  --spread D         dispersion de la vitesse orbitale (défaut : 0,05)
+  --factor F         multiple de la vitesse orbitale : < 1 effondrement,
                      > 1 expansion (défaut : 1)
-  --vmin A --vmax B  plage de vitesse (alea, circ, rad)
-  --moteur M         gpu | cpu (défaut : gpu si une carte convient)
+  --vmin A --vmax B  plage de vitesse (random, circ, rad)
+  --engine M         gpu | cpu (défaut : gpu si une carte convient)
 
 Reprise :
-  --charger F        sauvegarde à reprendre ; son enregistrement lié est poursuivi,
+  --load F           sauvegarde à reprendre ; son enregistrement lié est poursuivi,
                      sinon un nouvel enregistrement commence
-  --poursuivre F     avec --charger : enregistrement compatible à prolonger depuis
+  --continue F       avec --load : enregistrement compatible à prolonger depuis
                      le pas de la sauvegarde (instantanés postérieurs supprimés)
-  --reprendre F      enregistrement à poursuivre depuis sa dernière sauvegarde liée
+  --resume F         enregistrement à poursuivre depuis sa dernière sauvegarde liée
 
 Dans tous les cas :
-  --nom NOM          nom de la simulation (défaut : date et paramètres, ou nom du fichier)
-  --intervalle N     un instantané tous les N pas (défaut : 10)
-  --poussiere N      poussière enregistrée par instantané, ou « toutes » (défaut : 1000000)
-  --pas N            s'arrêter après N pas (de plus, en reprise)
-  --temps T          s'arrêter après un temps simulé T (de plus, en reprise)
-  --duree M          s'arrêter après M minutes de calcul
+  --name NOM         nom de la simulation (défaut : date et paramètres, ou nom du fichier)
+  --interval N       un instantané tous les N pas (défaut : 10)
+  --dust N           poussière enregistrée par instantané, ou « all » (défaut : 1000000)
+  --steps N          s'arrêter après N pas (de plus, en reprise)
+  --time T           s'arrêter après un temps simulé T (de plus, en reprise)
+  --duration M       s'arrêter après M minutes de calcul
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
-sauvegardé (dossiers « {} » et « {} »).", SAVES_DIR, RECORDINGS_DIR)
+sauvegardé (dossiers « {} » et « {} »).
+Les anciens noms français des options (--corps, --pas…) restent acceptés.", SAVES_DIR, RECORDINGS_DIR)
+}
+
+/// Anciens noms français des options et des valeurs, toujours acceptés.
+const ALIASES: [(&str, &str); 22] = [
+    ("--corps", "--bodies"),
+    ("--rayon", "--radius"),
+    ("--graine", "--seed"),
+    ("--disque", "--disc"),
+    ("--vitesse", "--velocity"),
+    ("--dispersion", "--spread"),
+    ("--facteur", "--factor"),
+    ("--moteur", "--engine"),
+    ("--charger", "--load"),
+    ("--poursuivre", "--continue"),
+    ("--reprendre", "--resume"),
+    ("--nom", "--name"),
+    ("--intervalle", "--interval"),
+    ("--poussiere", "--dust"),
+    ("--pas", "--steps"),
+    ("--temps", "--time"),
+    ("--duree", "--duration"),
+    ("--aide", "--help"),
+    ("-h", "--help"),
+    // Valeurs.
+    ("repos", "rest"),
+    ("alea", "random"),
+    ("toutes", "all"),
+];
+
+/// Nom anglais d'une option ou d'une valeur (inchangé s'il n'a pas d'alias).
+fn canonical(a: &str) -> &str {
+    ALIASES
+        .iter()
+        .find(|(fr, _)| *fr == a)
+        .map_or(a, |&(_, en)| en)
 }
 
 /// Point de départ de la simulation.
@@ -89,7 +122,7 @@ struct Options {
 /// Analyse la ligne de commande (`Err("")` : aide demandée ; `Err(message)` :
 /// erreur).
 fn parse(args: &[String]) -> Result<Options, String> {
-    if args.iter().any(|a| HELP.contains(&a.as_str())) {
+    if args.iter().any(|a| canonical(a) == "--help") {
         return Err(String::new());
     }
     let mut o = Options {
@@ -124,56 +157,56 @@ fn parse(args: &[String]) -> Result<Options, String> {
     }
     while let Some(a) = it.next() {
         let new_option = matches!(
-            a.as_str(),
-            "--corps" | "--rayon" | "--graine" | "--disque" | "--vitesse" | "--dispersion"
-                | "--facteur" | "--vmin" | "--vmax" | "--moteur"
+            canonical(a),
+            "--bodies" | "--radius" | "--seed" | "--disc" | "--velocity" | "--spread"
+                | "--factor" | "--vmin" | "--vmax" | "--engine"
         );
         if new_option {
             o.new_options.push(a.clone());
         }
-        match a.as_str() {
+        match canonical(a) {
             // Ancienne forme (`stellar.exe --sans-affichage`) : sans effet.
             "--sans-affichage" => {}
-            "--corps" => o.initial.count = num(&value(&mut it, a)?, a)?,
-            "--rayon" => o.initial.radius = num(&value(&mut it, a)?, a)?,
-            "--graine" => o.initial.seed = num(&value(&mut it, a)?, a)?,
-            "--disque" => {
+            "--bodies" => o.initial.count = num(&value(&mut it, a)?, a)?,
+            "--radius" => o.initial.radius = num(&value(&mut it, a)?, a)?,
+            "--seed" => o.initial.seed = num(&value(&mut it, a)?, a)?,
+            "--disc" => {
                 o.initial.distribution = Distribution::Disk {
                     thickness: 0.05,
                     profile: DensityProfile::Exponential { scale: 0.3 },
                 }
             }
-            "--vitesse" => velocity = value(&mut it, a)?,
-            "--dispersion" => spread = num(&value(&mut it, a)?, a)?,
-            "--facteur" => factor = num(&value(&mut it, a)?, a)?,
+            "--velocity" => velocity = value(&mut it, a)?,
+            "--spread" => spread = num(&value(&mut it, a)?, a)?,
+            "--factor" => factor = num(&value(&mut it, a)?, a)?,
             "--vmin" => vmin = num(&value(&mut it, a)?, a)?,
             "--vmax" => vmax = num(&value(&mut it, a)?, a)?,
-            "--moteur" => o.engine = Some(value(&mut it, a)?),
-            "--charger" => load = Some(PathBuf::from(value(&mut it, a)?)),
-            "--poursuivre" => follow = Some(PathBuf::from(value(&mut it, a)?)),
-            "--reprendre" => resume = Some(PathBuf::from(value(&mut it, a)?)),
-            "--nom" => o.name = Some(value(&mut it, a)?),
-            "--intervalle" => o.record.interval = num::<u32>(&value(&mut it, a)?, a)?.max(1),
-            "--poussiere" => {
+            "--engine" => o.engine = Some(value(&mut it, a)?),
+            "--load" => load = Some(PathBuf::from(value(&mut it, a)?)),
+            "--continue" => follow = Some(PathBuf::from(value(&mut it, a)?)),
+            "--resume" => resume = Some(PathBuf::from(value(&mut it, a)?)),
+            "--name" => o.name = Some(value(&mut it, a)?),
+            "--interval" => o.record.interval = num::<u32>(&value(&mut it, a)?, a)?.max(1),
+            "--dust" => {
                 let v = value(&mut it, a)?;
-                o.record.dust_budget = if v == "toutes" { None } else { Some(num(&v, a)?) };
+                o.record.dust_budget = if canonical(&v) == "all" { None } else { Some(num(&v, a)?) };
             }
-            "--pas" => o.target = RunTarget::Steps(num(&value(&mut it, a)?, a)?),
-            "--temps" => o.target = RunTarget::SimTime(num(&value(&mut it, a)?, a)?),
-            "--duree" => {
+            "--steps" => o.target = RunTarget::Steps(num(&value(&mut it, a)?, a)?),
+            "--time" => o.target = RunTarget::SimTime(num(&value(&mut it, a)?, a)?),
+            "--duration" => {
                 let m: f64 = num(&value(&mut it, a)?, a)?;
                 o.target = RunTarget::WallTime(Duration::from_secs_f64(m.max(0.0) * 60.0));
             }
-            other => return Err(tr!("argument inconnu : {}", other)),
+            _ => return Err(tr!("argument inconnu : {}", a)),
         }
     }
     o.start = match (load, follow, resume) {
         (None, None, None) => Start::New,
         (Some(save), follow, None) => Start::Save(save, follow),
         (None, None, Some(rec)) => Start::Recording(rec),
-        (None, Some(_), _) => return Err(crate::i18n::tr("--poursuivre s'emploie avec --charger").to_owned()),
+        (None, Some(_), _) => return Err(crate::i18n::tr("--continue s'emploie avec --load").to_owned()),
         (Some(_), _, Some(_)) => {
-            return Err(crate::i18n::tr("--charger et --reprendre s'excluent").to_owned())
+            return Err(crate::i18n::tr("--load et --resume s'excluent").to_owned())
         }
     };
     if o.start != Start::New {
@@ -181,9 +214,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
             return Err(tr!("{} ne s'applique qu'à une nouvelle simulation", opt));
         }
     }
-    o.initial.velocity = match velocity.as_str() {
-        "repos" => VelocityMode::Rest,
-        "alea" => VelocityMode::Random { min: vmin, max: vmax },
+    o.initial.velocity = match canonical(&velocity) {
+        "rest" => VelocityMode::Rest,
+        "random" => VelocityMode::Random { min: vmin, max: vmax },
         "circ" => VelocityMode::CircularFixed { min: vmin, max: vmax },
         "orb" => VelocityMode::CircularOrbital { spread, factor },
         "rad" => VelocityMode::Radial { min: vmin, max: vmax },
@@ -312,7 +345,7 @@ pub fn run(args: &[String]) -> i32 {
                     eprintln!(
                         "{}",
                         tr!(
-                            "Erreur : aucune sauvegarde du dossier « {} » n'est liée à {} ; utiliser --charger SAUVEGARDE --poursuivre ENREGISTREMENT.",
+                            "Erreur : aucune sauvegarde du dossier « {} » n'est liée à {} ; utiliser --load SAUVEGARDE --continue ENREGISTREMENT.",
                             SAVES_DIR,
                             rec.display()
                         )
@@ -386,7 +419,7 @@ mod tests {
     #[test]
     fn parses_new_simulation_options() {
         let o = parse(&args(
-            "--corps 2000 --disque --vitesse repos --pas 500 --poussiere toutes --nom essai",
+            "--bodies 2000 --disc --velocity rest --steps 500 --dust all --name essai",
         ))
         .unwrap();
         assert_eq!(o.start, Start::New);
@@ -396,7 +429,7 @@ mod tests {
         assert_eq!(o.target, RunTarget::Steps(500));
         assert_eq!(o.record.dust_budget, None);
         assert_eq!(o.name.as_deref(), Some("essai"));
-        let o = parse(&args("--sans-affichage --duree 1,5 --dispersion 0,1 --facteur 0,8")).unwrap();
+        let o = parse(&args("--sans-affichage --duration 1,5 --spread 0,1 --factor 0,8")).unwrap();
         assert_eq!(o.target, RunTarget::WallTime(Duration::from_secs(90)));
         assert_eq!(
             o.initial.velocity,
@@ -405,31 +438,52 @@ mod tests {
     }
 
     #[test]
-    fn parses_resume_options() {
-        let o = parse(&args("--charger saves/a.stellar --pas 100")).unwrap();
-        assert_eq!(o.start, Start::Save("saves/a.stellar".into(), None));
+    fn accepts_former_french_names() {
+        let o = parse(&args(
+            "--corps 2000 --disque --vitesse repos --pas 500 --poussiere toutes --nom essai",
+        ))
+        .unwrap();
+        assert_eq!(o.initial.count, 2000);
+        assert!(matches!(o.initial.distribution, Distribution::Disk { .. }));
+        assert_eq!(o.initial.velocity, VelocityMode::Rest);
+        assert_eq!(o.target, RunTarget::Steps(500));
+        assert_eq!(o.record.dust_budget, None);
+        let o = parse(&args("--vitesse alea --vmin 1 --vmax 2 --duree 2")).unwrap();
+        assert_eq!(o.initial.velocity, VelocityMode::Random { min: 1.0, max: 2.0 });
         let o = parse(&args("--charger a.stellar --poursuivre r.stellarec")).unwrap();
-        assert_eq!(
-            o.start,
-            Start::Save("a.stellar".into(), Some("r.stellarec".into()))
-        );
-        let o = parse(&args("--reprendre r.stellarec --duree 10")).unwrap();
-        assert_eq!(o.start, Start::Recording("r.stellarec".into()));
-        assert!(parse(&args("--poursuivre r.stellarec")).is_err());
-        assert!(parse(&args("--charger a --reprendre b")).is_err());
+        assert_eq!(o.start, Start::Save("a.stellar".into(), Some("r.stellarec".into())));
+        assert_eq!(parse(&args("--aide")).err().as_deref(), Some(""));
+        // L'option est citée telle qu'elle a été écrite.
         let e = parse(&args("--charger a --corps 10")).unwrap_err();
         assert!(e.contains("--corps"), "{e}");
     }
 
     #[test]
+    fn parses_resume_options() {
+        let o = parse(&args("--load saves/a.stellar --steps 100")).unwrap();
+        assert_eq!(o.start, Start::Save("saves/a.stellar".into(), None));
+        let o = parse(&args("--load a.stellar --continue r.stellarec")).unwrap();
+        assert_eq!(
+            o.start,
+            Start::Save("a.stellar".into(), Some("r.stellarec".into()))
+        );
+        let o = parse(&args("--resume r.stellarec --duration 10")).unwrap();
+        assert_eq!(o.start, Start::Recording("r.stellarec".into()));
+        assert!(parse(&args("--continue r.stellarec")).is_err());
+        assert!(parse(&args("--load a --resume b")).is_err());
+        let e = parse(&args("--load a --bodies 10")).unwrap_err();
+        assert!(e.contains("--bodies"), "{e}");
+    }
+
+    #[test]
     fn help_and_unknown_arguments() {
         assert_eq!(parse(&args("--help")).err().as_deref(), Some(""));
-        assert_eq!(parse(&args("--pas 10 -h")).err().as_deref(), Some(""));
+        assert_eq!(parse(&args("--steps 10 -h")).err().as_deref(), Some(""));
         let e = parse(&args("--bidule")).unwrap_err();
         assert!(e.contains("--bidule"), "{e}");
-        let e = parse(&args("--pas 10 fichier.txt")).unwrap_err();
+        let e = parse(&args("--steps 10 fichier.txt")).unwrap_err();
         assert!(e.contains("fichier.txt"), "{e}");
-        assert!(parse(&args("--corps")).is_err());
-        assert!(parse(&args("--pas 10")).is_ok());
+        assert!(parse(&args("--bodies")).is_err());
+        assert!(parse(&args("--steps 10")).is_ok());
     }
 }

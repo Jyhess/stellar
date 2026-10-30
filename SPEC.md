@@ -11,7 +11,7 @@ The rules currently in force. This document is the reference when the code and t
 
 ## Architecture
 - **Clean architecture** (domain / use cases / adapters / infrastructure), except inside the engines, which are freely optimized (SoA, SIMD, GPU).
-- Engines are reached only through the `PhysicsEngine` / `EngineFactory` traits. They are selected in the advanced parameters, `STELLAR_ENGINE` or `--moteur`. `EngineFactory::create` returns a readable error rather than panicking.
+- Engines are reached only through the `PhysicsEngine` / `EngineFactory` traits. They are selected in the advanced parameters, `STELLAR_ENGINE` or `--engine`. `EngineFactory::create` returns a readable error rather than panicking.
 - File formats are independent of the engine. The GPU engine is the default when the probe succeeds; a GPU save falls back to the CPU engine on load when no card is available.
 - Simulation runs on a **dedicated thread, decoupled** from the display, which reads the latest published snapshot (at most 120 frames/s). With the GPU engine, the display reads the engine's buffers directly, and the full state is read back only every one to two seconds.
 - The simulation thread always wraps the engine in a composite of **subsystems** (`MultiSystem`; usually a single one).
@@ -53,5 +53,5 @@ The rules currently in force. This document is the reference when the code and t
 
 ## Simulation without display
 - From the home screen (monitoring screen, switch to the display) or with `stellar-cli.exe`. Automatic recording; stop at a step count, a simulated time, a real duration, or on demand; on stop, the recording is closed and the final state is saved under the simulation's name.
-- Command line: new simulation, `--charger`, `--poursuivre`, `--reprendre`; `--help`; exit code 2 on an unknown argument.
+- Command line: English option names (`--bodies`, `--load`, `--continue`, `--resume`, `--steps`…), former French names still accepted; `--help` in the interface language; exit code 2 on an unknown argument.
 

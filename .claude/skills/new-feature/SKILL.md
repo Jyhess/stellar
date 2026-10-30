@@ -27,7 +27,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 | New panel / button / option | `home.rs` or `sim.rs`, `?` help badge if it is a creation parameter |
 | New command-line option | `console.rs` (parser, `--help` text in `i18n.rs`, its tests), README "Simulation without display" |
 | New environment variable | where it is read, README "Environment variables" table, `CLAUDE.md` if it is a testing shortcut |
-| New engine | registration in `crates/stellar-app/src/lib.rs`, `--moteur` mapping in `console.rs` |
+| New engine | registration in `crates/stellar-app/src/lib.rs`, `--engine` mapping in `console.rs` |
 | Any feature | `SPEC.md` (rules in force), a line in the current or a new entry of `docs/history.md`, README sections concerned |
 
 Documentation is written in **English**. Code comments, error messages of the lower layers, CLI options and commit messages stay in **French**.

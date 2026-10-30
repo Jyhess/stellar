@@ -59,3 +59,6 @@ Decisions in the order they were made; v1 came from the initial question session
 ## v1.9 — documentation
 - Documentation in English (README, SPEC, `docs/`, CLAUDE.md, skills); `docs/` split out for formats, GPU engine, sub-simulations and this history (moved out of SPEC, which keeps only the rules in force).
 - Esc menu help: F5 label translated, F10 (quit) added.
+
+## v1.10 — command line in English
+- English option names (`--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|…`, `--spread`, `--factor`, `--engine`, `--load`, `--continue`, `--resume`, `--name`, `--interval`, `--dust N|all`, `--steps`, `--time`, `--duration`); the former French names and values remain accepted as aliases.

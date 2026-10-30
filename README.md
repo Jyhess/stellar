@@ -67,18 +67,18 @@ The first build takes a few minutes while the dependencies are downloaded and co
 For long computations: no rendering of the bodies, the whole graphics card for the computation, and automatic recording with an adjustable interval and dust budget.
 
 - **From the home screen**: tick "Without display", then choose a stop condition: number of steps, simulated time, real duration, or manual. A monitoring screen shows progress (step, steps/s, estimated remaining time, recording). "Stop and save" closes the recording and saves the final state under the simulation's name. "Show the simulation" switches to the usual display while computation and recording continue. Closing the window stops cleanly.
-- **From the command line**: `stellar-cli.exe` is a console application installed next to `stellar.exe`. The prompt waits for it to finish, and Ctrl+C stops it cleanly. `stellar-cli --help` lists the options (option names and help text are in French). An unknown argument is reported with exit code 2. `stellar.exe` started with arguments forwards them to `stellar-cli`.
+- **From the command line**: `stellar-cli.exe` is a console application installed next to `stellar.exe`. The prompt waits for it to finish, and Ctrl+C stops it cleanly. `stellar-cli --help` lists the options, in the interface language. The former French option names (`--corps`, `--pas`, `--charger`…) and values (`repos`, `alea`, `toutes`) are still accepted. An unknown argument is reported with exit code 2. `stellar.exe` started with arguments forwards them to `stellar-cli`.
 
   ```powershell
-  .\stellar-cli.exe --corps 4000000 --disque --pas 200000 --intervalle 20 --nom galaxie
-  .\stellar-cli.exe --charger saves\galaxie.stellar --pas 100000
-  .\stellar-cli.exe --reprendre recordings\galaxie.stellarec --duree 120
+  .\stellar-cli.exe --bodies 4000000 --disc --steps 200000 --interval 20 --name galaxy
+  .\stellar-cli.exe --load saves\galaxy.stellar --steps 100000
+  .\stellar-cli.exe --resume recordings\galaxy.stellarec --duration 120
   ```
 
-  - **New simulation**: `--corps` (bodies), `--rayon` (radius), `--graine` (seed), `--disque` (disc), `--vitesse repos|alea|circ|orb|rad` (velocity mode), `--dispersion` (spread), `--facteur` (multiple of the orbital velocity), `--vmin`/`--vmax`, `--moteur gpu|cpu` (engine).
-  - **Resume a save**: `--charger FILE`. The recording linked to the save is continued; otherwise a new recording starts. `--poursuivre FILE` instead extends a compatible recording from the save's step, deleting the later snapshots.
-  - **Resume a recording**: `--reprendre FILE` loads the latest save linked to the recording (the resume save, or an F5 save made during the recording) and continues it.
-  - **In every case**: `--nom` (name), `--intervalle` (snapshot interval), `--poussiere N|toutes` (dust budget), and a target: `--pas N` (steps) or `--temps T` (simulated time), both counted from the save's step when resuming, or `--duree minutes` (real duration). Without a target, it runs until Ctrl+C. Progress is printed every five seconds. On stop, the recording is closed and the final state is saved.
+  - **New simulation**: `--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|circ|orb|rad`, `--spread`, `--factor` (multiple of the orbital velocity), `--vmin`/`--vmax`, `--engine gpu|cpu`.
+  - **Resume a save**: `--load FILE`. The recording linked to the save is continued; otherwise a new recording starts. `--continue FILE` instead extends a compatible recording from the save's step, deleting the later snapshots.
+  - **Resume a recording**: `--resume FILE` loads the latest save linked to the recording (the resume save, or an F5 save made during the recording) and continues it.
+  - **In every case**: `--name`, `--interval` (snapshot interval), `--dust N|all` (dust budget), and a target: `--steps N` or `--time T` (simulated time), both counted from the save's step when resuming, or `--duration minutes` (real duration). Without a target, it runs until Ctrl+C. Progress is printed every five seconds. On stop, the recording is closed and the final state is saved.
 
 ### Controls
 
@@ -259,7 +259,7 @@ An ejected cluster that has moved far enough away becomes a **sub-simulation**: 
 registry.register(Arc::new(MyEngineFactory));
 ```
 
-The engine then appears in "Advanced parameters → Computation engine" and can be forced with `STELLAR_ENGINE=<id>`. Its identifier is stored in saves. For the command line, add its short name to the `--moteur` option in `crates/stellar-app/src/console.rs`, which maps `gpu` and `cpu` to identifiers.
+The engine then appears in "Advanced parameters → Computation engine" and can be forced with `STELLAR_ENGINE=<id>`. Its identifier is stored in saves. For the command line, add its short name to the `--engine` option in `crates/stellar-app/src/console.rs`, which maps `gpu` and `cpu` to identifiers.
 
 ---
 
