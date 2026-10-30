@@ -1,69 +1,72 @@
 # Stellar
 
-Simulateur gravitationnel N-corps en 3D. Un nuage de particules de masse 1 s'effondre sous l'effet de la gravité, et deux corps qui se touchent fusionnent. Le calcul se fait **sur la carte graphique** (moteur GPU par défaut : shaders de calcul wgpu) ou **sur le CPU** (Barnes-Hut multithread) ; l'affichage passe par wgpu dans les deux cas.
+A 3D gravitational N-body simulator for Windows. A cloud of particles of mass 1 collapses under gravity, and two bodies that touch merge. The computation runs **on the graphics card** (GPU engine, the default: wgpu compute shaders) or **on the CPU** (multithreaded Barnes-Hut). Rendering goes through wgpu in both cases. The interface is available in French and English.
 
-La spécification fonctionnelle se trouve dans [`SPEC.md`](SPEC.md).
+| Document | Content |
+|---|---|
+| this README | installation, usage, architecture, tests |
+| [`SPEC.md`](SPEC.md) | functional specification: current behaviour and history of decisions |
+| [`docs/formats.md`](docs/formats.md) | `.stellar` and `.stellarec` file formats, version history |
+| [`docs/gpu-engine.md`](docs/gpu-engine.md) | GPU engine: kernels, step sequence, constants, profiling |
+| [`docs/subsystems.md`](docs/subsystems.md) | sub-simulations: coupling, order of operations, invariants |
+| [`CLAUDE.md`](CLAUDE.md), [`.claude/skills/`](.claude/skills) | instructions for Claude Code |
 
 ---
 
-## 1. Installation sous Windows
+## 1. Installation on Windows
 
 ### Rust
 
-1. Téléchargez et lancez **rustup-init.exe** depuis <https://rustup.rs>.
-2. Si l'installeur le propose, acceptez l'installation des **Visual Studio Build Tools** (charge de travail « Développement Desktop en C++ », avec le SDK Windows). Rust en a besoin pour l'édition de liens.
-3. Ouvrez un **nouveau** terminal (PowerShell) et vérifiez :
+1. Download and run **rustup-init.exe** from <https://rustup.rs>.
+2. If the installer offers it, accept the **Visual Studio Build Tools** ("Desktop development with C++" workload, with the Windows SDK). Rust needs them for linking.
+3. Open a **new** terminal (PowerShell) and check the toolchain (Rust **1.89** or later is required):
 
 ```powershell
 rustc --version
 cargo --version
 ```
 
-### Compiler et lancer
+### Build and run
 
-Depuis le dossier `stellar` :
+From the `stellar` folder:
 
 ```powershell
 cargo run --release
 ```
 
-La première compilation prend quelques minutes, le temps de télécharger et de compiler les dépendances. Les suivantes sont rapides. Les exécutables produits se trouvent dans `target\release\` : `stellar.exe` (l'interface) et `stellar-cli.exe` (la ligne de commande, voir « Simulation sans affichage »).
+The first build takes a few minutes while the dependencies are downloaded and compiled; later builds are fast. The executables are in `target\release\`: `stellar.exe` (the interface) and `stellar-cli.exe` (the command line, see "Simulation without display").
 
-> Lancez toujours en `--release` : en mode debug, le calcul est plusieurs dizaines de fois plus lent.
+> Always build with `--release`: in debug mode, the computation is several tens of times slower.
 
-L'affichage est plafonné à 120 images par seconde. Sur les cartes NVIDIA et AMD (Vulkan) ou sous DirectX 12, il est synchronisé en mode « Mailbox » : sans déchirement, et sans que l'attente de l'écran ne bloque le moteur GPU, qui partage la carte (voir « Moteur GPU »).
-
-Comptez environ 420 octets de mémoire vive par particule : à peu près 4,2 Go pour 10 millions.
-
-En cas d'erreur fatale, une boîte de dialogue s'affiche et le détail est consigné dans `stellar-crash.log`, dans le répertoire de lancement.
-
-Les sauvegardes sont écrites dans le sous-dossier `saves\` du répertoire de lancement.
+- Display is capped at 120 frames per second. With NVIDIA and AMD cards (Vulkan) or under DirectX 12, it is synchronized in **Mailbox** mode: no tearing, and waiting for the screen does not block the GPU engine, which shares the card (see [`docs/gpu-engine.md`](docs/gpu-engine.md#live-view)).
+- Memory: about 420 bytes of RAM per particle (about 4.2 GB for 10 million) and, with the GPU engine, about 240 bytes of video memory per particle.
+- Saves go to the `saves\` subfolder and recordings to `recordings\`, both relative to the current directory.
 
 ---
 
-## 2. Utilisation
+## 2. Usage
 
-### Écran d'accueil
+### Home screen
 
-- **Nouvelle simulation** : nom, nombre de particules, rayon du nuage, graine aléatoire, répartition (sphère ou disque, avec épaisseur et profil de densité), vitesse initiale (repos, aléatoire, circulaire imposée, circulaire orbitale × facteur ± dispersion — choix par défaut ; facteur de 0,5 à 1,5 : 1 pour des orbites circulaires, moins pour un effondrement, plus pour une expansion —, radiale). Chaque paramètre porte une pastille « ? » qui explique son rôle.
-  - **Nom** : celui des sauvegardes (F5) et des enregistrements de la simulation. Par défaut, date, nombre de particules abrégé, répartition et vitesse initiale (`2026-10-28_1M_sph_orb`), avec l'heure si ce nom existe déjà ; il suit les paramètres tant qu'il n'est pas saisi (bouton « Auto » pour y revenir). Une simulation chargée reprend le nom de sa sauvegarde (sans « _reprise » ni numéro).
-  - **Nombre de particules** : curseur à crans 1-2-5 (1 000, 2 000, 5 000, 10 000…) jusqu'au maximum de la machine (limite du moteur, 80 % de la mémoire centrale, un milliard au plus), et champ de saisie exacte.
-  - Sous le formulaire : mémoire estimée et **durée estimée du premier pas** (d'après le banc d'essai).
-- **Paramètres avancés** : G, dt, adoucissement ε, rayon r₀ d'une particule de masse 1, précision θ, période et distance du nettoyage, seuils des amas éjectés (distance de liaison, nombre de corps, part de la masse), moteur de calcul. Par défaut, dt, ε, r₀ et la liaison sont déduits des conditions initiales :
-  - dt = temps de chute libre / 500 ;
-  - ε = 0,3 × distance moyenne entre voisins ;
-  - r₀ = 1 % de cette distance ;
-  - liaison des amas = distance moyenne entre voisins ; un amas est conservé à partir de 10 corps ou de 0,1 % de la masse initiale.
-- **Simulations sauvegardées** : la liste du dossier `saves\`, avec un bouton « Parcourir… » pour ouvrir un fichier situé ailleurs. Une simulation chargée redémarre en pause.
-- **Renommer, supprimer** (sauvegardes et enregistrements) : la suppression demande confirmation et envoie le fichier à la corbeille de Windows, avec en option le fichier lié (l'enregistrement d'une sauvegarde, les sauvegardes d'un enregistrement). Le renommage change aussi le fichier ; une sauvegarde et son enregistrement liés sont renommés ensemble et leurs liens mis à jour.
-- **Langue** : français ou anglais (liste en bas de l'accueil, ou menu Échap) ; par défaut celle de Windows, le choix est mémorisé dans `%APPDATA%\Stellar\langue`. Les nombres suivent la langue (virgule décimale et espace des milliers en français, point et virgule en anglais).
+- **New simulation**: name, number of particles, cloud radius, random seed, distribution (sphere or disc, with thickness and density profile), initial velocity. The velocity modes are rest, random, imposed circular, orbital circular × factor ± spread (the default) and radial. The factor ranges from 0.5 to 1.5: 1 gives circular orbits, less gives a collapse, more an expansion. Each parameter has a "?" badge that explains it.
+  - **Name**: used for the simulation's saves (F5) and recordings. By default it combines the date, the abbreviated particle count, the distribution and the initial velocity (`2026-10-28_1M_sph_orb`), plus the time if that name already exists. It follows the parameters until you type one; the "Auto" button restores this behaviour. A loaded simulation takes the name of its save, without "_reprise" or a number.
+  - **Number of particles**: a 1-2-5 stepped slider (1,000, 2,000, 5,000, 10,000…) up to the machine's maximum, plus an exact input field. The maximum is the engine limit, 80 % of main memory, or one billion, whichever is lowest.
+  - Below the form: the estimated memory and the **estimated duration of the first step**, based on the benchmark.
+- **Advanced parameters**: G, dt, softening ε, radius r₀ of a particle of mass 1, accuracy θ, cleanup period and distance, thresholds of ejected clusters (link length, number of bodies, share of the mass), computation engine. By default, dt, ε, r₀ and the link length are derived from the initial conditions:
+  - dt = free-fall time / 500;
+  - ε = 0.3 × mean distance between neighbours;
+  - r₀ = 1 % of that distance;
+  - cluster link length = mean distance between neighbours. A cluster is kept from 10 bodies or 0.1 % of the initial mass.
+- **Saved simulations**: the list of the `saves\` folder, with a "Browse…" button to open a file stored elsewhere. A loaded simulation starts paused.
+- **Rename, delete** (saves and recordings): deleting asks for confirmation and sends the file to the Windows recycle bin, optionally with the linked file (a save's recording, a recording's saves). Renaming also renames the file. A save and its linked recording are renamed together, and their links are updated.
+- **Language**: French or English, from the list at the bottom of the home screen or from the Esc menu. The default is the Windows language, and the choice is stored in `%APPDATA%\Stellar\langue`. Numbers follow the language: decimal comma and space as thousands separator in French, point and comma in English.
 
-### Simulation sans affichage
+### Simulation without display
 
-Pour les longs calculs : aucun rendu des corps, toute la carte graphique pour le calcul, enregistrement automatique (intervalle et budget de poussière réglables).
+For long computations: no rendering of the bodies, the whole graphics card for the computation, and automatic recording with an adjustable interval and dust budget.
 
-- **Depuis l'accueil** : case « Sans affichage », puis condition d'arrêt — nombre de pas, temps simulé, durée réelle, ou manuel. Un écran de suivi montre l'avancement (pas, pas/s, temps restant estimé, enregistrement) ; « Arrêter et sauvegarder » clôt l'enregistrement et sauvegarde l'état final sous le nom de la simulation, « Afficher la simulation » bascule vers l'affichage habituel (le calcul et l'enregistrement continuent). Fermer la fenêtre arrête proprement.
-- **En ligne de commande** : `stellar-cli.exe`, application console installée à côté de `stellar.exe` (l'invite attend sa fin, Ctrl+C l'arrête proprement). `stellar-cli --help` liste les options ; un argument inconnu est signalé avec un code de sortie 2. `stellar.exe` lancé avec des arguments renvoie vers `stellar-cli`.
+- **From the home screen**: tick "Without display", then choose a stop condition: number of steps, simulated time, real duration, or manual. A monitoring screen shows progress (step, steps/s, estimated remaining time, recording). "Stop and save" closes the recording and saves the final state under the simulation's name. "Show the simulation" switches to the usual display while computation and recording continue. Closing the window stops cleanly.
+- **From the command line**: `stellar-cli.exe` is a console application installed next to `stellar.exe`. The prompt waits for it to finish, and Ctrl+C stops it cleanly. `stellar-cli --help` lists the options (option names and help text are in French). An unknown argument is reported with exit code 2. `stellar.exe` started with arguments forwards them to `stellar-cli`.
 
   ```powershell
   .\stellar-cli.exe --corps 4000000 --disque --pas 200000 --intervalle 20 --nom galaxie
@@ -71,225 +74,236 @@ Pour les longs calculs : aucun rendu des corps, toute la carte graphique pour le
   .\stellar-cli.exe --reprendre recordings\galaxie.stellarec --duree 120
   ```
 
-  - **Nouvelle simulation** : `--corps`, `--rayon`, `--graine`, `--disque`, `--vitesse repos|alea|circ|orb|rad`, `--dispersion`, `--facteur` (multiple de la vitesse orbitale), `--vmin`/`--vmax`, `--moteur gpu|cpu`.
-  - **Reprise d'une sauvegarde** : `--charger FICHIER` ; l'enregistrement lié à la sauvegarde est poursuivi, sinon un nouvel enregistrement commence ; `--poursuivre FICHIER` prolonge à la place un enregistrement compatible à partir du pas de la sauvegarde (instantanés postérieurs supprimés).
-  - **Reprise d'un enregistrement** : `--reprendre FICHIER` charge la dernière sauvegarde liée à l'enregistrement (sauvegarde de reprise ou F5 faite pendant l'enregistrement) et le poursuit.
-  - **Dans tous les cas** : `--nom`, `--intervalle`, `--poussiere N|toutes`, et une cible `--pas N`, `--temps T` (comptés à partir du pas de la sauvegarde en reprise) ou `--duree minutes` ; sans cible, jusqu'à Ctrl+C. L'avancement s'affiche toutes les cinq secondes ; à l'arrêt, l'enregistrement est clos et l'état final sauvegardé.
+  - **New simulation**: `--corps` (bodies), `--rayon` (radius), `--graine` (seed), `--disque` (disc), `--vitesse repos|alea|circ|orb|rad` (velocity mode), `--dispersion` (spread), `--facteur` (multiple of the orbital velocity), `--vmin`/`--vmax`, `--moteur gpu|cpu` (engine).
+  - **Resume a save**: `--charger FILE`. The recording linked to the save is continued; otherwise a new recording starts. `--poursuivre FILE` instead extends a compatible recording from the save's step, deleting the later snapshots.
+  - **Resume a recording**: `--reprendre FILE` loads the latest save linked to the recording (the resume save, or an F5 save made during the recording) and continues it.
+  - **In every case**: `--nom` (name), `--intervalle` (snapshot interval), `--poussiere N|toutes` (dust budget), and a target: `--pas N` (steps) or `--temps T` (simulated time), both counted from the save's step when resuming, or `--duree minutes` (real duration). Without a target, it runs until Ctrl+C. Progress is printed every five seconds. On stop, the recording is closed and the final state is saved.
 
-### Commandes
+### Controls
 
-| Touche | Action |
+Letter keys are read by character and laid out for an AZERTY keyboard.
+
+| Key | Action |
 |---|---|
-| Z / S | avancer / reculer (en suivi : rapprocher / éloigner de la cible) |
-| Q / D | gauche / droite (sans effet en suivi) |
-| A / E | basculer la vue autour de l'axe de visée |
-| H | redresser progressivement l'horizon : le haut de l'écran revient sur la normale au disque |
-| Maj / Ctrl | déplacement ×5 / ×0,2 |
-| + / − | multiplicateur de vitesse |
-| Souris | orientation de la vue, dans le repère de l'écran (en suivi : tourner autour de la cible) |
-| Molette | avancer / reculer comme Z / S (en suivi : distance à la cible ; Maj accélère) |
-| Ctrl + molette | zoom optique |
-| F | suivre la sélection (corps ou barycentre) / cesser le suivi |
-| G | grille du plan du disque |
-| Clic gauche | suivre le corps visé (réticule, ou pointeur quand la souris est libre) |
-| Origine | aller au corps le plus massif |
-| PgDn / PgUp | corps suivant / précédent dans l'ordre des masses |
-| B | sélectionner le barycentre et le regarder de face au disque (selon l'axe du moment cinétique), en conservant la distance |
-| C | viser le centre de gravité (vol libre) |
-| T | mode trace : trajectoires des 10 corps les plus massifs visibles à l'écran à cet instant / effacer |
-| R | traces : référentiel suivant — corps sélectionné, barycentre de la simulation, ou barycentre de l’amas lié du corps sélectionné |
-| V | vue d'ensemble : recul jusqu'à voir 90 % de la masse, dans la direction de visée actuelle |
-| Espace | pause / reprise |
-| P | pas à pas |
-| Tab | libérer / capturer la souris |
-| Clic droit | reprendre la visée quand la souris est libre |
-| F5 | sauvegarder |
-| Échap | menu (reprendre, sauvegarder, accueil, quitter) |
+| Z / S | forward / backward (when tracking: closer to / farther from the target) |
+| Q / D | left / right (no effect when tracking) |
+| A / E | roll the view around the line of sight |
+| H | progressively level the horizon: the top of the screen returns to the disc normal |
+| Shift / Ctrl | movement × 5 / × 0.2 |
+| + / − | speed multiplier |
+| Mouse | look around, in the screen's frame (when tracking: orbit the target) |
+| Wheel | forward / backward like Z / S (when tracking: distance to the target; Shift speeds it up) |
+| Ctrl + wheel | optical zoom |
+| F | track the selection (body or barycenter) / stop tracking |
+| G | grid of the disc plane |
+| Left click | track the aimed body (crosshair, or pointer when the mouse is released) |
+| Home | go to the most massive body |
+| PgDn / PgUp | next / previous body by mass |
+| B | select the barycenter and look at the disc face-on (along the angular momentum axis), keeping the distance |
+| C | aim at the center of gravity (free flight) |
+| T | trace mode: trajectories of the 10 most massive bodies visible on screen at that moment / clear |
+| R | traces: next reference frame (selected body, simulation barycenter, or barycenter of the selected body's bound cluster) |
+| V | overview: move back until 90 % of the mass is visible, along the current line of sight |
+| Space | pause / resume |
+| P | single step |
+| Tab | release / capture the mouse |
+| Right click | resume aiming when the mouse is released |
+| F5 | save |
+| F9 | start / stop recording |
+| F10 | quit |
+| Esc | menu (resume, save, home, quit, key help) |
 
-Quand un corps (ou le barycentre) est suivi, il reste au centre de l'écran : la souris fait tourner la caméra autour de lui, Z / S règlent la distance et A / E basculent la vue. Si ce corps fusionne, le suivi passe au corps qui en résulte. F rend la main en vol libre sans rien changer à la vue. L'orientation est libre dans toutes les directions (on peut passer par-dessus un objet) ; H ramène l'horizon sur le plan du disque. La vitesse est proportionnelle à la distance au corps sélectionné, ou au barycentre si rien n'est sélectionné : lente près de la cible, rapide au loin. À l'écran, un trièdre (coin inférieur gauche) montre les axes X, Y, Z et la normale au disque N, et une flèche au bord de l'écran indique la direction et la distance du barycentre et du corps sélectionné quand ils sont hors champ. En mode trace, chaque trace a sa couleur, rappelée dans le panneau « Corps ». Elle reçoit un point à chaque pas de calcul et se poursuit sur le corps issu d'une fusion. Le panneau propose deux affichages :
+**Tracking.** A tracked body (or the barycenter) stays at the center of the screen: the mouse orbits the camera around it, Z / S set the distance and A / E roll the view. If the body merges, tracking moves to the resulting body. F hands back free flight without changing the view. Orientation is unrestricted in every direction (you can go over the top of an object); H brings the horizon back to the disc plane. Speed is proportional to the distance to the selected body, or to the barycenter when nothing is selected: slow near the target, fast far away. Moving from one body to another (click, Home, PgDn/PgUp, ranking) keeps the line of sight, the zoom and the distance to the target.
 
-- l'**historique** complet depuis l'activation (décimé au-delà de 4 096 points) ;
-- une **queue** des N derniers pas, de 10 à 5 000, qui s'estompe vers le passé.
+**On-screen guides.** A trihedron in the lower-left corner shows the X, Y, Z axes and the disc normal N. When the barycenter or the selected body is off screen, an arrow at the screen edge shows its direction and distance.
 
-Les traces sont toujours vues dans un **référentiel** (touche R pour passer au suivant) : chaque point devient p(t) − r(t) + r(maintenant), où r est la trajectoire du corps sélectionné, du barycentre de la simulation, ou du barycentre de l'**amas local** du corps sélectionné (groupe lié qui le contient, même règle que le nettoyage, redésigné toutes les une à deux secondes ; ses 512 membres les plus massifs sont suivis à chaque pas). Sans corps sélectionné, le barycentre sert de référentiel. La trajectoire du barycentre est enregistrée dès l'activation des traces, ce qui permet de relire tout l'historique dans son référentiel. La légende donne, pour chaque trace, la masse du corps et sa part de la masse présente. Le classement des plus massifs ajoute une ligne pour le corps sélectionné quand il n'en fait pas partie. La référence reste ainsi fixe à l'écran et les orbites autour d'elle apparaissent. Sa trajectoire vient de sa propre trace si elle fait partie des corps tracés, sinon d'une piste enregistrée depuis sa sélection. Dans ce second cas, la partie plus ancienne des traces n'est pas affichée.
+**Traces.** Each trace has its own colour, repeated in the "Bodies" panel. It gets one point per computation step and continues on the body produced by a merger. Two displays are available:
 
-Les traces ne sont pas sauvegardées.
+- the full **history** since activation (decimated beyond 4,096 points);
+- a **tail** of the last N steps, from 10 to 5,000, fading into the past.
 
-Le panneau « Simulation » indique la masse présente et la masse éjectée, c'est-à-dire sortie de la simulation par le nettoyage, avec sa part de la masse initiale. Le classement des corps les plus massifs donne la part de chacun dans la masse présente.
+Traces are always shown in a **reference frame** (R moves to the next one). Each point becomes p(t) − r(t) + r(now), where r is the trajectory of the selected body, of the simulation barycenter, or of the barycenter of the selected body's **local cluster**. The local cluster is the bound group that contains the body, found with the same rule as cleanup and updated every one to two seconds; its 512 most massive members are tracked at every step. The reference therefore stays still on screen and orbits around it become visible. Without a selected body, the barycenter is the reference. The barycenter's trajectory is recorded as soon as traces are activated, so the whole history can be replayed in its frame. A selected body's trajectory comes from its own trace when it is traced, otherwise from a track recorded since its selection; in that case the older part of the traces is not shown. The legend gives the mass of each traced body and its share of the present mass. Traces are not saved.
 
-Le panneau « Corps » liste aussi les **sous-simulations** et les **amas éjectés** que le nettoyage a conservés (voir plus bas) : corps repère (le plus massif), nombre de corps, masse et distance au barycentre. Un clic sur une sous-simulation sélectionne son **barycentre** et y centre la caméra, à une distance qui la montre en entier (B la montre de face ; le panneau donne ses corps, sa masse, sa vitesse, sa taille). Si elle se réunit à une autre, la caméra suit l'ensemble réuni ; réunie à la simulation principale sans autre sous-simulation, elle revient au barycentre global. Un clic sur un amas éjecté sélectionne son corps repère. La liste des amas est mise à jour à chaque nettoyage ; ces listes n'existent pas en relecture.
+**Panels.** The "Simulation" panel shows the present mass and the ejected mass, i.e. the mass removed by cleanup, with its share of the initial mass. The ranking of the most massive bodies gives each one's share of the present mass, with an extra line for the selected body when it is not in the top ten.
 
-En passant d'un corps à un autre (clic, Origine, PgDn/PgUp, classement), la direction de visée, le zoom et la distance à la cible sont conservés.
+The "Bodies" panel also lists the **sub-simulations** and the **ejected clusters** kept by cleanup (see [Sub-simulations](#sub-simulations)), with marker body (the most massive one), body count, mass and distance to the barycenter.
+
+- **Clicking a sub-simulation** selects its **barycenter** and centres the camera on it, at a distance that shows it entirely. B shows it face-on, and the panel gives its bodies, mass, velocity and size. If it merges with another one, the camera follows the merged whole. If it merges back into the main simulation and no other sub-simulation remains, the camera returns to the global barycenter.
+- **Clicking an ejected cluster** selects its marker body.
+
+The cluster list is updated at each cleanup. Neither list exists during playback.
+
+### Recording and playback
+
+A heavy simulation can be recorded and then replayed smoothly at 60 frames per second, with fully free navigation.
+
+- **Record:**
+  - **F9**, or the "Simulation" panel, starts or stops recording at any time;
+  - on the home screen, "Record from the start" starts recording with the simulation;
+  - a snapshot (positions, velocities, masses, mergers) is written every N steps (adjustable) to `recordings\` (`.stellarec` files);
+  - writing happens on a dedicated thread and barely slows the computation down.
+- **Dust budget (optional):**
+  - at most B particles of mass 1 per snapshot (1 million by default), chosen by identifier: always the same ones, with no flicker;
+  - more massive bodies are always all recorded;
+  - each kept particle is brightened in proportion to the particles it stands for, and the exclusion stops by itself once the body count falls below the budget;
+  - a snapshot weighs about 12 bytes per recorded body, i.e. about 12 MB per million.
+- **Replay:**
+  - from the "Recordings" list on the home screen;
+  - between two snapshots, each body follows a cubic Hermite interpolation of its positions and velocities, and an absorbed body joins the body that absorbs it;
+  - controls: Space (play / pause), ← / → (previous / next snapshot), ↑ / ↓ (speed), ⌫ (playback direction), time bar;
+  - camera, selection, traces (T, R) and overview work as in a live simulation.
+- **Suspend and resume:**
+  - quitting the program or returning to the home screen during a recording closes the recording cleanly;
+  - the simulation is then saved automatically as "<recording>_reprise" and linked to the recording;
+  - reloading that save, or clicking "Resume" in the recordings list, continues the recording in the same file as soon as the computation restarts, with no gap or duplicate;
+  - reloading an older resume save truncates the recording at that point: later snapshots are deleted.
+- **F5 save during a recording:** the save remembers the running recording. Reloading it continues the recording at the save's step and deletes the later snapshots.
+- **Continue a recording from any save:**
+  - the "Continue a recording…" button of a save lists the compatible recordings (same initial conditions, at least one snapshot before the save) and the number of snapshots that will be deleted;
+  - a snapshot is written immediately at the save's step, then the recording goes on at its original interval;
+  - bodies that disappeared between the last kept snapshot and the save get their real fate when the next snapshot of the old recording has it; otherwise they are marked "eliminated";
+  - a recording of another simulation is refused, which is detected when the save's massive bodies are missing from the recording.
+- **After a crash:** an interrupted recording remains readable, because its index is rebuilt on opening.
+
+### GPU engine
+
+If a compatible graphics card (DirectX 12 or Vulkan) is detected, the **GPU** engine becomes the default engine. The CPU engine remains available in "Advanced parameters → Computation engine", which also shows the detected card.
+
+- **Same algorithm as the CPU engine:** Barnes-Hut, Leapfrog, swept mergers, cleanup, in single precision.
+- **Capacity:** at most 16.7 million bodies.
+- **Performance** (RTX 4060 Ti, sphere at rest): about 14 ms per step for 1 million bodies, 62 ms for 4 million.
+- **Automatic fallback:** a save made with the GPU engine reloads with the CPU engine when no card is available.
+- **Live view:** the engine computes on the interface's graphics card, which draws the bodies straight from the engine's buffers, with no copy. The full state is read back only every one to two seconds (picking, ranking, barycenter, saving). The step, energies, center of mass and the tracked body's position are up to date in every snapshot.
+
+Internals, kernels and profiling: [`docs/gpu-engine.md`](docs/gpu-engine.md).
 
 ---
 
-### Enregistrement et relecture
+## 3. Troubleshooting
 
-Une simulation lourde peut être enregistrée puis rejouée de façon fluide, à 60 images par seconde, avec une navigation entièrement libre.
-
-- **Enregistrer :**
-  - **F9**, ou le panneau « Simulation », démarre ou arrête l'enregistrement à tout moment ;
-  - à l'accueil, la case « Enregistrer dès le départ » lance l'enregistrement avec la simulation ;
-  - un instantané (positions, vitesses, masses, fusions) est écrit tous les N pas, réglable, dans le dossier `recordings\` (fichiers `.stellarec`) ;
-  - l'écriture se fait dans un thread dédié, ce qui ne ralentit presque pas le calcul.
-- **Budget de poussière (optionnel) :**
-  - au plus B particules de masse 1 par instantané (1 million par défaut), choisies d'après leur identifiant : ce sont toujours les mêmes, sans clignotement ;
-  - les corps plus massifs sont toujours tous enregistrés ;
-  - chaque particule gardée est éclairée en proportion de celles qu'elle représente, et l'exclusion disparaît d'elle-même quand le nombre de corps passe sous le budget ;
-  - un instantané pèse environ 12 octets par corps enregistré, soit environ 12 Mo pour un million.
-- **Rejouer :**
-  - depuis la liste « Enregistrements » de l'accueil ;
-  - entre deux instantanés, chaque corps suit une interpolation cubique d'Hermite sur ses positions et vitesses, et un corps absorbé rejoint celui qui l'absorbe ;
-  - commandes : Espace (lecture / pause), ← / → (instantané précédent / suivant), ↑ / ↓ (vitesse), ⌫ (sens de lecture), barre de temps ;
-  - la caméra, la sélection, les traces (T, R) et la vue d'ensemble fonctionnent comme en direct.
-- **Suspendre et reprendre :**
-  - si l'on quitte le programme ou revient à l'accueil pendant un enregistrement, celui-ci est clos proprement ;
-  - la simulation est alors sauvegardée automatiquement (« <enregistrement>_reprise ») et liée à l'enregistrement ;
-  - recharger cette sauvegarde, ou cliquer « Reprendre » dans la liste des enregistrements, poursuit l'enregistrement dans le même fichier dès que le calcul est relancé, sans trou ni doublon ;
-  - recharger une sauvegarde de reprise plus ancienne tronque l'enregistrement à ce point : les instantanés postérieurs sont supprimés.
-- **Sauvegarde F5 pendant un enregistrement :** la sauvegarde mémorise l'enregistrement en cours ; la recharger le poursuit au pas de la sauvegarde, en supprimant les instantanés postérieurs.
-- **Poursuivre un enregistrement depuis n'importe quelle sauvegarde :**
-  - le bouton « Poursuivre un enregistrement… » d'une sauvegarde liste les enregistrements compatibles (mêmes conditions initiales, au moins un instantané antérieur à la sauvegarde) et le nombre d'instantanés qui seront supprimés ;
-  - un instantané est écrit aussitôt au pas de la sauvegarde, puis l'enregistrement continue à son intervalle d'origine ;
-  - les corps disparus entre le dernier instantané conservé et la sauvegarde reçoivent leur devenir réel s'il figure dans l'instantané suivant de l'ancien enregistrement, sinon ils sont marqués « éliminés » ;
-  - un enregistrement d'une autre simulation est refusé (corps massif de la sauvegarde absent de l'enregistrement).
-- **Après un plantage :** un enregistrement interrompu reste lisible, car son index est reconstruit à l'ouverture.
-
-### Moteur GPU
-
-Si une carte graphique compatible (DirectX 12 ou Vulkan) est détectée, le moteur **GPU** devient le moteur par défaut. Le moteur CPU reste disponible dans « Paramètres avancés → Moteur de calcul », où la carte détectée est indiquée.
-
-- **Même algorithme que le moteur CPU :** Barnes-Hut, Leapfrog, fusions balayées, nettoyage.
-- **Simple précision :** l'erreur relative médiane sur l'accélération, comparée à la somme directe, est d'environ 10⁻³ (θ = 0,5) ; après 50 pas, l'écart avec le moteur CPU reste inférieur à 10⁻³ en position.
-- **Mémoire vidéo :** environ 240 octets par corps, soit environ 2,4 Go pour 10 millions. Le maximum est de 16,7 millions de corps.
-- **Performances** (RTX 4060 Ti, nuage sphérique au repos) : environ 14 ms par pas pour 1 million de corps, 62 ms pour 4 millions.
-- **Repli automatique :** une sauvegarde faite avec le moteur GPU se recharge avec le moteur CPU si la carte est absente.
-- **Affichage direct :** le moteur calcule sur la carte graphique de l'interface, qui dessine les corps directement depuis ses tampons, sans copie. L'état complet n'est relu qu'une fois toutes les une à deux secondes (pointage, classement, barycentre, sauvegarde) ; le pas, les énergies, le centre de masse et la position du corps suivi sont publiés à jour à chaque instantané. Si la carte de l'interface ne convient pas au calcul (OpenGL), le moteur ouvre sa propre carte et l'affichage repasse par les copies.
-- **Banc d'essai** (nombre de corps, nombre de pas ; `gpu` ou `cpu` pour n'essayer qu'un moteur, `disque` pour un disque en rotation) :
-
-```powershell
-cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10
-```
-
-Avec `$env:STELLAR_GPU_PROFILE=1`, le banc affiche le temps passé dans chaque noyau GPU (horodatage des passes).
-
-Ce qui rend le moteur GPU rapide :
-
-1. **Parcours de Barnes-Hut par groupes** : les 128 corps consécutifs d'un groupe de travail, voisins dans l'ordre de Morton, descendent l'arbre ensemble. Un nœud est assimilé à un point s'il est assez loin de la boîte englobante du groupe entier, critère plus strict que pour chaque corps isolément. Nœuds acceptés et corps des feuilles proches s'accumulent dans une liste en mémoire partagée, que chaque fil évalue ensuite pour son corps, en boucle déroulée.
-2. **Arbre réajusté** : la topologie (codes de Morton, tri radix, construction de Karras) n'est refaite que tous les quatre pas, ou après une compaction. Entre-temps, seuls les centres de masse, boîtes et rayons d'ouverture sont recalculés : le critère reste exact.
-3. **Une soumission et une attente par pas** : paires de contact, corps éliminés, moments globaux et positions des corps suivis (traces, caméra) sont recopiés ensemble dans un tampon de relecture. Les fusions, regroupées sur le CPU, sont appliquées dans une seconde soumission, sans attente.
-4. **Lancements regroupés** : une seule passe de calcul par soumission, groupes de liaisons et paramètres de passe créés une fois pour toutes.
-5. **Corps de 48 octets** : la position de début de pas, utile aux contacts balayés, se déduit de la vitesse (`pos − vel·dt`).
-
-## 3. Architecture
-
-Le projet suit la **clean architecture**. Les dépendances pointent toutes vers le domaine :
-
-```
-stellar-app (présentation + racine de composition : egui, wgpu)
-   │
-   ├──► stellar-persistence (adaptateur : fichiers .stellar, .stellarec)
-   ├──► stellar-engine-cpu  (adaptateur : moteur Barnes-Hut CPU)
-   ├──► stellar-engine-gpu  (adaptateur : moteur Barnes-Hut GPU, wgpu)
-   │
-   └──► stellar-application (cas d'usage, ports)
-              │
-              └──► stellar-domain (entités, règles, trait PhysicsEngine)
-```
-
-| Crate | Rôle |
+| Symptom | Cause and remedy |
 |---|---|
-| `stellar-domain` | Corps (`BodySet`, en structure de tableaux), état, paramètres, règles physiques (rayon, fusion, distance balayée), classement par masse, **traits `PhysicsEngine` / `EngineFactory`**. Aucune infrastructure. |
-| `stellar-application` | Génération des conditions initiales, thread de simulation découplé (`SimulationHandle`, instantanés publiés à ≤ 60 Hz ; copie complète de l'état espacée quand le moteur est affiché directement), registre des moteurs, ports `SimulationRepository`, façade `SimulatorService`. |
-| `stellar-engine-cpu` | Moteur de calcul CPU. Optimisé librement, comme prévu par la spécification (voir ci-dessous). |
-| `stellar-engine-gpu` | Moteur de calcul GPU (shaders de calcul wgpu) : tri radix, arbre LBVH de Karras agrégé niveau par niveau et réajusté entre deux constructions, parcours de Barnes-Hut par groupes de 128 corps, contacts balayés ; les fusions sont regroupées sur le CPU puis appliquées sur le GPU. Sur la carte de l'interface, expose ses tampons de corps (`BodiesView`) pour l'affichage. |
-| `stellar-persistence` | Format `.stellar` : signature, version, en-tête lisible sans décompression, puis données bincode compressées zstd. Versions lues : 6 (courante, facteur de la vitesse orbitale), 5 (sous-systèmes), 4 et 3 ; enregistrements `.stellarec` : 4 (facteur dans l'en-tête), 3 (une boîte de quantification par sous-système), 2 et 1 (`legacy.rs`). Un enregistrement repris garde la version de son fichier. |
-| `stellar-app` | Écrans egui, caméra, sélection, rendu GPU des corps (billboards additifs, positions relatives à une ancre pour garder la précision en `f32`), lus directement dans les tampons du moteur GPU ou téléversés depuis les instantanés. |
+| Error dialog at startup or during a run | Details are written to `stellar-crash.log` in the current directory. |
+| No GPU engine in "Computation engine" | No compatible card was detected (DirectX 12 or Vulkan). The CPU engine is used, and GPU saves reload with it. |
+| Very long first start (around 100 s) | Shader compilation by FXC under DirectX 12. Use Vulkan: `$env:WGPU_BACKEND="vulkan"`. |
+| Choppy camera, or about 25 ms per step whatever the size | The display is in Fifo mode, which blocks GPU submissions. Check the mode with `STELLAR_STATS=1` and force `STELLAR_PRESENT=mailbox` if the card supports it. |
+| Creation refused with an error message | The engine could not be created (no card, insufficient memory). Reduce the body count; the home screen shows the estimated memory. |
+| Display through copies, slower | The interface runs under OpenGL: the engine opens its own device and the display can no longer read its buffers directly. |
+| Debug build very slow | Always use `--release`. |
 
-### Moteur CPU
+---
 
-À chaque pas :
+## 4. Architecture
 
-1. **Kick ½ dt** : demi-mise à jour des vitesses.
-2. **Drift dt** : mise à jour des positions ; les positions de départ sont conservées.
-3. **Contacts balayés** :
-   - grille hiérarchique sur les boîtes englobantes des trajectoires ; les corps très rapides ou très gros sont rangés aux niveaux supérieurs ;
-   - cellules voisines trouvées sans table de hachage : les clés de cellule, triées, sont parcourues avec un curseur par direction ;
-   - distance minimale exacte entre trajectoires rectilignes ;
-   - fusions en chaîne regroupées par union-find.
-4. **Fusion** : la masse et la quantité de mouvement sont conservées et la position passe au barycentre. L'identifiant du membre le plus massif est conservé.
-5. **Forces** :
-   - réordonnancement des corps selon leur code de Morton ;
-   - octree construit en parallèle, stocké en ordre préfixe et parcouru sans pile ;
-   - critère d'ouverture `d > s/θ + δ` et adoucissement de Plummer ;
-   - **parcours par groupes** de 32 corps voisins au plus : l'arbre est descendu une fois par groupe, avec la boîte du groupe pour le critère, puis la liste d'interactions est évaluée pour chaque corps (AVX2 et FMA quand le processeur les a : quatre corps par instruction, inverse de la racine par estimation affinée de Newton).
+The project follows **clean architecture**. Every dependency points towards the domain:
+
+```
+stellar-app (presentation + composition root: egui, wgpu)
+   │
+   ├──► stellar-persistence (adapter: .stellar, .stellarec files)
+   ├──► stellar-engine-cpu  (adapter: CPU Barnes-Hut engine)
+   ├──► stellar-engine-gpu  (adapter: GPU Barnes-Hut engine, wgpu)
+   │
+   └──► stellar-application (use cases, ports)
+              │
+              └──► stellar-domain (entities, rules, PhysicsEngine trait)
+```
+
+| Crate | Role |
+|---|---|
+| `stellar-domain` | Bodies (`BodySet`, a structure of arrays), state, parameters, physical rules (radius, merger, swept distance, cleanup of ejected bodies and cluster detection in `ejection.rs`, field between subsystems in `systems.rs`), mass ranking, **`PhysicsEngine` / `EngineFactory` traits**. No infrastructure. |
+| `stellar-application` | Initial conditions, decoupled simulation thread (`SimulationHandle`, snapshots published at up to 60 Hz), composite engine of sub-simulations (`MultiSystem`, `systems.rs`), engine registry, recording (`Recorder`) and playback, ports, `SimulatorService` facade. |
+| `stellar-engine-cpu` | CPU engine, freely optimized (see below). |
+| `stellar-engine-gpu` | GPU engine (WGSL compute shaders): radix sort, Karras LBVH, grouped Barnes-Hut traversal, contacts on the GPU, merger union-find on the CPU. Exposes its buffers (`BodiesView`) for the live view. See [`docs/gpu-engine.md`](docs/gpu-engine.md). |
+| `stellar-persistence` | `.stellar` and `.stellarec` files, older versions (`legacy.rs`), deletion to the recycle bin (`files.rs`). See [`docs/formats.md`](docs/formats.md). |
+| `stellar-app` | egui screens (`home.rs`, `sim.rs`), camera (`camera.rs`), picking (`picking.rs`), body rendering (`render/`: additive billboards, positions relative to an anchor to keep `f32` precision), translations (`i18n.rs`), command line (`console.rs`). Composition root (`lib.rs`), with two executables: `stellar.exe` (`main.rs`) and `stellar-cli.exe`. |
+
+### CPU engine
+
+At each step:
+
+1. **Kick ½ dt**: half update of the velocities.
+2. **Drift dt**: update of the positions; start positions are kept.
+3. **Swept contacts**:
+   - hierarchical grid over the bounding boxes of the trajectories; very fast or very large bodies go to the upper levels;
+   - neighbouring cells are found without a hash table: the sorted cell keys are walked with one cursor per direction;
+   - exact minimum distance between straight trajectories;
+   - chained mergers grouped by union-find.
+4. **Merger**: mass and momentum are conserved and the position moves to the barycenter. The identifier of the most massive member is kept.
+5. **Forces**:
+   - bodies reordered by Morton code;
+   - octree built in parallel, stored in pre-order and walked without a stack;
+   - opening criterion `d > s/θ + δ` and Plummer softening;
+   - **grouped traversal** of at most 32 neighbouring bodies: the tree is walked once per group, using the group's box for the criterion, then the interaction list is evaluated for each body. With AVX2 and FMA, four bodies are processed per instruction, and the inverse square root uses a Newton-refined estimate.
 6. **Kick ½ dt**.
-7. **Nettoyage, tous les N pas** : suppression des corps **non liés** (énergie spécifique > 0 relativement au barycentre) **et** situés au-delà de k × R, **sauf les amas éjectés**. Règle commune aux deux moteurs (`stellar-domain/src/ejection.rs`) :
-   - les corps lointains sont regroupés par « amis d'amis » (distance de liaison) ;
-   - chaque groupe est épuré : les membres non liés au groupe (énergie dans son référentiel, sous son seul potentiel, exact jusqu'à 2 048 membres, à symétrie sphérique au-delà) en sont retirés, les plus énergiques d'abord ;
-   - un groupe lié d'au moins n corps, ou d'au moins une part donnée de la masse initiale (un corps isolé très massif compte), est conservé en entier, même s'il s'éloigne indéfiniment.
+7. **Cleanup, every N steps**: removal of the bodies that are both **unbound** (positive specific energy relative to the barycenter) **and** beyond k × R, **except ejected clusters**. The rule is shared by both engines (`stellar-domain/src/ejection.rs`):
+   - far bodies are grouped by "friends of friends" (link length);
+   - each group is pruned: members not bound to the group are removed, most energetic first. Energy is measured in the group's frame, under the group's own potential: exactly up to 2,048 members, with spherical symmetry beyond;
+   - a bound group of at least n bodies, or of at least a given share of the initial mass, is kept whole even if it moves away indefinitely. A single very massive body counts as a group.
 
-   Le moteur GPU repère les corps lointains sur la carte et ne relit qu'eux, aux seuls pas de nettoyage.
+   The GPU engine finds the far bodies on the card and reads back only those, on cleanup steps only.
 
-### Sous-simulations
+The computation uses every core but one, which is left to the interface.
 
-Un amas éjecté et détaché devient une **sous-simulation** : son propre moteur (même type que la simulation), son propre repère (origine à son barycentre, d'où une précision intacte même très loin), son propre arbre. Le moteur composite (`stellar-application/src/systems.rs`) les fait avancer au même pas ; le reste de l'application ne voit qu'un moteur.
+### Sub-simulations
 
-- **Couplage** : chaque sous-système ressent les autres par un champ linéaire a₀ + T·(x − x_c) (accélération au barycentre et tenseur de marée de masses ponctuelles), calculé sur les barycentres extrapolés à la fin du pas ; le premier demi-kick reprend le champ du pas précédent (Leapfrog). Les marées étirent et arrachent donc bien les membres d'un amas ; deux amas s'attirent et peuvent orbiter l'un autour de l'autre.
-- **Séparation** : au nettoyage, un amas éjecté (voir ci-dessus) devient un sous-système si (taille de l'amas + taille du système) < 0,3 × distance ; taille d'un amas : deux fois son rayon de demi-masse.
-- **Réunion** : deux sous-systèmes sont réunis quand (somme des tailles) > 0,6 × distance (hystérésis) ; collisions et échanges de corps redeviennent alors possibles.
-- **Évadés** : un sous-système secondaire nettoie son voisinage comme la simulation principale (k × sa taille) ; les corps qu'il élimine rejoignent le système principal (le plus massif), dont le nettoyage décide ensuite.
-- **Recentrage** : un sous-système dont le barycentre s'écarte de son origine de plus de la moitié de sa taille est reconstruit autour de lui.
-- **Affichage** : chaque sous-système est dessiné depuis son propre tampon, l'ancre de la caméra étant rapportée à son origine.
-- **Fichiers** : l'état sauvegardé range les corps par sous-système (plages et tailles) ; chaque instantané d'un enregistrement a une boîte de quantification par sous-système.
+An ejected cluster that has moved far enough away becomes a **sub-simulation**: its own engine (of the same type), its own frame (origin at its barycenter, which keeps precision intact even very far away), its own tree. The subsystems feel each other through a linear tidal field. They split, merge and recentre at cleanup steps. Details: [`docs/subsystems.md`](docs/subsystems.md).
 
-Le calcul utilise tous les cœurs moins un, laissé libre pour l'interface.
+### Adding a computation engine
 
-### Ajouter un moteur de calcul
-
-1. Créer une crate qui implémente `stellar_domain::PhysicsEngine` et `stellar_domain::EngineFactory`, avec un `id` unique.
-2. L'enregistrer dans `crates/stellar-app/src/main.rs` :
+1. Create a crate that implements `stellar_domain::PhysicsEngine` and `stellar_domain::EngineFactory`, with a unique `id`. `EngineFactory::create` must return a readable error rather than panic (no card, insufficient memory).
+2. Register it in `crates/stellar-app/src/lib.rs`:
 
 ```rust
-registry.register(Arc::new(MonMoteurGpuFactory));
+registry.register(Arc::new(MyEngineFactory));
 ```
 
-Le moteur apparaît alors dans « Paramètres avancés → Moteur de calcul ». Son identifiant est enregistré dans les sauvegardes.
+The engine then appears in "Advanced parameters → Computation engine" and can be forced with `STELLAR_ENGINE=<id>`. Its identifier is stored in saves. For the command line, add its short name to the `--moteur` option in `crates/stellar-app/src/console.rs`, which maps `gpu` and `cpu` to identifiers.
 
 ---
 
-## 4. Tests et benchmarks
+## 5. Tests and benchmarks
 
 ```powershell
-cargo test --release            # tests unitaires et physiques
-cargo bench -p stellar-engine-cpu   # temps par pas pour 10k / 100k / 1M corps
+cargo test --workspace                     # unit and integration tests (GPU tests are skipped without a card)
+cargo clippy --workspace --all-targets
+cargo bench -p stellar-engine-cpu          # time per step for 10k / 100k / 1M bodies (criterion)
 ```
 
-Mesure rapide du moteur, avec affichage de l'évolution (corps restants, fusions, dérive d'énergie) :
+GPU tests also run without a graphics card, with software rendering: `$env:WGPU_BACKEND="gl"`.
 
-```powershell
-cargo run --release -p stellar-engine-cpu --example timing -- 1000000 5
-```
+### Measurement tools
 
-Pour lancer directement une simulation sans passer par l'accueil : `$env:STELLAR_AUTOSTART=200000; cargo run --release`. Variables utiles aux essais :
-
-| Variable | Effet |
+| Command | Measures |
 |---|---|
-| `STELLAR_AUTOSTART=<n>` | simulation de n corps dès le lancement |
-| `STELLAR_AUTODISK=1` | disque en rotation plutôt que sphère au repos |
-| `STELLAR_ENGINE=<id>` | moteur imposé (`cpu-barnes-hut`, `gpu-barnes-hut`) |
-| `STELLAR_AUTORECORD=<intervalle>` | enregistrement immédiat |
-| `STELLAR_LOAD=<sauvegarde>` / `STELLAR_REPLAY=<enregistrement>` | chargement ou relecture directs |
-| `STELLAR_STATS=1` | une ligne par seconde sur la sortie d'erreur : pas, pas/s, durée du pas, images/s, corps |
-| `STELLAR_PRESENT=fifo\|mailbox\|immediate` | mode de présentation de l'interface imposé |
-| `STELLAR_LANG=fr\|en` | langue de l'interface imposée |
+| `cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10` | CPU / GPU benchmark: body count, step count; `gpu` or `cpu` to test a single engine, `disque` for a rotating disc. `STELLAR_GPU_PROFILE=1`: time per kernel. |
+| `cargo run --release -p stellar-engine-cpu --example timing -- 1000000 5` | CPU engine with its evolution (remaining bodies, mergers, energy drift) |
+| `cargo run --release -p stellar-application --example interp_timing -- 1000000` | cost of interpolating one playback frame |
+| `cargo run --release -p stellar-persistence --example frame_size -- 1000000` | size and cost of a recording snapshot |
+| `cargo run --release -p stellar-persistence --example inspect -- <file>` | contents of a save or a recording |
 
-Les tests physiques (`crates/stellar-engine-cpu/tests/physics.rs`) vérifient notamment :
+### Environment variables
 
-- la précision de Barnes-Hut par rapport à la somme directe ;
-- la conservation de l'énergie sur une orbite à deux corps ;
-- la conservation de la masse et de la quantité de mouvement lors des fusions ;
-- la détection des croisements rapides ;
-- les fusions en chaîne ;
-- le critère d'éjection, la conservation des amas liés éjectés et l'élimination des petits groupes ;
-- la relecture des sauvegardes version 3 et des enregistrements version 1.
+To start a simulation directly without going through the home screen: `$env:STELLAR_AUTOSTART=200000; cargo run --release`. Most of these variables are read in `crates/stellar-app/src/app.rs`; the others in `lib.rs`, `sim.rs`, `i18n.rs` and the GPU engine.
+
+| Variable | Effect |
+|---|---|
+| `STELLAR_AUTOSTART=<n>` | simulation of n bodies at startup |
+| `STELLAR_AUTODISK=1` | rotating disc instead of a sphere at rest |
+| `STELLAR_ENGINE=<id>` | forced engine (`cpu-barnes-hut`, `gpu-barnes-hut`) |
+| `STELLAR_AUTORECORD=<interval>` | immediate recording |
+| `STELLAR_LOAD=<save>` / `STELLAR_REPLAY=<recording>` | direct load or playback |
+| `STELLAR_STATS=1` | one line per second on standard error: step, steps/s, step duration, frames/s, bodies (start from a shell that redirects `2>` to read it) |
+| `STELLAR_PRESENT=fifo\|mailbox\|immediate` | forced presentation mode for the interface |
+| `STELLAR_LANG=fr\|en` | forced interface language |
+| `STELLAR_GPU_PROFILE=1` | time per GPU kernel (benchmark, engine on its own device) |
+| `WGPU_BACKEND=vulkan\|dx12\|gl` | graphics API (`gl`: software rendering for tests) |
+
+### What the tests cover
+
+- **physics** (`stellar-engine-cpu/tests/physics.rs`, with the same cases on the GPU in `stellar-engine-gpu/tests/gpu.rs`): Barnes-Hut accuracy against the direct sum, energy conservation on a two-body orbit, conservation of mass and momentum through mergers, fast crossings, chained mergers, cleanup and ejected clusters;
+- **GPU engine** (`gpu.rs`): agreement with the CPU engine over several steps, tracked positions, live view, external field and insertion;
+- **ejected clusters** (`stellar-domain/tests/ejection.rs`): friends of friends, pruning of unbound members, thresholds, spherical approximation for large clusters, local cluster of a body;
+- **sub-simulations** (`stellar-application/tests/systems.rs`): split, merge, escapees, agreement with the full computation;
+- **files** (`stellar-persistence`): reading older versions (saves 3 to 5, recordings 1, in the internal tests of `lib.rs` and `recording.rs`), continuing a recording, renaming and deleting linked files, simulation without display (`tests/continuation.rs`, `tests/files.rs`);
+- **interface** (`stellar-app`): command-line parsing, and the translation table (duplicates, placeholders).

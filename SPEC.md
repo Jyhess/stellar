@@ -1,113 +1,122 @@
-# Stellar — Spécification v1 (issue de la séance de questions)
+# Stellar — Specification
 
-## Cadre
-- Simulateur N-corps **3D**, particules initiales de masse 1, fusion au contact.
-- **Rust + wgpu + egui**, Windows uniquement (exécutable natif).
-- Calcul sur le **CPU** (rayon) à l'origine ; un moteur **GPU** (shaders de calcul wgpu) est venu s'y ajouter et devient le moteur par défaut quand une carte compatible est présente (voir « Évolutions »).
-- Cible : **1 million de particules et plus**.
+This document has two parts. **Current state** gives the rules in force; it is the reference when the code and the history disagree. **History** keeps the decisions in the order they were made (v1 came from the initial question session). User-level details are in [`README.md`](README.md), and technical details are in [`docs/`](docs).
+
+---
+
+# Current state
+
+## Scope
+- **3D** N-body simulator; initial particles of mass 1; bodies merge on contact.
+- **Rust + wgpu + egui**, Windows only (native executables `stellar.exe` and `stellar-cli.exe`).
+- Two engines: **GPU** (wgpu compute shaders, single precision; the default when a compatible card is present) and **CPU** (rayon, AVX2/FMA, double precision).
+- Target: **1 million particles and more**. GPU limit: 65,535 × 256 ≈ 16.7 M bodies. Creation limit: engine limit, 80 % of main memory, one billion.
+- Interface in French and English; documentation in English; code comments, error messages of the lower layers, command-line options and commit messages in French.
 
 ## Architecture
-- **Clean architecture** (domaine / cas d'usage / adaptateurs / infrastructure), sauf à l'intérieur du moteur de calcul, optimisé librement (SoA, SIMD, rayon).
-- Moteur derrière une interface (`trait PhysicsEngine`) : un autre moteur (ex. GPU) pourra être ajouté et **sélectionné dans les paramètres**.
-- Format de sauvegarde indépendant du moteur.
-- Simulation dans un **thread dédié, découplée** de l'affichage (60 i/s sur le dernier état publié).
+- **Clean architecture** (domain / use cases / adapters / infrastructure), except inside the engines, which are freely optimized (SoA, SIMD, GPU).
+- Engines are reached only through the `PhysicsEngine` / `EngineFactory` traits. They are selected in the advanced parameters, `STELLAR_ENGINE` or `--moteur`. `EngineFactory::create` returns a readable error rather than panicking.
+- File formats are independent of the engine. The GPU engine is the default when the probe succeeds; a GPU save falls back to the CPU engine on load when no card is available.
+- Simulation runs on a **dedicated thread, decoupled** from the display, which reads the latest published snapshot (at most 120 frames/s). With the GPU engine, the display reads the engine's buffers directly, and the full state is read back only every one to two seconds.
+- The simulation thread always wraps the engine in a composite of **subsystems** (`MultiSystem`; usually a single one).
 
-## Physique (moteur CPU v1)
-- Forces : **Barnes-Hut** (octree), paramètre θ, adoucissement ε.
-- Intégrateur : **Leapfrog (KDK), dt fixe**.
-- Corps sphériques, **r = r₀ · m^(1/3)** ; r₀ réglable (défaut déduit de la densité du nuage).
-- Contact : **détection balayée** (distance minimale sur le pas, grille spatiale) ; fusions en chaîne via union-find.
-- Fusion : masses additionnées, position au barycentre, quantité de mouvement conservée ; le corps résultant hérite d'un identifiant stable (le suivi caméra s'y reporte).
-- Espace ouvert. **Nettoyage périodique** (tous les N pas) : suppression des corps **non liés (énergie > 0) ET au-delà de k × rayon initial** du barycentre, sauf s'ils appartiennent à un amas éjecté lié et significatif (voir v1.3).
+## Physics
+- Forces: **Barnes-Hut** (CPU octree, GPU LBVH), parameter θ, Plummer softening ε; grouped traversal (32 bodies on the CPU, 128 on the GPU).
+- Integrator: **Leapfrog (KDK), fixed dt**.
+- Spherical bodies, **r = r₀ · m^(1/3)**.
+- Contact: **swept detection** (minimum distance over the step); chained mergers through union-find.
+- Merger: masses add up, position at the barycenter, momentum conserved; the resulting body keeps the identifier of the most massive member, so tracking follows it.
+- Open space. **Periodic cleanup** (every N steps): removal of bodies that are **unbound (energy > 0) AND beyond k × R** from the barycenter, except members of a significant bound ejected cluster (friends of friends; at least n bodies or a share of the initial mass).
+- **Sub-simulations**: split when (cluster size + system size) < 0.3 × distance, merge when (sum of sizes) > 0.6 × distance, recentre when the barycenter moves more than half a size from the origin. Coupling through a linear tidal field from point sources, extrapolated to the end of the step. Escapees of a secondary subsystem go to the main subsystem.
 
-## Création d'une simulation
-- Répartition : **sphère** (défaut) ou **disque** (épaisseur, profil de densité uniforme/exponentiel).
-- Vitesse initiale, **modes exclusifs** : repos (défaut) / aléatoire (isotrope, plage) / circulaire (vitesse fixe ± plage, ou orbitale képlérienne sur la masse intérieure ± plage) / radiale vers le centre (plage).
-- Paramètres : nombre de particules, taille du nuage, graine aléatoire ; panneau avancé : G, dt, ε, θ, r₀, facteur k et période du nettoyage, moteur de calcul.
-- En cours de route : seulement **pause / reprise / pas-à-pas / multiplicateur de vitesse**.
+## Defaults
+- dt = free-fall time / 500; ε = 0.3 × mean distance between neighbours; r₀ = 1 % of that distance; cluster link length = that distance; a cluster is kept from 10 bodies or 0.1 % of the initial mass; θ = 0.7; cleanup every 100 steps at k = 10 × the initial radius.
+- Initial velocity: orbital circular, factor 1 (0.5 to 1.5), rotation around Oz, counter-clockwise.
+
+## Creation of a simulation
+- Name (default `date_count_distribution_velocity`, with the time added if the name exists), particle count (1-2-5 slider and exact input), cloud radius, seed.
+- Distribution: **sphere** or **disc** (thickness, uniform or exponential density profile).
+- Initial velocity, **mutually exclusive modes**: rest / random (isotropic, range) / imposed circular (± range) / orbital circular × factor ± spread / radial towards the center (range).
+- Advanced panel: G, dt, ε, θ, r₀, cleanup factor k and period, ejected cluster thresholds, engine.
+- Estimated memory and estimated duration of the first step.
+- During a run, only **pause / resume / single step / speed multiplier** (a cap on steps per second).
 
 ## Interface
-- Accueil : nouvelle simulation (formulaire) ; **liste des sauvegardes** du dossier `saves/` (date, nb de corps, pas) + « Parcourir… ».
-- Navigation : souris **capturée en permanence** (style FPS) ; Z/S avancer/reculer, Q/D gauche/droite, molette = avancer/reculer (Ctrl + molette = zoom) ; Tab libère le curseur (Échap ouvre le menu).
-- Sélection : **réticule + clic** en mode capturé, **clic libre** en mode curseur.
-- Corps sélectionné (ou barycentre) : **orbite + suivi** — la cible reste au centre, la souris tourne autour d'elle, Z/S règlent la distance, Q/D sont inactives, A/E font basculer la vue sur l'axe de visée ; F cesse ou reprend le suivi sans changer la vue.
-- Orientation libre (quaternion) : rotations dans le repère de l'écran, sans limite aux pôles ; H redresse l'horizon vers la normale au disque.
-- Vol libre : vitesse proportionnelle à la distance au corps sélectionné (sinon au barycentre) ; repères à l'écran : trièdre (X, Y, Z, normale N), flèches vers les cibles hors champ, grille du plan du disque (G).
-- Raccourcis : **Origine** = plus gros corps, **PgDn** = suivant (masse inférieure), **PgUp** = précédent.
-- Rendu : billboards lumineux, taille réelle (min. 1 px), couleur selon la masse, mélange additif.
-- HUD : statistiques globales (corps, pas, temps simulé, pas/s, i/s, dérive d'énergie), corps sélectionné, top 10 cliquable.
-- Sauvegarde **manuelle (F5)** : état complet + paramètres + caméra (bincode + zstd).
+- Home screen: new simulation, saves (`saves\`, plus "Browse…"), recordings (`recordings\`), rename and delete (to the recycle bin, linked file optional), language.
+- Navigation: mouse captured (FPS style); orientation by quaternion with rotations in the screen's frame and free roll; Z/S/Q/D, wheel, Ctrl + wheel for optical zoom. Full table of controls in the README.
+- Selection: crosshair + click when captured, free click otherwise; Home / PgDn / PgUp through the mass ranking; B barycenter; clicking a sub-simulation selects its barycenter.
+- Tracking: the target stays at the center; changing target keeps the line of sight, the zoom and the distance (never inside the new body).
+- Rendering: glowing billboards, real size (minimum 1 px), colour by mass, additive blending; trihedron, off-screen arrows, disc-plane grid.
+- HUD: global statistics, selected body, top 10 (plus the selection), present and ejected mass, sub-simulations and ejected clusters.
+- Traces (T, R): 10 most massive visible bodies, history or tail, reference frame of the selected body, the barycenter or the local cluster; not saved.
 
-## Qualité
-- Tests physiques (masse, quantité de mouvement, dérive d'énergie, Barnes-Hut vs force brute), benchmarks (criterion), dépôt git, README, guide d'installation de Rust sous Windows.
+## Files
+- **Save** (F5, `.stellar` version 6): full state, parameters, camera, links to recordings.
+- **Recording** (F9, `.stellarec` version 4): snapshot every N steps, quantized and compressed, optional dust budget, index rebuilt after a crash; playback by Hermite interpolation; suspend / resume / continue from a save.
+- Every change to a serialized structure creates a new version, and older versions remain readable. Layout and history: [`docs/formats.md`](docs/formats.md).
 
-## Décisions complémentaires (v1)
-- E / A : monter / descendre ; Maj / Ctrl : déplacement ×5 / ×0,2 ; + / − : vitesse de déplacement.
-- Molette : avancer / reculer comme Z / S (un cran ≈ un quart de seconde d'appui ; en suivi, distance à la cible). Ctrl + molette : zoom optique (champ de vision) dans tous les modes ; la sensibilité de la souris suit le zoom.
-- Rotation initiale (modes circulaires) autour de l'axe vertical Oz, sens trigonométrique.
-- Espace : pause / reprise ; P : pas à pas ; « multiplicateur de vitesse » réalisé par une limite de cadence (pas/s), le calcul allant sinon au plus vite.
-- Échap ouvre un menu (reprendre, sauvegarder, accueil, quitter, aide des touches) ; Tab bascule la capture de la souris.
-- Une simulation chargée redémarre en pause.
+## Simulation without display
+- From the home screen (monitoring screen, switch to the display) or with `stellar-cli.exe`. Automatic recording; stop at a step count, a simulated time, a real duration, or on demand; on stop, the recording is closed and the final state is saved under the simulation's name.
+- Command line: new simulation, `--charger`, `--poursuivre`, `--reprendre`; `--help`; exit code 2 on an unknown argument.
 
-## Évolutions (v1.1)
-- Passage d'un corps à un autre : direction de visée, zoom et distance à la cible conservés (seule exception : ne jamais se retrouver à l'intérieur du nouveau corps).
-- Souris libre : un clic droit reprend la visée.
-- C : viser le centre de gravité ; V : vue d'ensemble (recul, dans la direction de visée, jusqu'à voir la sphère centrée sur le barycentre contenant 90 % de la masse).
-- Affichage plafonné à 120 images par seconde.
-- Mode trace (T) : trajectoires des 10 corps les plus massifs visibles à l'écran (dans le champ de la caméra) à l'activation, un point par pas (enregistré par le thread de calcul) ; historique complet décimé ou queue glissante de N pas, au choix ; une trace se poursuit sur le corps issu d'une fusion ; traces non sauvegardées.
-- Traces en référentiel relatif (R) : affichage p(t) − r(t) + r(maintenant) par rapport au corps sélectionné (orbites autour de ce corps) ; trajectoire de référence issue de sa trace, ou d'une piste dédiée enregistrée depuis sa sélection.
-- Enregistrement (F9 ou case à la création) : instantané tous les N pas (positions 21 bits, vitesses 16 bits, masses, fusions ; zstd), écrit par un thread dédié ; budget de poussière optionnel (au plus B particules de masse 1 par instantané, sélection stable par identifiant, luminosité compensée) ; fichier lisible même s'il n'a pas été clos. Une sauvegarde F5 faite pendant un enregistrement le mémorise et le poursuit au chargement ; depuis l'accueil, on peut poursuivre n'importe quel enregistrement compatible à partir d'une sauvegarde (instantanés postérieurs supprimés, corps disparus entre-temps marqués « éliminés » faute de mieux).
-- Relecture : interpolation cubique d'Hermite entre instantanés, chargement anticipé en arrière-plan ; lecture / pause, vitesse, sens, barre de temps ; navigation, sélection et traces identiques au direct ; pas de reprise du calcul depuis un enregistrement (utiliser les sauvegardes F5).
-- Suspension / reprise d'enregistrement : à la sortie (ou au retour à l'accueil) pendant un enregistrement, sauvegarde automatique liée ; son rechargement poursuit l'enregistrement dans le même fichier (reprise automatique dès la relance du calcul) ; une sauvegarde plus ancienne tronque l'enregistrement à son point de reprise. Format de sauvegarde v2, puis v3 (roulis de la caméra, suivi du barycentre, poursuite d'enregistrement).
-- Panneaux : masse présente et masse éjectée (part de la masse initiale) ; part de la masse présente pour chacun des corps les plus massifs.
-- B : sélection du barycentre (réticule doré à la place du repère du corps), vue perpendiculaire au disque selon l'axe du moment cinétique total (Oz à défaut de rotation), distance conservée, orbite autour du barycentre ; panneau dédié ; référentiel des traces « Barycentre » (trajectoire du barycentre enregistrée dès l'activation des traces).
-- Moteur GPU (wgpu, shaders de calcul) : Barnes-Hut sur LBVH, Leapfrog, fusions balayées et nettoyage sur la carte, simple précision ; moteur par défaut si une carte compatible est présente ; repli sur le CPU au chargement sinon ; banc d'essai CPU/GPU.
-- Affichage direct (moteur GPU) : le moteur calcule sur la carte graphique de l'interface, qui dessine les corps depuis ses tampons, sans copie ; l'état complet n'est relu que toutes les une à deux secondes (pointage, classement, barycentre, sauvegarde), le pas, les énergies, le centre de masse et la position du corps suivi restant publiés à jour ; repli sur une carte propre au moteur, avec affichage par copies, si la carte de l'interface ne convient pas au calcul (OpenGL).
+---
 
-## Évolutions (v1.2) — performances
-- Moteur GPU :
-  - parcours de Barnes-Hut par groupes de 128 corps voisins (boîte du groupe pour le critère d'ouverture, liste d'interactions en mémoire partagée), plus précis à θ égal que le parcours par corps ;
-  - topologie de l'arbre refaite tous les 4 pas ou après une compaction, arbre seulement réajusté entre-temps (centres de masse, boîtes, rayons d'ouverture) ;
-  - une soumission et une attente par pas : paires de contact, éliminés, moments globaux et positions des corps suivis relus ensemble ; positions, centre de masse et énergies servis ensuite sans relecture ;
-  - fusions appliquées après le second demi-kick (quantité de mouvement et barycentre inchangés par rapport à l'ordre précédent) ;
-  - corps de 48 octets (position de début de pas déduite de la vitesse), une passe de calcul par soumission, groupes de liaisons créés une fois ;
-  - profilage par noyau dans le banc d'essai (`STELLAR_GPU_PROFILE=1`) ; banc sur disque en rotation (`disque`).
-- Moteur CPU : parcours par groupes de 32 corps voisins au plus, évaluation AVX2/FMA si disponible ; contacts sans table de hachage (curseurs sur les clés de cellule triées).
-- Interface : présentation en mode Mailbox quand il est garanti (NVIDIA, AMD sous Vulkan ; DirectX 12) — l'attente de l'écran en mode Fifo bloquait chaque soumission du moteur GPU d'une image entière ; `STELLAR_STATS=1` journalise pas/s et images/s.
-- Formats : seule la version courante de `.stellar` (v3) est lue ; la relecture des versions 1 et 2 est retirée.
+# History
 
-## Évolutions (v1.3) — amas éjectés
-- Nettoyage : les corps lointains (au-delà de k × R) sont regroupés par « amis d'amis » (distance de liaison, par défaut la distance moyenne initiale entre voisins) ; chaque groupe est épuré de ses membres non liés (énergie dans le référentiel du groupe, sous son seul potentiel ; les plus énergiques retirés d'abord) ; un groupe lié d'au moins n corps (10 par défaut) **ou** d'au moins une part de la masse initiale (0,1 % par défaut, un corps isolé pouvant suffire) est conservé en entier. Les autres corps lointains non liés au système sont éliminés comme avant.
-- Règle du domaine commune aux moteurs CPU et GPU ; le GPU repère les corps lointains et ne relit qu'eux aux pas de nettoyage.
-- Panneau « Corps » : liste des amas éjectés conservés au dernier nettoyage (repère, corps, masse, distance au barycentre), sélection du repère par clic ; absente en relecture.
-- Paramètres avancés : distance de liaison (déduite automatiquement), nombre de corps et part de masse minimaux.
-- Formats : sauvegardes `.stellar` version 4 (version 3 relue, seuils complétés par les valeurs suggérées), enregistrements `.stellarec` version 2 (version 1 relue : seul l'en-tête change).
+## v1 — initial specification
+- 3D N-body simulator, particles of mass 1, merger on contact; Rust + wgpu + egui, Windows only; computation on the CPU (rayon); target 1 M particles.
+- Clean architecture, engine behind `trait PhysicsEngine`, engine-independent save format, simulation thread decoupled from a 60 frames/s display.
+- Barnes-Hut (octree), Leapfrog KDK with fixed dt, r = r₀ · m^(1/3), swept contacts (spatial grid), union-find, stable identifiers, periodic cleanup of bodies that are unbound and beyond k × the initial radius.
+- Creation: sphere or disc, exclusive velocity modes (rest by default), advanced panel.
+- Interface: list of saves, mouse permanently captured, Z/S/Q/D, crosshair + click, orbit + tracking, Home / PgDn / PgUp, billboards, HUD, manual save (F5, bincode + zstd).
+- Quality: physics tests, criterion benchmarks, README, Rust installation guide.
+- Additional decisions: Shift / Ctrl ×5 / ×0.2; + / − movement speed; A / E for up / down (later replaced by roll); wheel moves forward / backward like Z / S (a notch ≈ a quarter of a second of key press; distance to the target when tracking), Ctrl + wheel for optical zoom, mouse sensitivity following the zoom; initial rotation around Oz, counter-clockwise; Space, P; speed multiplier as a step-rate cap; Esc menu; Tab toggles capture; a loaded simulation starts paused.
 
-## Évolutions (v1.4) — sous-simulations
-- Un amas éjecté devient une sous-simulation quand (taille de l'amas + taille du système) < 0,3 × distance (taille d'un amas : deux fois son rayon de demi-masse) : moteur propre (même type), repère propre (origine au barycentre), même pas de temps.
-- Couplage par champ linéaire (accélération au barycentre et tenseur de marée des autres sous-systèmes, sources ponctuelles), sur les barycentres extrapolés à la fin du pas ; énergie totale = énergies propres + énergies d'interaction.
-- Réunion quand (somme des tailles) > 0,6 × distance ; recentrage quand le barycentre s'écarte de l'origine de plus d'une demi-taille.
-- Corps éliminés par une sous-simulation secondaire : confiés au système principal (le plus massif).
-- Panneau « Corps » : liste des sous-simulations (repère, corps, masse, distance), sélection du repère par clic.
-- Formats : sauvegardes `.stellar` version 5 (plages de corps par sous-système ; versions 4 et 3 relues), enregistrements `.stellarec` version 3 (une boîte de quantification par sous-système ; versions 2 et 1 relues, un enregistrement repris garde sa version).
+## v1.1
+- Changing target keeps the line of sight, the zoom and the distance; right click resumes aiming; C aims at the center of gravity; V overview (90 % of the mass).
+- Display capped at 120 frames/s.
+- Trace mode (T) and relative reference frame (R).
+- Recording (F9) with snapshots every N steps (21-bit positions, 16-bit velocities), dust budget, F5 saves that continue a recording, continuation from any compatible save.
+- Playback: Hermite interpolation, background preloading; no resuming the computation from a recording.
+- Suspend / resume of a recording on exit; save formats v2 then v3 (camera roll, barycenter tracking, recording continuation).
+- Present and ejected mass; B selects the barycenter seen face-on to the disc.
+- GPU engine (Barnes-Hut on LBVH, single precision), the default when a card is present, with fallback to the CPU on load; CPU/GPU benchmark.
+- GPU live view: buffers drawn without copy, full state read every one to two seconds; own device and copies under OpenGL.
 
-## Évolutions (v1.5) — ergonomie
-- Création : nom de la simulation (par défaut `date_nombre_répartition_vitesse`, heure ajoutée si le nom existe), curseur du nombre de particules à crans 1-2-5 de 1 000 au maximum de la machine (limite du moteur, 80 % de la mémoire, un milliard) avec saisie exacte, vitesse orbitale par défaut, pastille d'aide « ? » sur chaque paramètre, durée estimée du premier pas.
-- Le nom de la simulation nomme ses sauvegardes F5 et ses enregistrements ; au chargement, il est tiré du nom de la sauvegarde.
-- Accueil : renommer et supprimer sauvegardes et enregistrements ; suppression confirmée, vers la corbeille, fichier lié en option ; renommage conjoint des fichiers liés, liens mis à jour.
-- Traces : plus de référentiel absolu — corps sélectionné, barycentre de la simulation ou barycentre de l'amas lié du corps sélectionné ; masse et part de la masse dans la légende.
-- Classement des plus massifs : ligne supplémentaire pour le corps sélectionné hors des dix premiers.
+## v1.2 — performance
+- GPU: grouped traversal (128 bodies), topology rebuilt every 4 steps, one submission and one wait per step, mergers after the second half kick, 48-byte bodies, per-kernel profiling, rotating-disc benchmark.
+- CPU: grouped traversal (32 bodies), AVX2/FMA, contacts without a hash table.
+- Interface: Mailbox presentation where it is guaranteed, because Fifo blocked every GPU submission for a whole frame; `STELLAR_STATS=1`.
+- Formats: reading of `.stellar` versions 1 and 2 removed. Version 3, then current, remains readable since.
 
-## Évolutions (v1.6) — langue et calcul sans affichage
-- Interface en français ou en anglais : langue de Windows par défaut, choix dans l'accueil ou le menu Échap, mémorisé ; nombres mis en forme selon la langue. La documentation et les messages d'erreur des couches inférieures restent en français.
-- Simulation sans affichage, depuis l'accueil (écran de suivi, bascule possible vers l'affichage) ou en console (`stellar.exe --sans-affichage`) : enregistrement automatique, arrêt à un nombre de pas, un temps simulé, une durée réelle ou à la demande (Ctrl+C en console) ; à l'arrêt, enregistrement clos et état final sauvegardé sous le nom de la simulation.
+## v1.3 — ejected clusters
+- Cleanup keeps bound groups of far bodies (friends of friends, pruning of unbound members, at least n bodies or a share of the mass); the rule is in the domain and shared by both engines.
+- "Bodies" panel: list of kept clusters. Advanced parameters: link length, minimum count and mass share.
+- Formats: `.stellar` v4, `.stellarec` v2.
 
-## Évolutions (v1.7) — ligne de commande
-- `stellar-cli.exe`, application console distincte de l'interface (`stellar.exe`, qui renvoie vers elle si on lui passe des arguments) : aide `--help`, argument inconnu signalé (code de sortie 2).
-- Reprise sans affichage d'une sauvegarde (`--charger`, enregistrement lié poursuivi, sinon nouvel enregistrement, ou `--poursuivre` un enregistrement compatible) ou d'un enregistrement (`--reprendre`, depuis sa dernière sauvegarde liée) ; cibles `--pas` et `--temps` comptées à partir du pas de la sauvegarde.
+## v1.4 — sub-simulations
+- A distant ejected cluster becomes a sub-simulation with its own engine and frame; linear tidal coupling; merge and recentring; escapees go to the main system.
+- Formats: `.stellar` v5, `.stellarec` v3 (a resumed recording keeps its version).
 
-## Évolutions (v1.8) — sous-simulations et vitesse orbitale
-- Clic sur une sous-simulation (panneau « Corps ») : sélection de son barycentre, caméra centrée dessus en orbite (direction de visée conservée, distance de trois fois sa taille) ; panneau propre (corps, masse, vitesse, taille, distance au barycentre global), vue de face (B) selon son propre moment cinétique. Après une réunion, la sélection passe à la sous-simulation la plus proche de sa dernière position ; s'il ne reste qu'un système, au barycentre global.
-- Vitesse « circulaire orbitale » : facteur multiplicatif de la vitesse d'équilibre (0,5 à 1,5 dans l'interface, `--facteur` en ligne de commande, 1 par défaut), appliqué avant la dispersion.
-- Formats : sauvegardes `.stellar` version 6 (versions 5, 4 et 3 relues avec un facteur 1), enregistrements `.stellarec` version 4 (en-tête ; versions 3, 2 et 1 relues).
+## v1.5 — ergonomics
+- Simulation name, 1-2-5 slider, orbital velocity by default, "?" badges, estimated first-step duration.
+- Rename and delete saves and recordings (recycle bin, linked files).
+- Traces: the absolute reference frame is removed (selected body, barycenter, local cluster).
+- Mass ranking: extra line for the selected body.
 
+## v1.6 — language and computation without display
+- Interface in French or English (Windows language by default, choice remembered, numbers formatted by language).
+- Simulation without display from the home screen or the console (first `stellar.exe --sans-affichage`, replaced by `stellar-cli.exe` in v1.7; the option is still accepted and ignored).
+
+## v1.7 — command line
+- `stellar-cli.exe`, separate from `stellar.exe` (which forwards arguments to it); `--help`; exit code 2 on an unknown argument.
+- Resume without display from a save (`--charger`, `--poursuivre`) or a recording (`--reprendre`); `--pas` and `--temps` counted from the save's step.
+
+## v1.8 — sub-simulations and orbital velocity
+- Clicking a sub-simulation selects its barycenter (orbit at three times its size; own panel; B along its own angular momentum). After a merge, the selection moves to the nearest sub-simulation, or to the global barycenter.
+- Orbital velocity factor (0.5 to 1.5, `--facteur`, 1 by default), applied before the spread.
+- Formats: `.stellar` v6, `.stellarec` v4.
+
+## v1.9 — documentation
+- Documentation in English (README, SPEC, `docs/`, CLAUDE.md, skills); `docs/` split out for formats, GPU engine and sub-simulations.
+- Esc menu help: F5 label translated, F10 (quit) added.
