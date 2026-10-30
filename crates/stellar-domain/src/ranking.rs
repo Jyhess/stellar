@@ -1,26 +1,26 @@
-//! Classement des corps par masse : ordre décroissant, départagé par
-//! identifiant croissant (ordre total et stable).
+//! Ranking of bodies by mass: decreasing order, ties broken by increasing
+//! identifier (a total, stable order).
 //!
-//! Toutes les fonctions sont en O(n) : aucun tri complet n'est nécessaire.
+//! Every function is O(n): no full sort is needed.
 
 use std::cmp::Ordering;
 
 use crate::BodyId;
 
-/// Compare deux corps selon le rang : `Less` signifie « mieux classé »
-/// (plus massif).
+/// Compares two bodies by rank: `Less` means "ranked higher" (more
+/// massive).
 #[inline]
 pub fn rank_cmp(a: (f64, BodyId), b: (f64, BodyId)) -> Ordering {
     b.0.total_cmp(&a.0).then(a.1.cmp(&b.1))
 }
 
-/// Indice du corps le plus massif.
+/// Index of the most massive body.
 pub fn heaviest(ids: &[BodyId], masses: &[f64]) -> Option<usize> {
     (0..ids.len()).min_by(|&i, &j| rank_cmp((masses[i], ids[i]), (masses[j], ids[j])))
 }
 
-/// Indice du corps classé juste après (`lighter = true`, masse inférieure)
-/// ou juste avant (`lighter = false`) le corps de référence (masse, id).
+/// Index of the body ranked just after (`lighter = true`, smaller mass) or
+/// just before (`lighter = false`) the reference body (mass, id).
 pub fn neighbour(
     ids: &[BodyId],
     masses: &[f64],
@@ -59,19 +59,19 @@ pub fn neighbour(
     best
 }
 
-/// Rang (1 = le plus massif) du corps de référence.
+/// Rank (1 = most massive) of the reference body.
 pub fn rank_of(ids: &[BodyId], masses: &[f64], reference: (f64, BodyId)) -> usize {
     1 + (0..ids.len())
         .filter(|&i| rank_cmp((masses[i], ids[i]), reference) == Ordering::Less)
         .count()
 }
 
-/// Les `k` corps les plus massifs, du plus lourd au plus léger : (id, masse).
+/// The `k` most massive bodies, from heaviest to lightest: (id, mass).
 pub fn top_k(ids: &[BodyId], masses: &[f64], k: usize) -> Vec<(BodyId, f64)> {
     if k == 0 {
         return Vec::new();
     }
-    // Sélection en un passage avec un petit tampon trié (k est petit).
+    // Single-pass selection with a small sorted buffer (k is small).
     let mut top: Vec<(f64, BodyId)> = Vec::with_capacity(k + 1);
     for i in 0..ids.len() {
         let key = (masses[i], ids[i]);
@@ -98,13 +98,13 @@ mod tests {
     #[test]
     fn heaviest_breaks_ties_by_id() {
         let (ids, m) = sample();
-        assert_eq!(heaviest(&ids, &m), Some(1)); // id 11, masse 5
+        assert_eq!(heaviest(&ids, &m), Some(1)); // id 11, mass 5
     }
 
     #[test]
     fn walk_down_and_up() {
         let (ids, m) = sample();
-        // Ordre attendu : 11(5) 13(5) 12(3) 14(2) 10(1)
+        // Expected order: 11(5) 13(5) 12(3) 14(2) 10(1)
         let mut cur = heaviest(&ids, &m).unwrap();
         let mut order = vec![ids[cur]];
         while let Some(n) = neighbour(&ids, &m, (m[cur], ids[cur]), true) {

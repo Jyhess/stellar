@@ -1,52 +1,51 @@
 use serde::{Deserialize, Serialize};
 
-/// Profil de densité radiale d'un disque.
+/// Radial density profile of a disc.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum DensityProfile {
-    /// Densité surfacique uniforme.
+    /// Uniform surface density.
     Uniform,
-    /// Densité surfacique ∝ exp(−r / (scale·R)), tronquée au rayon R.
+    /// Surface density ∝ exp(−r / (scale·R)), truncated at radius R.
     Exponential { scale: f64 },
 }
 
-/// Forme du nuage initial.
+/// Shape of the initial cloud.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Distribution {
-    /// Boule pleine de rayon R, densité uniforme.
+    /// Solid ball of radius R, uniform density.
     Sphere,
-    /// Disque de rayon R dans le plan (x, y), d'épaisseur `thickness`·R.
+    /// Disc of radius R in the (x, y) plane, of thickness `thickness`·R.
     Disk {
         thickness: f64,
         profile: DensityProfile,
     },
 }
 
-/// Vitesse initiale des particules — modes exclusifs.
+/// Initial velocity of the particles — mutually exclusive modes.
 ///
-/// Les mouvements circulaires s'effectuent autour de l'axe vertical (Oz),
-/// dans le sens trigonométrique.
+/// Circular motions are around the vertical axis (Oz), counter-clockwise.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum VelocityMode {
-    /// Toutes les particules au repos.
+    /// All particles at rest.
     Rest,
-    /// Direction isotrope aléatoire, norme uniforme dans [min, max].
+    /// Random isotropic direction, magnitude uniform in [min, max].
     Random { min: f64, max: f64 },
-    /// Rotation autour de Oz, norme uniforme dans [min, max].
+    /// Rotation around Oz, magnitude uniform in [min, max].
     CircularFixed { min: f64, max: f64 },
-    /// Rotation autour de Oz à la vitesse d'équilibre orbital (calculée sur la
-    /// masse intérieure), multipliée par `factor` (1 : orbites circulaires ;
-    /// moins : effondrement ; plus : expansion) puis par un facteur uniforme
-    /// dans [1 − spread, 1 + spread].
+    /// Rotation around Oz at the orbital equilibrium speed (computed from the
+    /// enclosed mass), multiplied by `factor` (1: circular orbits; less:
+    /// collapse; more: expansion), then by a factor uniform in
+    /// [1 − spread, 1 + spread].
     CircularOrbital { spread: f64, factor: f64 },
-    /// Vitesse dirigée vers le centre, norme uniforme dans [min, max].
+    /// Velocity towards the center, magnitude uniform in [min, max].
     Radial { min: f64, max: f64 },
 }
 
-/// Conditions initiales d'une nouvelle simulation.
+/// Initial conditions of a new simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct InitialConditions {
     pub count: usize,
-    /// Rayon du nuage (sphère ou disque).
+    /// Radius of the cloud (sphere or disc).
     pub radius: f64,
     pub seed: u64,
     pub distribution: Distribution,
@@ -66,7 +65,7 @@ impl Default for InitialConditions {
 }
 
 impl InitialConditions {
-    /// Volume occupé par le nuage initial.
+    /// Volume occupied by the initial cloud.
     pub fn volume(&self) -> f64 {
         let r = self.radius;
         match self.distribution {
@@ -77,63 +76,64 @@ impl InitialConditions {
         }
     }
 
-    /// Distance moyenne entre particules voisines (≈ (V/N)^(1/3)).
+    /// Mean distance between neighbouring particles (≈ (V/N)^(1/3)).
     pub fn mean_spacing(&self) -> f64 {
         (self.volume() / self.count.max(1) as f64).cbrt()
     }
 
-    /// Vitesse caractéristique du système, √(G·M/R).
+    /// Characteristic speed of the system, √(G·M/R).
     pub fn characteristic_speed(&self, g: f64) -> f64 {
         (g * self.count as f64 / self.radius.max(1e-12)).sqrt()
     }
 
-    /// Temps de chute libre d'une sphère homogène de même densité moyenne.
+    /// Free-fall time of a homogeneous sphere of the same mean density.
     pub fn free_fall_time(&self, g: f64) -> f64 {
         let rho = self.count as f64 / self.volume().max(1e-300);
         (3.0 * std::f64::consts::PI / (32.0 * g * rho)).sqrt()
     }
 }
 
-/// Paramètres physiques et numériques — figés une fois la simulation lancée.
+/// Physical and numerical parameters — fixed once the simulation has started.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsParams {
-    /// Constante de gravitation.
+    /// Gravitational constant.
     pub g: f64,
-    /// Pas de temps (fixe).
+    /// Time step (fixed).
     pub dt: f64,
-    /// Longueur d'adoucissement de Plummer ε.
+    /// Plummer softening length ε.
     pub softening: f64,
-    /// Critère d'ouverture de Barnes-Hut θ.
+    /// Barnes-Hut opening criterion θ.
     pub theta: f64,
-    /// Rayon r₀ d'une particule de masse 1 ; r = r₀·m^(1/3).
+    /// Radius r₀ of a particle of mass 1; r = r₀·m^(1/3).
     pub base_radius: f64,
-    /// Période (en pas) du nettoyage des corps éjectés ; 0 = désactivé.
+    /// Period (in steps) of the cleanup of ejected bodies; 0 = disabled.
     pub cleanup_period: u32,
-    /// Un corps est éliminé s'il est non lié et à plus de
-    /// `cleanup_distance_factor × reference_radius` du barycentre.
+    /// A body is removed if it is unbound and farther than
+    /// `cleanup_distance_factor × reference_radius` from the barycenter.
     pub cleanup_distance_factor: f64,
-    /// Rayon de référence (rayon du nuage initial).
+    /// Reference radius (radius of the initial cloud).
     pub reference_radius: f64,
-    /// Amas éjectés (voir [`crate::ejection`]) : distance de liaison des
-    /// groupes « amis d'amis ».
+    /// Ejected clusters (see [`crate::ejection`]): link length of the
+    /// "friends of friends" groups.
     pub cluster_link_length: f64,
-    /// Un amas lié d'au moins ce nombre de corps est conservé (0 = critère
-    /// ignoré).
+    /// A bound cluster of at least this many bodies is kept (0 = criterion
+    /// ignored).
     pub cluster_min_bodies: u32,
-    /// … ou d'au moins cette part de la masse initiale (0 = critère ignoré).
+    /// … or of at least this share of the initial mass (0 = criterion ignored).
     pub cluster_min_mass: f64,
 }
 
-/// ε suggéré, rapporté à la distance moyenne entre voisins.
+/// Suggested ε, relative to the mean distance between neighbours.
 pub const SOFTENING_PER_SPACING: f64 = 0.3;
 
 impl PhysicsParams {
-    /// Valeurs par défaut déduites des conditions initiales :
-    /// - ε = 0,3 × distance moyenne entre voisins ;
-    /// - r₀ = 1 % de cette distance ;
-    /// - dt = t_ff / 500 (temps de chute libre) ;
-    /// - amas éjectés : liaison à la distance moyenne entre voisins, au moins
-    ///   10 corps ou 0,1 % de la masse initiale.
+    /// Default values derived from the initial conditions:
+    /// - ε = 0.3 × mean distance between neighbours;
+    /// - r₀ = 1 % of that distance;
+    /// - dt = t_ff / 500 (free-fall time);
+    /// - θ = 0.7; cleanup every 100 steps beyond 10 × the cloud radius;
+    /// - ejected clusters: link length = mean distance between neighbours, at
+    ///   least 10 bodies or 0.1 % of the initial mass.
     pub fn suggested(initial: &InitialConditions, g: f64) -> Self {
         let spacing = initial.mean_spacing();
         Self {
@@ -158,12 +158,12 @@ impl Default for PhysicsParams {
     }
 }
 
-/// Configuration complète d'une simulation.
+/// Complete configuration of a simulation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimulationConfig {
     pub initial: InitialConditions,
     pub physics: PhysicsParams,
-    /// Identifiant du moteur de calcul (voir [`crate::EngineDescriptor`]).
+    /// Identifier of the computation engine (see [`crate::EngineDescriptor`]).
     pub engine: String,
 }
 

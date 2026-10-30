@@ -1,22 +1,22 @@
-//! Règles physiques élémentaires, indépendantes de tout moteur.
+//! Elementary physical rules, independent of any engine.
 
 use crate::{BodyId, Vec3};
 
-/// Rayon d'un corps de masse `mass` : densité constante, r = r₀·m^(1/3).
+/// Radius of a body of mass `mass`: constant density, r = r₀·m^(1/3).
 #[inline]
 pub fn body_radius(mass: f64, base_radius: f64) -> f64 {
     base_radius * mass.cbrt()
 }
 
-/// Distance minimale entre deux corps en mouvement rectiligne uniforme sur un
-/// pas, connaissant leurs positions de début (`a0`, `b0`) et de fin (`a1`, `b1`).
+/// Minimum distance between two bodies in uniform straight-line motion over a
+/// step, given their start (`a0`, `b0`) and end (`a1`, `b1`) positions.
 ///
-/// C'est le cœur de la détection de contact « balayée » : deux corps rapides
-/// qui se croisent entre deux pas sont bien détectés.
+/// This is the core of "swept" contact detection: two fast bodies that
+/// cross between two steps are still detected.
 #[inline]
 pub fn swept_min_distance(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f64 {
-    let d0 = b0 - a0; // séparation initiale
-    let dv = (b1 - b0) - (a1 - a0); // variation de la séparation sur le pas
+    let d0 = b0 - a0; // initial separation
+    let dv = (b1 - b0) - (a1 - a0); // change of the separation over the step
     let dv2 = dv.length_squared();
     let t = if dv2 > 0.0 {
         (-d0.dot(dv) / dv2).clamp(0.0, 1.0)
@@ -26,7 +26,7 @@ pub fn swept_min_distance(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f64 {
     (d0 + dv * t).length()
 }
 
-/// Corps élémentaire manipulé lors d'une fusion.
+/// Elementary body handled during a merger.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MergeInput {
     pub id: BodyId,
@@ -35,12 +35,12 @@ pub struct MergeInput {
     pub velocity: Vec3,
 }
 
-/// Fusion d'un groupe de corps (au moins un) :
-/// - la masse est la somme des masses ;
-/// - la position est le barycentre ;
-/// - la quantité de mouvement est conservée ;
-/// - l'identifiant est celui du membre le plus massif (à masse égale, le plus
-///   petit identifiant).
+/// Merger of a group of bodies (at least one):
+/// - the mass is the sum of the masses;
+/// - the position is the barycenter;
+/// - momentum is conserved;
+/// - the identifier is that of the most massive member (for equal masses,
+///   the smallest identifier).
 pub fn merge(group: &[MergeInput]) -> MergeInput {
     assert!(!group.is_empty(), "fusion d'un groupe vide");
     let mut mass = 0.0;
@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn swept_distance_detects_crossing() {
-        // Deux corps qui se croisent au milieu du pas.
+        // Two bodies that cross in the middle of the step.
         let d = swept_min_distance(
             Vec3::new(-10.0, 0.0, 0.0),
             Vec3::new(10.0, 0.0, 0.0),
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn swept_distance_clamps_to_segment() {
-        // S'éloignent : la distance minimale est la distance initiale.
+        // Moving apart: the minimum distance is the initial distance.
         let d = swept_min_distance(
             Vec3::ZERO,
             Vec3::new(-1.0, 0.0, 0.0),

@@ -2,15 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::Vec3;
 
-/// Identifiant stable d'un corps. Lors d'une fusion, le corps résultant
-/// conserve l'identifiant du membre le plus massif.
+/// Stable identifier of a body. In a merger, the resulting body keeps the
+/// identifier of the most massive member.
 pub type BodyId = u64;
 
-/// Ensemble de corps, stocké en « structure de tableaux » (SoA) : chaque
-/// attribut est un vecteur contigu, ce qui favorise la vectorisation et le
-/// parallélisme dans les moteurs de calcul.
+/// Set of bodies, stored as a "structure of arrays" (SoA): each attribute is
+/// a contiguous vector, which helps vectorization and parallelism in the
+/// engines.
 ///
-/// Invariant : tous les vecteurs ont la même longueur.
+/// Invariant: all vectors have the same length.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BodySet {
     pub ids: Vec<BodyId>,
@@ -44,13 +44,13 @@ impl BodySet {
         self.masses.push(mass);
     }
 
-    /// Vérifie l'invariant de longueur commune.
+    /// Checks the common-length invariant.
     pub fn is_consistent(&self) -> bool {
         let n = self.ids.len();
         self.positions.len() == n && self.velocities.len() == n && self.masses.len() == n
     }
 
-    /// Indice du corps portant l'identifiant donné (recherche linéaire).
+    /// Index of the body with the given identifier (linear search).
     pub fn index_of(&self, id: BodyId) -> Option<usize> {
         self.ids.iter().position(|&x| x == id)
     }
@@ -59,7 +59,7 @@ impl BodySet {
         self.masses.iter().sum()
     }
 
-    /// Quantité de mouvement totale Σ m·v.
+    /// Total momentum Σ m·v.
     pub fn momentum(&self) -> Vec3 {
         self.masses
             .iter()
@@ -68,7 +68,7 @@ impl BodySet {
             .sum()
     }
 
-    /// Barycentre (position du centre de masse). `None` si l'ensemble est vide.
+    /// Barycenter (position of the center of mass). `None` if the set is empty.
     pub fn center_of_mass(&self) -> Option<Vec3> {
         let m = self.total_mass();
         if m <= 0.0 {
@@ -83,8 +83,8 @@ impl BodySet {
         Some(s / m)
     }
 
-    /// Rayon de la plus petite sphère centrée en `center` contenant au moins
-    /// la fraction `fraction` (entre 0 et 1) de la masse totale.
+    /// Radius of the smallest sphere centred on `center` that contains at least
+    /// the fraction `fraction` (between 0 and 1) of the total mass.
     pub fn mass_radius(&self, center: Vec3, fraction: f64) -> f64 {
         let total = self.total_mass();
         if total <= 0.0 {
@@ -108,7 +108,7 @@ impl BodySet {
         d.last().map_or(0.0, |x| x.0.sqrt())
     }
 
-    /// Énergie cinétique totale Σ ½ m v².
+    /// Total kinetic energy Σ ½ m v².
     pub fn kinetic_energy(&self) -> f64 {
         self.masses
             .iter()

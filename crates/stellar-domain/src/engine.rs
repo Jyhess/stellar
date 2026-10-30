@@ -1,9 +1,9 @@
-//! Abstraction du moteur de calcul.
+//! Abstraction of the computation engine.
 //!
-//! Le reste de l'application ne connaît que ces traits : un nouveau moteur
-//! (par exemple sur GPU) s'ajoute en implémentant [`EngineFactory`] et
-//! [`PhysicsEngine`], puis en l'enregistrant auprès du registre de
-//! l'application ; il devient alors sélectionnable dans les paramètres.
+//! The rest of the application knows only these traits: a new engine is
+//! added by implementing [`EngineFactory`] and [`PhysicsEngine`], then
+//! registering it with the application's registry; it can then be selected
+//! in the parameters.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -13,33 +13,32 @@ use crate::{
     SystemSummary, Vec3,
 };
 
-/// Description d'un moteur, affichée dans l'interface.
+/// Description of an engine, shown in the interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineDescriptor {
-    /// Identifiant stable, enregistré dans les sauvegardes.
+    /// Stable identifier, stored in saves.
     pub id: &'static str,
-    /// Libellé lisible.
+    /// Human-readable label.
     pub label: &'static str,
     pub description: &'static str,
 }
 
-/// Compte rendu d'un pas de simulation.
+/// Report of a simulation step.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StepReport {
-    /// Fusions survenues : (identifiant absorbé, identifiant du corps résultant).
+    /// Mergers that happened: (absorbed identifier, identifier of the resulting body).
     pub merges: Vec<(BodyId, BodyId)>,
-    /// Corps éliminés par le nettoyage des éjectés.
+    /// Bodies removed by the cleanup of ejected bodies.
     pub removed: Vec<BodyId>,
-    /// Les mêmes corps, tels qu'au moment de leur élimination (mêmes
-    /// identifiants, même ordre) : un système composite peut les confier à
-    /// un autre sous-système.
+    /// The same bodies, as they were when removed (same identifiers, same
+    /// order): a composite system can hand them over to another subsystem.
     pub removed_bodies: BodySet,
-    /// Amas éjectés conservés, décrits à chaque nettoyage (`None` hors
-    /// nettoyage).
+    /// Kept ejected clusters, described at each cleanup (`None` outside
+    /// cleanup steps).
     pub clusters: Option<Vec<EjectedCluster>>,
 }
 
-/// Grandeurs globales calculées par le moteur à l'issue d'un pas.
+/// Energies computed by the engine at the end of a step.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Diagnostics {
     pub kinetic_energy: f64,
@@ -52,26 +51,26 @@ impl Diagnostics {
     }
 }
 
-/// Moteur de calcul : fait évoluer un état d'un pas de temps fixe.
+/// Computation engine: advances a state by a fixed time step.
 ///
-/// Un moteur est piloté depuis un unique thread de simulation ; il peut
-/// paralléliser librement en interne.
+/// An engine is driven from a single simulation thread; it may parallelize
+/// freely internally.
 pub trait PhysicsEngine: Send {
-    /// Avance d'un pas de temps `dt`, fusions et nettoyage périodique inclus.
+    /// Advances by one time step `dt`, mergers and periodic cleanup included.
     fn step(&mut self) -> StepReport;
 
-    /// Copie complète de l'état courant (positions et vitesses synchronisées).
+    /// Full copy of the current state (positions and velocities synchronized).
     fn state(&self) -> SimulationState;
 
-    /// Copie l'état courant dans `out`, en réutilisant ses allocations.
+    /// Copies the current state into `out`, reusing its allocations.
     fn write_state(&self, out: &mut SimulationState) {
         *out = self.state();
     }
 
     fn body_count(&self) -> usize;
 
-    /// Positions courantes des corps demandés (`None` si absent). Appelé à
-    /// chaque pas pour les traces : les moteurs gagnent à le spécialiser.
+    /// Current positions of the requested bodies (`None` if absent). Called at
+    /// every step for traces: engines benefit from specializing it.
     fn positions_of(&self, ids: &[BodyId]) -> Vec<Option<Vec3>> {
         let s = self.state();
         ids.iter()
@@ -79,25 +78,25 @@ pub trait PhysicsEngine: Send {
             .collect()
     }
 
-    /// Centre de masse du système (`None` s'il est vide). Appelé à chaque
-    /// pas quand les traces sont actives.
+    /// Center of mass of the system (`None` if it is empty). Called at every
+    /// step while traces are active.
     fn center_of_mass(&self) -> Option<Vec3> {
         self.state().bodies.center_of_mass()
     }
 
-    /// Énergies au dernier pas calculé.
+    /// Energies at the last computed step.
     fn diagnostics(&self) -> Diagnostics;
 
-    /// Accès direct aux données du moteur pour l'affichage, sans copie (par
-    /// exemple les tampons d'une carte graphique partagée avec l'interface).
-    /// Le type concret est propre au moteur : la couche de présentation le
-    /// reconnaît par conversion (`downcast`). `None` par défaut : l'affichage
-    /// passe alors par les copies de l'état ([`Self::write_state`]).
+    /// Direct access to the engine's data for display, without copy (for
+    /// example the buffers of a graphics card shared with the interface). The
+    /// concrete type belongs to the engine: the presentation layer recognizes it
+    /// by `downcast`. `None` by default: display then goes through copies of
+    /// the state ([`Self::write_state`]).
     fn live_view(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }
 
-    /// Masse, barycentre et vitesse du barycentre au dernier pas.
+    /// Mass, barycenter and barycenter velocity at the last step.
     fn moments(&self) -> Moments {
         let b = self.state().bodies;
         let mass = b.total_mass();
@@ -108,41 +107,41 @@ pub trait PhysicsEngine: Send {
         }
     }
 
-    /// Champ extérieur valable à la fin du prochain pas (voir
-    /// [`crate::systems`]) ; le premier demi-kick du pas utilise le champ
-    /// fixé au pas précédent (ou celui-ci, la première fois). Renvoie
-    /// `false` si le moteur ne sait pas en tenir compte.
+    /// External field valid at the end of the next step (see
+    /// [`crate::systems`]); the step's first half kick uses the field set at
+    /// the previous step (or this one, the first time). Returns `false` if the
+    /// engine cannot take it into account.
     fn set_external_field(&mut self, field: ExternalField) -> bool {
         let _ = field;
         false
     }
 
-    /// Ajoute des corps (vitesses synchronisées ; leur accélération propre
-    /// n'est connue qu'au pas suivant). Renvoie `false` si le moteur ne le
-    /// permet pas, ou plus (capacité atteinte) : l'appelant le reconstruit.
+    /// Adds bodies (synchronized velocities; their own acceleration is known
+    /// only at the next step). Returns `false` if the engine does not allow it,
+    /// or no longer does (capacity reached): the caller then rebuilds it.
     fn insert(&mut self, bodies: &BodySet) -> bool {
         let _ = bodies;
         false
     }
 
-    /// Sous-systèmes calculés séparément (vide pour un moteur simple).
+    /// Subsystems computed separately (empty for a simple engine).
     fn systems(&self) -> Vec<SystemSummary> {
         Vec::new()
     }
 }
 
-/// Fabrique de moteurs : point d'extension pour de futurs moteurs.
+/// Engine factory: the extension point for new engines.
 pub trait EngineFactory: Send + Sync {
     fn descriptor(&self) -> EngineDescriptor;
 
-    /// Nombre maximal de corps que ce moteur peut traiter sur cette machine
-    /// (`None` : seule la mémoire centrale le limite).
+    /// Maximum number of bodies this engine can handle on this machine
+    /// (`None`: only main memory limits it).
     fn max_bodies(&self) -> Option<usize> {
         None
     }
 
-    /// Construit un moteur à partir d'un état et de paramètres. Échoue si le
-    /// matériel requis est absent ou insuffisant (message lisible).
+    /// Builds an engine from a state and parameters. Fails, with a readable
+    /// message, if the required hardware is missing or insufficient.
     fn create(
         &self,
         state: SimulationState,

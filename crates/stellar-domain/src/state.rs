@@ -2,21 +2,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::BodySet;
 
-/// État instantané d'une simulation : suffisant pour la reprendre exactement.
+/// Instantaneous state of a simulation: enough to resume it exactly.
 ///
-/// Les vitesses sont synchronisées avec les positions (pas entier).
+/// Velocities are synchronized with positions (whole step).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SimulationState {
     pub bodies: BodySet,
-    /// Nombre de pas effectués depuis la création.
+    /// Number of steps since creation.
     pub step: u64,
-    /// Temps simulé.
+    /// Simulated time.
     pub time: f64,
-    /// Énergie totale initiale (référence pour le suivi de la dérive).
+    /// Initial total energy (reference for monitoring the drift).
     pub initial_energy: Option<f64>,
-    /// Masse totale initiale (référence pour la masse éjectée).
+    /// Initial total mass (reference for the ejected mass).
     pub initial_mass: Option<f64>,
-    /// Sous-systèmes (voir [`crate::systems`]) : plages des corps, rangés
-    /// par sous-système. Vide : un seul système.
+    /// Subsystems (see [`crate::systems`]): ranges of the bodies, grouped by
+    /// subsystem. Empty: a single system.
     pub systems: Vec<crate::SystemSpan>,
 }

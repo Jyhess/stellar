@@ -1,54 +1,55 @@
-//! Nettoyage des corps éjectés, en préservant les amas liés.
+//! Cleanup of ejected bodies, preserving bound clusters.
 //!
-//! Un corps lointain (au-delà de k × R du barycentre) et non lié au système
-//! est éliminé, **sauf** s'il appartient à un amas éjecté significatif :
+//! A distant body (beyond k × R from the barycenter) that is not bound to
+//! the system is removed, **unless** it belongs to a significant ejected
+//! cluster:
 //!
-//! 1. les corps lointains sont regroupés par « amis d'amis » (deux corps à
-//!    moins de la distance de liaison appartiennent au même groupe) ;
-//! 2. chaque groupe est épuré : les membres dont l'énergie, mesurée dans le
-//!    référentiel du groupe et sous son seul potentiel, est positive en sont
-//!    retirés (les plus énergiques d'abord), jusqu'à stabilité ;
-//! 3. un groupe lié d'au moins `min_bodies` corps, ou d'une masse au moins
-//!    égale à `min_mass`, est conservé en entier : c'est un amas éjecté.
+//! 1. distant bodies are grouped by "friends of friends" (two bodies closer
+//!    than the link length belong to the same group);
+//! 2. each group is pruned: members whose energy, measured in the group's
+//!    frame and under the group's own potential, is positive are removed
+//!    (most energetic first), until nothing changes;
+//! 3. a bound group of at least `min_bodies` bodies, or with a mass of at
+//!    least `min_mass`, is kept whole: it is an ejected cluster.
 //!
-//! Les moteurs fournissent les corps lointains (avec leur potentiel dans le
-//! système entier) ; la règle désigne ceux à éliminer et décrit les amas.
+//! Engines provide the distant bodies (with their potential in the whole
+//! system); the rule picks those to remove and describes the clusters.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{BodyId, BodySet, PhysicsParams, Vec3};
 
-/// Au-delà de cette taille, le potentiel propre d'un groupe est approché par
-/// une distribution à symétrie sphérique (O(n log n)) plutôt que sommé
-/// exactement (O(n²)).
+/// Beyond this size, the group's own potential is approximated by a
+/// spherically symmetric distribution (O(n log n)) instead of being summed
+/// exactly (O(n²)).
 const EXACT_LIMIT: usize = 2048;
 
-/// Corps lointain soumis au nettoyage.
+/// Distant body subject to cleanup.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Candidate {
     pub id: BodyId,
     pub position: Vec3,
     pub velocity: Vec3,
     pub mass: f64,
-    /// Potentiel gravitationnel ressenti dans le système entier (par unité
-    /// de masse, G inclus).
+    /// Gravitational potential felt in the whole system (per unit mass, G
+    /// included).
     pub potential: f64,
 }
 
-/// Seuils de la règle, tirés des paramètres physiques.
+/// Thresholds of the rule, taken from the physical parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EjectionRules {
     pub g: f64,
     pub softening: f64,
     pub link_length: f64,
     pub min_bodies: u32,
-    /// Masse minimale d'un amas (absolue).
+    /// Minimum mass of a cluster (absolute).
     pub min_mass: f64,
 }
 
 impl EjectionRules {
-    /// `initial_mass` : masse totale initiale, à laquelle se rapporte la part
-    /// minimale `cluster_min_mass`.
+    /// `initial_mass`: total initial mass, to which the minimum share
+    /// `cluster_min_mass` refers.
     pub fn new(params: &PhysicsParams, initial_mass: f64) -> Self {
         Self {
             g: params.g,
@@ -59,39 +60,39 @@ impl EjectionRules {
         }
     }
 
-    /// Un amas lié de cette taille et de cette masse est-il conservé ?
+    /// Is a bound cluster of this size and mass kept?
     fn significant(&self, bodies: usize, mass: f64) -> bool {
         (self.min_bodies > 0 && bodies >= self.min_bodies as usize)
             || (self.min_mass > 0.0 && mass >= self.min_mass)
     }
 }
 
-/// Amas éjecté conservé par le nettoyage.
+/// Ejected cluster kept by the cleanup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EjectedCluster {
-    /// Corps le plus massif de l'amas (repère pour le suivi).
+    /// Most massive body of the cluster (marker for tracking).
     pub anchor: BodyId,
     pub bodies: u32,
     pub mass: f64,
     pub center: Vec3,
     pub velocity: Vec3,
-    /// Rayon contenant la moitié de la masse, autour du centre.
+    /// Radius containing half of the mass, around the center.
     pub half_mass_radius: f64,
-    /// Identifiants des membres.
+    /// Identifiers of the members.
     pub members: Vec<BodyId>,
 }
 
-/// Résultat du nettoyage.
+/// Result of the cleanup.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Ejection {
-    /// Indices (dans la liste des candidats) des corps à éliminer, croissants.
+    /// Indices (in the candidate list) of the bodies to remove, increasing.
     pub removed: Vec<usize>,
-    /// Amas conservés, du plus massif au moins massif.
+    /// Kept clusters, from most to least massive.
     pub clusters: Vec<EjectedCluster>,
 }
 
-/// Applique la règle aux corps lointains. `velocity` : vitesse du barycentre
-/// du système entier (référentiel du critère « non lié »).
+/// Applies the rule to the distant bodies. `velocity`: velocity of the
+/// barycenter of the whole system (frame of the "unbound" criterion).
 pub fn sort_out(candidates: &[Candidate], velocity: Vec3, rules: &EjectionRules) -> Ejection {
     let mut keep = vec![false; candidates.len()];
     let mut clusters = Vec::new();
@@ -118,8 +119,8 @@ pub fn sort_out(candidates: &[Candidate], velocity: Vec3, rules: &EjectionRules)
     Ejection { removed, clusters }
 }
 
-/// Groupes « amis d'amis » : composantes connexes du graphe reliant les corps
-/// distants de moins de `link`. Grille de pas `link`, cellules triées.
+/// "Friends of friends" groups: connected components of the graph linking
+/// bodies closer than `link`. Grid of cell size `link`, sorted cells.
 pub fn friends_of_friends(candidates: &[Candidate], link: f64) -> Vec<Vec<usize>> {
     let n = candidates.len();
     if n == 0 {
@@ -153,7 +154,7 @@ pub fn friends_of_friends(candidates: &[Candidate], link: f64) -> Vec<Vec<usize>
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     let k = [key[0] + dx, key[1] + dy, key[2] + dz];
-                    // Chaque paire de cellules n'est examinée qu'une fois.
+                    // Each pair of cells is examined only once.
                     if k < key {
                         continue;
                     }
@@ -186,11 +187,11 @@ pub fn friends_of_friends(candidates: &[Candidate], link: f64) -> Vec<Vec<usize>
     groups
 }
 
-/// Épuration d'un groupe : retire les membres non liés (énergie propre au
-/// groupe positive) jusqu'à stabilité ; renvoie les membres liés.
+/// Pruning of a group: removes unbound members (positive energy within the
+/// group) until nothing changes; returns the bound members.
 fn unbind(candidates: &[Candidate], mut members: Vec<usize>, rules: &EjectionRules) -> Vec<usize> {
     if members.len() == 1 {
-        // Un corps isolé est « lié » à lui-même : seule sa masse compte.
+        // A lone body is "bound" to itself: only its mass matters.
         return members;
     }
     let eps2 = rules.softening * rules.softening;
@@ -216,10 +217,10 @@ fn unbind(candidates: &[Candidate], mut members: Vec<usize>, rules: &EjectionRul
         if worst < 0.0 {
             return members;
         }
-        // Seuls les plus énergiques partent à chaque tour (au moins la moitié
-        // de l'énergie du pire) : un intrus très rapide fausse la vitesse du
-        // groupe, et retirer d'un coup tous les membres apparemment non liés
-        // pourrait dissoudre un amas véritable.
+        // Only the most energetic leave at each round (at least half the energy
+        // of the worst): a very fast intruder skews the group's velocity, and
+        // removing at once every member that looks unbound could dissolve a
+        // genuine cluster.
         let gone: Vec<bool> = energy.iter().map(|&e| e >= 0.5 * worst).collect();
         let mut k = 0;
         members.retain(|_| {
@@ -244,7 +245,7 @@ fn barycenter(candidates: &[Candidate], members: &[usize]) -> (f64, Vec3, Vec3) 
     }
 }
 
-/// Potentiel propre au groupe, sommé exactement (adoucissement de Plummer).
+/// Group's own potential, summed exactly (Plummer softening).
 fn exact_potentials(candidates: &[Candidate], members: &[usize], g: f64, eps2: f64) -> Vec<f64> {
     let mut phi = vec![0.0; members.len()];
     for a in 0..members.len() {
@@ -259,8 +260,8 @@ fn exact_potentials(candidates: &[Candidate], members: &[usize], g: f64, eps2: f
     phi
 }
 
-/// Potentiel propre au groupe, approché par la distribution sphérique de
-/// même profil radial autour du barycentre :
+/// Group's own potential, approximated by the spherical distribution with
+/// the same radial profile around the barycenter:
 /// φ(r) = −G (M(<r) / r + Σ_{rⱼ > r} mⱼ / rⱼ).
 fn spherical_potentials(
     candidates: &[Candidate],
@@ -277,13 +278,13 @@ fn spherical_potentials(
     let mut order: Vec<usize> = (0..members.len()).collect();
     order.sort_unstable_by(|&a, &b| radius[a].total_cmp(&radius[b]));
     let mut phi = vec![0.0; members.len()];
-    // Contribution extérieure : Σ mⱼ / rⱼ des corps plus éloignés.
+    // Outer contribution: Σ mⱼ / rⱼ of the farther bodies.
     let mut outer = 0.0;
     for &k in order.iter().rev() {
         phi[k] = -g * outer;
         outer += candidates[members[k]].mass / soft(radius[k]);
     }
-    // Contribution intérieure : M(<r) / r.
+    // Inner contribution: M(<r) / r.
     let mut inner = 0.0;
     for &k in &order {
         phi[k] -= g * inner / soft(radius[k]);
@@ -328,16 +329,16 @@ fn describe(candidates: &[Candidate], members: &[usize], mass: f64) -> EjectedCl
     }
 }
 
-/// Rayon de recherche de l'amas local, en distances de liaison.
+/// Search radius of the local cluster, in link lengths.
 const LOCAL_SEARCH: f64 = 30.0;
-/// Corps examinés au plus pour l'amas local (les plus proches).
+/// Maximum number of bodies examined for the local cluster (the nearest).
 const LOCAL_CAP: usize = 200_000;
 
-/// Amas lié auquel appartient le corps d'indice `around` : corps voisins
-/// (dans un rayon de 30 distances de liaison), groupe « amis d'amis » qui le
-/// contient, épuré de ses membres non liés (potentiel propre au groupe).
-/// Renvoie les indices des membres ; le corps seul s'il n'est lié à aucun
-/// groupe.
+/// Bound cluster containing the body of index `around`: neighbouring bodies
+/// (within `LOCAL_SEARCH` link lengths), the "friends of friends" group
+/// that contains it, pruned of its unbound members (group's own potential).
+/// Returns the indices of the members; the body alone if it is bound to no
+/// group.
 pub fn local_cluster(bodies: &BodySet, around: usize, rules: &EjectionRules) -> Vec<usize> {
     let center = bodies.positions[around];
     let reach = LOCAL_SEARCH * rules.link_length;

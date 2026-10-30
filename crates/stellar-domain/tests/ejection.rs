@@ -1,4 +1,4 @@
-//! Règle de nettoyage des éjectés : amas liés conservés.
+//! Cleanup rule of ejected bodies: bound clusters are kept.
 
 use stellar_domain::ejection::{
     friends_of_friends, local_cluster, sort_out, Candidate, EjectionRules,
@@ -22,13 +22,13 @@ fn body(id: u64, position: Vec3, velocity: Vec3, mass: f64) -> Candidate {
         position,
         velocity,
         mass,
-        // Non lié au système entier : seule l'appartenance à un amas sauve.
+        // Unbound to the whole system: only membership of a cluster saves it.
         potential: 0.0,
     }
 }
 
-/// Amas compact de `n` corps de masse 1 autour de `center`, au repos dans
-/// son référentiel, animé de la vitesse `velocity`.
+/// Compact cluster of `n` bodies of mass 1 around `center`, at rest in its
+/// own frame, moving at velocity `velocity`.
 fn cluster(first: u64, n: u64, center: Vec3, radius: f64, velocity: Vec3) -> Vec<Candidate> {
     (0..n)
         .map(|k| {
@@ -54,7 +54,7 @@ fn friends_of_friends_follows_chains() {
         body(1, Vec3::new(0.9, 0.0, 0.0), v, 1.0),
         body(2, Vec3::new(1.8, 0.0, 0.0), v, 1.0),
         body(3, Vec3::new(5.0, 0.0, 0.0), v, 1.0),
-        // De part et d'autre d'une frontière de cellule.
+        // On either side of a cell boundary.
         body(4, Vec3::new(-0.1, 7.0, 0.0), v, 1.0),
         body(5, Vec3::new(0.1, 7.0, 0.0), v, 1.0),
     ];
@@ -83,7 +83,7 @@ fn bound_cluster_is_kept_and_described() {
 #[test]
 fn unbound_member_is_stripped_from_cluster() {
     let mut c = cluster(0, 20, Vec3::ZERO, 0.2, Vec3::new(50.0, 0.0, 0.0));
-    // Un membre beaucoup trop rapide pour le puits de l'amas.
+    // A member far too fast for the cluster's potential well.
     c[3].velocity += Vec3::new(1_000.0, 0.0, 0.0);
     let e = sort_out(&c, Vec3::ZERO, &rules());
     assert_eq!(e.removed, vec![3]);
@@ -97,7 +97,7 @@ fn small_groups_are_removed_unless_massive() {
     assert_eq!(e.removed, vec![0, 1, 2, 3, 4]);
     assert!(e.clusters.is_empty());
 
-    // Critère de masse : un corps isolé assez massif est conservé.
+    // Mass criterion: a lone body massive enough is kept.
     let mut r = rules();
     r.min_mass = 10.0;
     let lone = vec![
@@ -120,8 +120,8 @@ fn bodies_bound_to_the_system_are_never_removed() {
 
 #[test]
 fn large_clusters_use_the_spherical_approximation() {
-    // Au-delà de 2 048 membres, le potentiel propre est approché : un amas
-    // lié reste reconnu, une vitesse d'évasion nette l'en détache.
+    // Beyond 2,048 members, the group's own potential is approximated: a
+    // bound cluster is still recognized, a clear escape velocity detaches it.
     let mut c = cluster(0, 3_000, Vec3::ZERO, 2.0, Vec3::new(5.0, 0.0, 0.0));
     let escape = (2.0 * 3_000.0 / 2.0f64).sqrt();
     c[0].velocity += Vec3::new(0.0, 3.0 * escape, 0.0);
@@ -142,7 +142,7 @@ fn local_cluster_of_a_body() {
     for c in cluster(100, 20, Vec3::new(10.0, 0.0, 0.0), 0.3, Vec3::new(0.0, 3.0, 0.0)) {
         b.push(c.id, c.position, c.velocity, c.mass);
     }
-    // Un corps de passage, rapide, au milieu du second amas.
+    // A fast body passing through the middle of the second cluster.
     b.push(500, Vec3::new(10.1, 0.0, 0.0), Vec3::new(0.0, -400.0, 0.0), 1.0);
     let mut members = local_cluster(&b, 35, &rules());
     members.sort_unstable();

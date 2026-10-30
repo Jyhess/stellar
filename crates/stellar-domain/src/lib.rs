@@ -1,12 +1,12 @@
 //! # stellar-domain
 //!
-//! Cœur métier du simulateur : entités (corps, état, paramètres), règles
-//! physiques élémentaires (rayon, fusion, classement par masse) et
-//! **abstraction du moteur de calcul** ([`PhysicsEngine`]).
+//! Core of the simulator: entities (bodies, state, parameters), physical
+//! rules (radius, merger, mass ranking, cleanup of ejected bodies, field
+//! between subsystems) and the **abstraction of the computation engine**
+//! ([`PhysicsEngine`]).
 //!
-//! Cette couche ne dépend d'aucune infrastructure (ni GPU, ni fichiers, ni
-//! threads) : seules `glam` (algèbre vectorielle) et `serde` (description des
-//! données) y sont admises.
+//! This layer depends on no infrastructure (no GPU, files or threads): only
+//! `glam` (vector algebra) and `serde` (data description) are allowed.
 
 pub mod body;
 pub mod config;
@@ -26,5 +26,5 @@ pub use engine::{Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, St
 pub use state::SimulationState;
 pub use systems::{ExternalField, Moments, SystemSpan, SystemSummary, SystemsView};
 
-/// Vecteur 3D double précision utilisé pour toute grandeur physique.
+/// Double-precision 3D vector used for every physical quantity.
 pub type Vec3 = glam::DVec3;

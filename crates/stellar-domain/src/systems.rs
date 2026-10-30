@@ -1,18 +1,18 @@
-//! Sous-systèmes : une simulation découpée en amas calculés séparément.
+//! Subsystems: a simulation split into clusters computed separately.
 //!
-//! Un amas éjecté et détaché devient un sous-système à part, calculé par son
-//! propre moteur dans son propre repère (origine près de son barycentre). Les
-//! sous-systèmes avancent au même pas ; chacun ressent les autres par un
-//! **champ extérieur linéaire** ([`ExternalField`]) : accélération au
-//! barycentre et tenseur de marée, déduits des masses et barycentres des
-//! autres (approximation monopolaire des sources, développement au premier
-//! ordre autour de la cible).
+//! An ejected cluster that has moved away becomes a separate subsystem,
+//! computed by its own engine in its own frame (origin near its barycenter).
+//! Subsystems advance with the same step; each one feels the others through
+//! a **linear external field** ([`ExternalField`]): acceleration at the
+//! barycenter and tidal tensor, derived from the masses and barycenters of
+//! the others (monopole approximation of the sources, first-order expansion
+//! around the target).
 //!
-//! Critères (rapport taille / distance, avec hystérésis) :
-//! - séparation d'un amas détecté par le nettoyage quand
-//!   (taille de l'amas + taille du système) < [`SPLIT_RATIO`] × distance ;
-//! - réunion de deux sous-systèmes quand
-//!   (somme des tailles) > [`MERGE_RATIO`] × distance.
+//! Criteria (size / distance ratio, with hysteresis):
+//! - a cluster found by the cleanup is split off when
+//!   (cluster size + system size) < [`SPLIT_RATIO`] × distance;
+//! - two subsystems are merged when
+//!   (sum of sizes) > [`MERGE_RATIO`] × distance.
 
 use std::any::Any;
 use std::sync::{Arc, Mutex};
@@ -21,24 +21,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::{BodyId, Vec3};
 
-/// Seuil de séparation (taille / distance).
+/// Split threshold (size / distance).
 pub const SPLIT_RATIO: f64 = 0.3;
-/// Seuil de réunion (taille / distance) ; nettement au-dessus du seuil de
-/// séparation pour éviter les allers-retours.
+/// Merge threshold (size / distance); well above the split threshold to
+/// avoid going back and forth.
 pub const MERGE_RATIO: f64 = 0.6;
 
-/// Champ gravitationnel extérieur, linéarisé autour de `center` (coordonnées
-/// du moteur) : a(x) = `acceleration` + `tidal` · (x − `center`).
+/// External gravitational field, linearized around `center` (engine
+/// coordinates): a(x) = `acceleration` + `tidal` · (x − `center`).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ExternalField {
     pub center: Vec3,
     pub acceleration: Vec3,
-    /// Tenseur de marée (lignes), symétrique et de trace nulle.
+    /// Tidal tensor (rows), symmetric and traceless.
     pub tidal: [[f64; 3]; 3],
 }
 
 impl ExternalField {
-    /// Accélération au point `x`.
+    /// Acceleration at point `x`.
     pub fn at(&self, x: Vec3) -> Vec3 {
         let d = x - self.center;
         let t = &self.tidal;
@@ -50,9 +50,9 @@ impl ExternalField {
             )
     }
 
-    /// Champ créé en `target` par une masse ponctuelle `mass` placée en
-    /// `source` (adoucissement de Plummer `eps2`), linéarisé autour de
-    /// `target`. Coordonnées quelconques, communes aux deux points.
+    /// Field created at `target` by a point mass `mass` located at `source`
+    /// (Plummer softening `eps2`), linearized around `target`. Any coordinates,
+    /// as long as both points share them.
     pub fn of_point_mass(g: f64, mass: f64, source: Vec3, target: Vec3, eps2: f64) -> Self {
         let r = target - source;
         let d2 = r.length_squared() + eps2;
@@ -75,7 +75,7 @@ impl ExternalField {
         }
     }
 
-    /// Somme de deux champs développés autour du même centre.
+    /// Sum of two fields expanded around the same center.
     pub fn add(&mut self, other: &Self) {
         self.acceleration += other.acceleration;
         for i in 0..3 {
@@ -85,15 +85,15 @@ impl ExternalField {
         }
     }
 
-    /// Même champ, exprimé dans un repère décalé de `-shift`.
+    /// The same field, expressed in a frame shifted by `-shift`.
     pub fn shifted(mut self, shift: Vec3) -> Self {
         self.center -= shift;
         self
     }
 }
 
-/// Masse, barycentre et vitesse du barycentre d'un système (coordonnées du
-/// moteur).
+/// Mass, barycenter and barycenter velocity of a system (engine
+/// coordinates).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Moments {
     pub mass: f64,
@@ -101,21 +101,21 @@ pub struct Moments {
     pub velocity: Vec3,
 }
 
-/// Plage des corps d'un sous-système dans un état composite (corps rangés
-/// par sous-système), et sa taille caractéristique.
+/// Range of a subsystem's bodies in a composite state (bodies grouped by
+/// subsystem), and its characteristic size.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SystemSpan {
     pub start: usize,
     pub len: usize,
-    /// Taille caractéristique (rayon de référence du nettoyage et des
-    /// critères de séparation et de réunion).
+    /// Characteristic size (reference radius of the cleanup and of the split
+    /// and merge criteria).
     pub size: f64,
 }
 
-/// Résumé d'un sous-système, pour l'affichage (coordonnées globales).
+/// Summary of a subsystem, for display (global coordinates).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SystemSummary {
-    /// Corps repère (le plus massif lors de la séparation).
+    /// Marker body (the most massive one at the time of the split).
     pub anchor: BodyId,
     pub bodies: usize,
     pub mass: f64,
@@ -124,16 +124,16 @@ pub struct SystemSummary {
     pub size: f64,
 }
 
-/// Élément d'un affichage direct composite : accès direct d'un moteur
-/// (voir [`crate::PhysicsEngine::live_view`]) et origine de son repère.
+/// Element of a composite live view: direct access to an engine (see
+/// [`crate::PhysicsEngine::live_view`]) and origin of its frame.
 #[derive(Clone)]
 pub struct ViewPart {
     pub view: Arc<dyn Any + Send + Sync>,
     pub origin: Vec3,
 }
 
-/// Affichage direct de plusieurs sous-systèmes : la liste change quand des
-/// sous-systèmes naissent, se réunissent ou sont recentrés.
+/// Live view of several subsystems: the list changes when subsystems are
+/// born, merge or are recentred.
 #[derive(Default)]
 pub struct SystemsView {
     parts: Mutex<Arc<Vec<ViewPart>>>,
