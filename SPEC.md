@@ -28,7 +28,7 @@
 
 ## Interface
 - Accueil : nouvelle simulation (formulaire) ; **liste des sauvegardes** du dossier `saves/` (date, nb de corps, pas) + « Parcourir… ».
-- Navigation : souris **capturée en permanence** (style FPS) ; Z/S avancer/reculer, Q/D gauche/droite, molette = zoom ; Tab libère le curseur (Échap ouvre le menu).
+- Navigation : souris **capturée en permanence** (style FPS) ; Z/S avancer/reculer, Q/D gauche/droite, molette = avancer/reculer (Ctrl + molette = zoom) ; Tab libère le curseur (Échap ouvre le menu).
 - Sélection : **réticule + clic** en mode capturé, **clic libre** en mode curseur.
 - Corps sélectionné (ou barycentre) : **orbite + suivi** — la cible reste au centre, la souris tourne autour d'elle, Z/S règlent la distance, Q/D sont inactives, A/E font basculer la vue sur l'axe de visée ; F cesse ou reprend le suivi sans changer la vue.
 - Orientation libre (quaternion) : rotations dans le repère de l'écran, sans limite aux pôles ; H redresse l'horizon vers la normale au disque.
@@ -43,7 +43,7 @@
 
 ## Décisions complémentaires (v1)
 - E / A : monter / descendre ; Maj / Ctrl : déplacement ×5 / ×0,2 ; + / − : vitesse de déplacement.
-- Molette : zoom optique (champ de vision) dans tous les modes ; la sensibilité de la souris suit le zoom.
+- Molette : avancer / reculer comme Z / S (un cran ≈ un quart de seconde d'appui ; en suivi, distance à la cible). Ctrl + molette : zoom optique (champ de vision) dans tous les modes ; la sensibilité de la souris suit le zoom.
 - Rotation initiale (modes circulaires) autour de l'axe vertical Oz, sens trigonométrique.
 - Espace : pause / reprise ; P : pas à pas ; « multiplicateur de vitesse » réalisé par une limite de cadence (pas/s), le calcul allant sinon au plus vite.
 - Échap ouvre un menu (reprendre, sauvegarder, accueil, quitter, aide des touches) ; Tab bascule la capture de la souris.

@@ -77,7 +77,9 @@ pub enum SimAction {
 }
 
 const MOUSE_SENSITIVITY: f64 = 0.0022;
-const SCROLL_SENSITIVITY: f64 = 0.0025;
+/// Molette : durée d'appui sur Z / S équivalente à un point de défilement
+/// (un cran ≈ 50 points ≈ un quart de seconde).
+const SCROLL_SECONDS: f64 = 0.005;
 /// Vitesse de bascule autour de l'axe de visée (rad/s).
 const ROLL_SPEED: f64 = 1.6;
 /// Multiplicateur de vitesse initial : fraction de la distance à la
@@ -998,7 +1000,7 @@ impl SimScreen {
         if self.menu_open {
             return;
         }
-        let (moves, roll, mouse, scroll, shift, ctrl) = ctx.input(|i| {
+        let (moves, roll, mouse, scroll, zoom, shift, ctrl) = ctx.input(|i| {
             let k = |key: Key| if i.key_down(key) { 1.0 } else { 0.0 };
             let moves = DVec3::new(k(Key::D) - k(Key::Q), 0.0, k(Key::Z) - k(Key::S));
             let mut mouse = egui::Vec2::ZERO;
@@ -1011,7 +1013,10 @@ impl SimScreen {
                 moves,
                 k(Key::E) - k(Key::A),
                 mouse,
-                i.smooth_scroll_delta.y as f64,
+                // Maj + molette arrive en défilement horizontal ; Ctrl + molette
+                // en geste de zoom (`zoom_delta`).
+                (i.smooth_scroll_delta.x + i.smooth_scroll_delta.y) as f64,
+                i.zoom_delta() as f64,
                 i.modifiers.shift,
                 i.modifiers.ctrl,
             )
@@ -1063,8 +1068,10 @@ impl SimScreen {
         }
 
         // Déplacement : ZQSD en vol libre ; en suivi, Z / S règlent la distance
-        // à la cible (Q / D sont sans effet). Vitesse proportionnelle à la
-        // distance à la référence.
+        // à la cible (Q / D sont sans effet). La molette avance ou recule comme
+        // Z / S. Vitesse proportionnelle à la distance à la référence.
+        let over_ui = ctx.is_pointer_over_area() && !self.captured;
+        let wheel = if over_ui { 0.0 } else { scroll * SCROLL_SECONDS };
         let r_target = self
             .cache
             .selected_index
@@ -1077,26 +1084,29 @@ impl SimScreen {
                 if moves != DVec3::ZERO {
                     self.camera.translate_local(moves.normalize() * v * dt);
                 }
+                if wheel != 0.0 {
+                    self.camera.translate_local(DVec3::new(0.0, 0.0, wheel * v));
+                }
             }
             Mode::Orbit { distance, .. } => {
-                if moves.z != 0.0 {
-                    let k = (-moves.z * rate * dt).exp();
+                let push = moves.z * dt + wheel;
+                if push != 0.0 {
+                    let k = (-push * rate).exp();
                     *distance = (*distance * k).max(1.5 * r_target).max(1e-9);
                 }
             }
             Mode::Barycenter { distance } => {
-                if moves.z != 0.0 {
-                    let k = (-moves.z * rate * dt).exp();
+                let push = moves.z * dt + wheel;
+                if push != 0.0 {
+                    let k = (-push * rate).exp();
                     *distance = (*distance * k).max(1e-9);
                 }
             }
         }
 
-        // Molette : zoom optique (champ de vision), dans tous les modes.
-        let over_ui = ctx.is_pointer_over_area() && !self.captured;
-        if scroll != 0.0 && !over_ui {
-            let k = (-scroll * SCROLL_SENSITIVITY).exp();
-            self.camera.fov_y = (self.camera.fov_y * k).clamp(MIN_FOV, MAX_FOV);
+        // Ctrl + molette : zoom optique (champ de vision), dans tous les modes.
+        if zoom != 1.0 && zoom > 0.0 && !over_ui {
+            self.camera.fov_y = (self.camera.fov_y / zoom).clamp(MIN_FOV, MAX_FOV);
         }
 
         // Souris libre : un clic droit reprend la visée.
@@ -2457,7 +2467,8 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                                 tr("Souris"),
                                 tr("orientation (en suivi : tourner autour de la cible)"),
                             ),
-                            (tr("Molette"), tr("zoom optique")),
+                            (tr("Molette"), tr("avancer / reculer (en suivi : distance à la cible)")),
+                            (tr("Ctrl + molette"), tr("zoom optique")),
                             (tr("Clic gauche"), tr("suivre le corps visé")),
                             ("F", tr("suivre la sélection / cesser le suivi")),
                             ("G", tr("grille du plan du disque")),

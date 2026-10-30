@@ -87,7 +87,8 @@ Pour les longs calculs : aucun rendu des corps, toute la carte graphique pour le
 | Maj / Ctrl | déplacement ×5 / ×0,2 |
 | + / − | multiplicateur de vitesse |
 | Souris | orientation de la vue, dans le repère de l'écran (en suivi : tourner autour de la cible) |
-| Molette | zoom optique |
+| Molette | avancer / reculer comme Z / S (en suivi : distance à la cible ; Maj accélère) |
+| Ctrl + molette | zoom optique |
 | F | suivre la sélection (corps ou barycentre) / cesser le suivi |
 | G | grille du plan du disque |
 | Clic gauche | suivre le corps visé (réticule, ou pointeur quand la souris est libre) |
