@@ -7,7 +7,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 
 ## 1. Before coding
 
-- Read the relevant parts of `SPEC.md` (current state) and `README.md`.
+- Read the relevant parts of `SPEC.md` and `README.md`.
 - Ask **all** the clarifying questions at once, before implementing (ranges, defaults, keys, behaviour in playback / without display / with sub-simulations, compatibility of old saves). Ask in French.
 
 ## 2. Implementation rules
@@ -28,7 +28,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 | New command-line option | `console.rs` (parser, `--help` text in `i18n.rs`, its tests), README "Simulation without display" |
 | New environment variable | where it is read, README "Environment variables" table, `CLAUDE.md` if it is a testing shortcut |
 | New engine | registration in `crates/stellar-app/src/lib.rs`, `--moteur` mapping in `console.rs` |
-| Any feature | `SPEC.md`: current state, plus a line in a new or current history entry; README sections concerned |
+| Any feature | `SPEC.md` (rules in force), a line in the current or a new entry of `docs/history.md`, README sections concerned |
 
 Documentation is written in **English**. Code comments, error messages of the lower layers, CLI options and commit messages stay in **French**.
 

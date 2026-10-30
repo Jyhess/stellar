@@ -2,7 +2,7 @@
 
 3D gravitational N-body simulator in Rust (wgpu + egui) for Windows. Development machine: Windows, NVIDIA RTX 4060 Ti (8 GB dedicated), 16 GB of RAM.
 
-Read before any substantial change: `SPEC.md` (current state, then history), `README.md` (usage, architecture, tests), and the relevant file in `docs/` (`formats.md`, `gpu-engine.md`, `subsystems.md`).
+Read before any substantial change: `SPEC.md` (rules in force), `README.md` (usage, architecture, tests), and the relevant file in `docs/` (`formats.md`, `gpu-engine.md`, `subsystems.md`; `history.md` for the history of decisions).
 
 Project skills (`.claude/skills/`):
 - `new-feature`: checklist for any user-visible change (questions, translations, docs, tests);

@@ -5,7 +5,8 @@ A 3D gravitational N-body simulator for Windows. A cloud of particles of mass 1 
 | Document | Content |
 |---|---|
 | this README | installation, usage, architecture, tests |
-| [`SPEC.md`](SPEC.md) | functional specification: current behaviour and history of decisions |
+| [`SPEC.md`](SPEC.md) | functional specification: the rules currently in force |
+| [`docs/history.md`](docs/history.md) | history of decisions, version by version |
 | [`docs/formats.md`](docs/formats.md) | `.stellar` and `.stellarec` file formats, version history |
 | [`docs/gpu-engine.md`](docs/gpu-engine.md) | GPU engine: kernels, step sequence, constants, profiling |
 | [`docs/subsystems.md`](docs/subsystems.md) | sub-simulations: coupling, order of operations, invariants |
