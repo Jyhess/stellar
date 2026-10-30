@@ -1,12 +1,12 @@
-//! Langue de l'interface : français ou anglais.
+//! Interface language: French or English.
 //!
-//! Les textes sont écrits en français dans le code ; [`tr`] renvoie leur
-//! traduction anglaise (table [`EN`]) quand l'anglais est choisi, et le texte
-//! d'origine sinon (ou s'il manque à la table). [`tr!`](crate::tr) fait de même
-//! pour un modèle à emplacements `{}`.
+//! Texts are written in French in the code; [`tr`] returns their English
+//! translation (table `EN`) when English is chosen, and the original text
+//! otherwise (or if it is missing from the table). [`tr!`](macro@crate::tr) does
+//! the same for a template with `{}` placeholders.
 //!
-//! Langue par défaut : celle de Windows (français ou, à défaut, anglais) ;
-//! un choix fait dans le menu est mémorisé dans `%APPDATA%\Stellar\langue`.
+//! Default language: Windows' (French, or English otherwise); a choice made
+//! in the menu is stored in `%APPDATA%\Stellar\langue`.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -23,7 +23,7 @@ pub enum Lang {
 impl Lang {
     pub const ALL: [Lang; 2] = [Lang::Fr, Lang::En];
 
-    /// Nom de la langue, dans cette langue.
+    /// Name of the language, in that language.
     pub fn label(self) -> &'static str {
         match self {
             Lang::Fr => "Français",
@@ -53,7 +53,7 @@ fn apply(l: Lang) {
     LANG.store(matches!(l, Lang::En) as u8, Ordering::Relaxed);
 }
 
-/// Choisit la langue et mémorise ce choix.
+/// Chooses the language and stores the choice.
 pub fn set_lang(l: Lang) {
     apply(l);
     if let Some(path) = settings_file() {
@@ -64,8 +64,8 @@ pub fn set_lang(l: Lang) {
     }
 }
 
-/// Langue au démarrage : `STELLAR_LANG` (fr / en), sinon le choix mémorisé,
-/// sinon celle de Windows.
+/// Language at startup: `STELLAR_LANG` (fr / en), otherwise the stored
+/// choice, otherwise Windows'.
 pub fn init() {
     let from = |s: &str| match s.trim() {
         "fr" => Some(Lang::Fr),
@@ -91,9 +91,9 @@ fn settings_file() -> Option<PathBuf> {
 #[cfg(windows)]
 fn system_lang() -> Lang {
     use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
-    // SAFETY : fonction sans argument.
+    // SAFETY: function without arguments.
     let id = unsafe { GetUserDefaultUILanguage() };
-    // Langue principale : 10 bits de poids faible (0x0C : français).
+    // Primary language: the 10 low bits (0x0C: French).
     if id & 0x3FF == 0x0C {
         Lang::Fr
     } else {
@@ -111,7 +111,7 @@ fn system_lang() -> Lang {
     }
 }
 
-/// Traduction d'un texte de l'interface.
+/// Translation of an interface text.
 pub fn tr(fr: &'static str) -> &'static str {
     if lang() == Lang::Fr {
         return fr;
@@ -124,7 +124,7 @@ pub fn tr(fr: &'static str) -> &'static str {
         .unwrap_or(fr)
 }
 
-/// Remplit les emplacements `{}` d'un modèle, dans l'ordre.
+/// Fills the `{}` placeholders of a template, in order.
 pub fn fill(template: &str, args: &[&dyn Display]) -> String {
     let mut out = String::with_capacity(template.len() + 16 * args.len());
     let mut rest = template;
@@ -141,7 +141,7 @@ pub fn fill(template: &str, args: &[&dyn Display]) -> String {
     out
 }
 
-/// Texte traduit, à emplacements `{}` : `tr!("Masse : {}", m)`.
+/// Translated text with `{}` placeholders: `tr!("Masse : {}", m)`.
 #[macro_export]
 macro_rules! tr {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {
@@ -149,7 +149,7 @@ macro_rules! tr {
     };
 }
 
-/// Choix de la langue (liste déroulante), mémorisé.
+/// Language choice (drop-down list), stored.
 pub fn picker(ui: &mut eframe::egui::Ui) {
     let current = lang();
     eframe::egui::ComboBox::from_id_salt("langue")
@@ -163,7 +163,7 @@ pub fn picker(ui: &mut eframe::egui::Ui) {
         });
 }
 
-/// Traductions anglaises (texte français → texte anglais).
+/// English translations (French text → English text).
 const EN: &[(&str, &str)] = &[
     ("Enregistrement suspendu. Il reprendra en rechargeant la sauvegarde « {} ».", "Recording suspended. It will resume when the save “{}” is reloaded."),
     ("La suspension de l'enregistrement a échoué : {}", "Suspending the recording failed: {}"),

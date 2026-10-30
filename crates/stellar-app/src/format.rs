@@ -1,10 +1,10 @@
-//! Mise en forme des nombres pour l'affichage, selon la langue : virgule
-//! décimale et espace insécable des milliers en français, point et virgule
-//! en anglais.
+//! Formatting of numbers for display, by language: decimal comma and
+//! non-breaking space as thousands separator in French, point and comma in
+//! English.
 
 use crate::i18n::{lang, Lang};
 
-/// Séparateur décimal de la langue de l'interface.
+/// Decimal separator of the interface language.
 pub fn decimal_sep() -> &'static str {
     match lang() {
         Lang::Fr => ",",
@@ -12,7 +12,7 @@ pub fn decimal_sep() -> &'static str {
     }
 }
 
-/// Entier avec séparateur de milliers : 1 234 567 (1,234,567 en anglais).
+/// Integer with thousands separators: 1 234 567 (1,234,567 in English).
 pub fn count(n: u64) -> String {
     let sep = match lang() {
         Lang::Fr => '\u{00A0}',
@@ -29,7 +29,7 @@ pub fn count(n: u64) -> String {
     out
 }
 
-/// Nombre réel lisible : notation scientifique pour les ordres extrêmes.
+/// Readable real number: scientific notation for extreme magnitudes.
 pub fn real(x: f64) -> String {
     let a = x.abs();
     if x == 0.0 {
@@ -44,7 +44,7 @@ pub fn real(x: f64) -> String {
     .replace('.', crate::format::decimal_sep())
 }
 
-/// Pourcentage signé : +0,012 %.
+/// Signed percentage: +0,012 % (+0.012 % in English).
 pub fn percent(x: f64) -> String {
     format!("{:+.4} %", 100.0 * x).replace('.', crate::format::decimal_sep())
 }

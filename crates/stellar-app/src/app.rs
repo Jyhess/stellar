@@ -1,4 +1,4 @@
-//! Application egui : enchaînement des écrans.
+//! egui application: sequence of screens.
 
 use std::time::{Duration, Instant};
 
@@ -15,13 +15,12 @@ use crate::sim::{SimAction, SimScreen};
 use crate::source::Source;
 
 enum Screen {
-    // En boîte : les deux écrans sont volumineux et de tailles très
-    // différentes.
+    // Boxed: both screens are large and of very different sizes.
     Home(Box<HomeScreen>),
     Sim(Box<SimScreen>),
-    /// Simulation sans affichage.
+    /// Simulation without display.
     Headless(Box<HeadlessScreen>),
-    /// État transitoire pendant un changement d'écran.
+    /// Transient state while switching screens.
     Switching,
 }
 
@@ -31,7 +30,7 @@ impl Screen {
     }
 }
 
-/// Plafond de la cadence d'affichage.
+/// Cap of the display frame rate.
 pub const MAX_FPS: f64 = 120.0;
 
 pub struct StellarApp {
@@ -48,8 +47,8 @@ impl StellarApp {
     ) -> Self {
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             PointRenderer::install(rs);
-            // Le moteur GPU calcule sur la carte de l'interface : ses corps
-            // sont dessinés directement depuis ses tampons.
+            // The GPU engine computes on the interface's device: its bodies are drawn
+            // straight from its buffers.
             if let Some(f) = &gpu_factory {
                 f.attach(SharedDevice {
                     adapter: rs.adapter.clone(),
@@ -69,9 +68,9 @@ impl StellarApp {
         app
     }
 
-    /// Démarrage direct, pour les essais : `STELLAR_AUTOSTART=<nombre de particules>`.
+    /// Direct start, for testing: `STELLAR_AUTOSTART=<number of particles>`.
     fn autostart(&mut self) {
-        // `STELLAR_LOAD=<sauvegarde>` : chargement direct (reprise d'enregistrement comprise).
+        // `STELLAR_LOAD=<save>`: direct load (recording resumption included).
         if let Ok(path) = std::env::var("STELLAR_LOAD") {
             if let Ok(loaded) = self.service.load_simulation(std::path::Path::new(&path)) {
                 self.screen = Screen::sim(SimScreen::new(
@@ -82,7 +81,7 @@ impl StellarApp {
                 return;
             }
         }
-        // `STELLAR_REPLAY=<fichier>` : relecture directe.
+        // `STELLAR_REPLAY=<file>`: direct playback.
         if let Ok(path) = std::env::var("STELLAR_REPLAY") {
             if let Ok(player) = self.service.open_replay(std::path::Path::new(&path)) {
                 let source = Source::Replay(Box::new(crate::source::Replay::new(player)));
@@ -97,13 +96,13 @@ impl StellarApp {
             return;
         };
         let mut config = stellar_domain::SimulationConfig::default();
-        // `STELLAR_ENGINE=<id>` : moteur imposé (sinon le moteur par défaut).
+        // `STELLAR_ENGINE=<id>`: forced engine (otherwise the default engine).
         config.engine = std::env::var("STELLAR_ENGINE")
             .ok()
             .or_else(|| self.service.default_engine().map(str::to_owned))
             .unwrap_or(config.engine);
         config.initial.count = count.max(2);
-        // `STELLAR_AUTODISK=1` : disque incliné en rotation orbitale (essais).
+        // `STELLAR_AUTODISK=1`: tilted disc in orbital rotation (testing).
         if std::env::var("STELLAR_AUTODISK").is_ok() {
             config.initial.distribution = stellar_domain::Distribution::Disk {
                 thickness: 0.05,
@@ -116,7 +115,7 @@ impl StellarApp {
         let name = crate::home::default_name(&config.initial, chrono::Local::now(), |_| false);
         if let Ok(handle) = self.service.new_simulation(config) {
             handle.set_name(&name);
-            // `STELLAR_AUTORECORD=<intervalle>` : enregistrement immédiat.
+            // `STELLAR_AUTORECORD=<interval>`: immediate recording.
             if let Some(interval) = std::env::var("STELLAR_AUTORECORD")
                 .ok()
                 .and_then(|v| v.parse::<u32>().ok())
@@ -133,8 +132,8 @@ impl StellarApp {
         }
     }
 
-    /// Si un enregistrement est en cours, le suspend et sauvegarde la
-    /// simulation (liée à l'enregistrement) pour une reprise ultérieure.
+    /// If a recording is running, suspends it and saves the simulation (linked
+    /// to the recording) so it can be resumed later.
     fn suspend_recording(&mut self) -> Option<String> {
         let Screen::Sim(sim) = &self.screen else {
             return None;
@@ -160,8 +159,8 @@ impl StellarApp {
 
 impl eframe::App for StellarApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Limiteur de cadence : aucune image avant 1/MAX_FPS s, y compris
-        // lorsque les mouvements de souris déclenchent des repeints.
+        // Frame limiter: no frame before 1/MAX_FPS s, even when mouse movements
+        // trigger repaints.
         let min_interval = Duration::from_secs_f64(1.0 / MAX_FPS);
         if let Some(t) = self.last_frame {
             let elapsed = t.elapsed();
@@ -171,8 +170,8 @@ impl eframe::App for StellarApp {
         }
         self.last_frame = Some(Instant::now());
 
-        // Fermeture de la fenêtre pendant un enregistrement : suspension et
-        // sauvegarde de reprise avant de quitter.
+        // Window closed during a recording: suspension and resume save before
+        // quitting.
         if ctx.input(|i| i.viewport().close_requested()) {
             if let Screen::Headless(h) = &mut self.screen {
                 if h.is_running() {
@@ -204,7 +203,7 @@ impl eframe::App for StellarApp {
                         Err(e) => home.message = Some(e.to_string()),
                     }
                 }
-                // En pause, pour armer l'enregistrement avant le premier pas.
+                // Paused, to arm the recording before the first step.
                 HomeAction::Start(config, record, name) => match self.service.new_simulation_paused(config) {
                     Ok(handle) => {
                         handle.set_name(&name);

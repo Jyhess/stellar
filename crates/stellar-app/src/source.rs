@@ -1,5 +1,5 @@
-//! Source des états affichés : simulation en direct ou relecture d'un
-//! enregistrement. L'écran de visualisation ne dépend que de cette interface.
+//! Source of the displayed states: live simulation or playback of a
+//! recording. The viewing screen depends only on this interface.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -12,12 +12,12 @@ use stellar_application::{
 use stellar_domain::{BodyId, Diagnostics, SimulationConfig, SimulationState};
 use stellar_domain::{BodySet, Vec3};
 
-/// Relecture : lecteur, instantané interpolé courant et traces locales.
+/// Playback: player, current interpolated snapshot and local traces.
 pub struct Replay {
     pub player: ReplayPlayer,
     snapshot: Arc<Snapshot>,
-    /// Instantanés récents, recyclés pour éviter de réallouer des centaines
-    /// de mégaoctets à chaque image.
+    /// Recent snapshots, recycled to avoid reallocating hundreds of megabytes
+    /// at every frame.
     recent: VecDeque<Arc<Snapshot>>,
     spare: Option<SimulationState>,
     sequence: u64,
@@ -48,7 +48,7 @@ impl Replay {
         if !self.player.update(dt) {
             return;
         }
-        // Récupère les tampons d'un instantané que plus personne n'utilise.
+        // Recovers the buffers of a snapshot nobody uses any more.
         while self.recent.len() > 2 {
             if let Some(old) = self.recent.pop_front() {
                 if let Ok(s) = Arc::try_unwrap(old) {
@@ -62,9 +62,9 @@ impl Replay {
             .player
             .swap_state(self.spare.take().unwrap_or_default());
         state.initial_energy = None;
-        // Masse initiale : particules de masse 1 au départ de la simulation.
+        // Initial mass: particles of mass 1 at the start of the simulation.
         state.initial_mass = Some(self.player.info().header.config.initial.count as f64);
-        // Masse présente : la poussière sous-échantillonnée compte pour son poids.
+        // Present mass: subsampled dust counts for its weight.
         let w = self.player.dust_weight() as f64;
         let total_mass: f64 = state
             .bodies
@@ -79,7 +79,7 @@ impl Replay {
             })
             .sum();
 
-        // Un saut dans la barre de temps redémarre les traces.
+        // A jump in the time bar restarts the traces.
         let pos = self.player.clock.position;
         let jumped = (pos - self.last_position).abs() > 1.5;
         self.last_position = pos;
@@ -125,12 +125,12 @@ impl Replay {
             body_count: state.bodies.len(),
             state: Arc::new(state),
             diagnostics: Diagnostics::default(),
-            // Déduit de l'état par l'interface (pondération de la poussière).
+            // Derived from the state by the interface (dust weighting).
             center_of_mass: None,
             watched: Vec::new(),
             top: self.player.top().to_vec(),
             total_mass,
-            // Les amas éjectés ne sont pas enregistrés.
+            // Ejected clusters are not recorded.
             clusters: Arc::default(),
             clusters_step: None,
             systems: Vec::new(),
@@ -145,7 +145,7 @@ impl Replay {
     }
 }
 
-/// Centre de masse, la poussière sous-échantillonnée comptant pour `dust_weight`.
+/// Center of mass, with subsampled dust counting for `dust_weight`.
 pub fn weighted_barycenter(bodies: &BodySet, dust_weight: f64) -> Option<Vec3> {
     let (m, mx) = bodies.masses.iter().zip(&bodies.positions).fold(
         (0.0, Vec3::ZERO),
@@ -157,7 +157,7 @@ pub fn weighted_barycenter(bodies: &BodySet, dust_weight: f64) -> Option<Vec3> {
     (m > 0.0).then(|| mx / m)
 }
 
-/// Moment cinétique total autour du centre de masse (même pondération).
+/// Total angular momentum around the center of mass (same weighting).
 pub fn angular_momentum(bodies: &BodySet, dust_weight: f64, center: Vec3) -> Vec3 {
     let (m, mv) = bodies.masses.iter().zip(&bodies.velocities).fold(
         (0.0, Vec3::ZERO),
@@ -235,7 +235,7 @@ impl Source {
         }
     }
 
-    /// Fait progresser la relecture (sans effet en direct).
+    /// Advances playback (no effect when live).
     pub fn tick(&mut self, dt: f64) {
         if let Source::Replay(r) = self {
             r.tick(dt);
@@ -263,7 +263,7 @@ impl Source {
         }
     }
 
-    /// Poids d'affichage des particules de poussière (sous-échantillonnage).
+    /// Display weight of the dust particles (subsampling).
     pub fn dust_weight(&self) -> f32 {
         match self {
             Source::Live(_) => 1.0,
@@ -320,7 +320,7 @@ impl Source {
         }
     }
 
-    /// Accès en lecture aux traces.
+    /// Read access to the traces.
     pub fn with_traces<R>(&self, f: impl FnOnce(Option<&TraceSet>) -> R) -> R {
         match self {
             Source::Live(h) => f(h.traces().as_ref()),

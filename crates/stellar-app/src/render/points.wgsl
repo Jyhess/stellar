@@ -1,15 +1,15 @@
-// Rendu des corps : billboards circulaires lumineux, mélange additif.
+// Rendering of the bodies: glowing circular billboards, additive blending.
 
 struct Uniforms {
     view: mat4x4<f32>,
     proj: mat4x4<f32>,
-    // x : hauteur du viewport (px), y : tan(fov/2), z : taille minimale (px), w : inutilisé
+    // x: viewport height (px), y: tan(fov/2), z: minimum size (px), w: unused
     screen: vec4<f32>,
-    // x : luminosité, y : plancher d'intensité des poussières, z, w : inutilisés
+    // x: brightness, y: intensity floor of the dust, z, w: unused
     look: vec4<f32>,
-    // Source directe : ancre (xyz) et rayon de base r0 (w)
+    // Direct source: anchor (xyz) and base radius r0 (w)
     anchor: vec4<f32>,
-    // Source directe : x = ln(masse maximale), 0 si elle vaut au plus 1
+    // Direct source: x = ln(maximum mass), 0 if it is at most 1
     mass: vec4<f32>,
 };
 
@@ -27,8 +27,8 @@ struct VsOut {
     @location(1) color: vec4<f32>,
 };
 
-// Billboard d'un corps : position relative à l'ancre, rayon, couleur et
-// poids (1 pour un corps ordinaire).
+// Billboard of a body: position relative to the anchor, radius, colour and
+// weight (1 for an ordinary body).
 fn billboard(vertex: u32, rel: vec3<f32>, radius: f32, rgb: vec3<f32>, weight: f32) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
@@ -40,13 +40,13 @@ fn billboard(vertex: u32, rel: vec3<f32>, radius: f32, rgb: vec3<f32>, weight: f
 
     let center = u.view * vec4<f32>(rel, 1.0);
     let depth = max(-center.z, 1e-6);
-    // Taille d'un pixel dans l'espace vue, à cette profondeur.
+    // Size of a pixel in view space, at this depth.
     let world_per_px = 2.0 * u.screen.y * depth / u.screen.x;
     let min_radius = 0.5 * u.screen.z * world_per_px;
     let size = max(radius, min_radius);
 
-    // Un corps plus petit qu'un pixel conserve (à peu près) sa luminosité
-    // totale : on diminue son intensité au lieu de l'agrandir.
+    // A body smaller than a pixel keeps (roughly) its total brightness: its
+    // intensity is reduced instead of enlarging it.
     var intensity = 1.0;
     if (radius < min_radius) {
         let k = radius / min_radius;
@@ -63,13 +63,13 @@ fn billboard(vertex: u32, rel: vec3<f32>, radius: f32, rgb: vec3<f32>, weight: f
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
-    // Le canal alpha porte un poids (×16) : 16/255 ↔ 1.
+    // The alpha channel carries a weight (×16): 16/255 ↔ 1.
     let weight = in.color.a * (255.0 / 16.0);
     return billboard(in.vertex, in.pos_radius.xyz, in.pos_radius.w, in.color.rgb, weight);
 }
 
-// Couleur selon la masse (échelle logarithmique), comme `mass_color` côté
-// CPU : bleu pâle → blanc → jaune → orangé.
+// Colour by mass (logarithmic scale), like `mass_color` on the CPU side:
+// pale blue → white → yellow → orange.
 fn mass_color(m: f32) -> vec3<f32> {
     var t = 0.0;
     if (u.mass.x > 0.0) {
@@ -94,12 +94,12 @@ struct BodyIn {
     @location(1) mass: f32,
 };
 
-// Corps lus directement dans les tampons du moteur GPU.
+// Bodies read directly from the GPU engine's buffers.
 @vertex
 fn vs_bodies(in: BodyIn) -> VsOut {
     if (in.mass <= 0.0) {
-        // Corps mort (fusionné ou éliminé, en attente de compaction) :
-        // sommet hors du volume de vue, rien n'est dessiné.
+        // Dead body (merged or removed, waiting for compaction): vertex outside
+        // the view volume, nothing is drawn.
         var out: VsOut;
         out.clip = vec4<f32>(0.0, 0.0, -2.0, 1.0);
         out.uv = vec2<f32>(0.0);
@@ -116,7 +116,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (d2 > 1.0) {
         discard;
     }
-    // Disque plein au cœur, halo doux sur le bord.
+    // Solid disc in the core, soft halo at the edge.
     let core = 1.0 - smoothstep(0.55, 1.0, sqrt(d2));
     let glow = exp(-4.0 * d2);
     let f = 0.65 * core + 0.35 * glow;

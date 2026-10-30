@@ -1,5 +1,5 @@
-//! Ligne de commande de Stellar : simulation sans fenêtre, reprise d'une
-//! sauvegarde ou d'un enregistrement (`stellar-cli --help`).
+//! Stellar's command line: simulation without a window, resumption of a
+//! save or a recording (`stellar-cli --help`).
 
 fn main() {
     stellar_app::i18n::init();

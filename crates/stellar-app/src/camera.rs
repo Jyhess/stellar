@@ -1,15 +1,15 @@
-//! Caméra : vol libre ou orbite autour d'une cible (corps ou barycentre).
+//! Camera: free flight or orbit around a target (body or barycenter).
 //!
-//! Repère du monde : Z vers le haut, main droite. L'orientation est libre
-//! (quaternion) : la caméra peut basculer sur son axe de visée et faire le
-//! tour complet d'une cible. Toutes les rotations se font dans le repère de
-//! la caméra, telles qu'on les voit à l'écran.
+//! World frame: Z up, right-handed. Orientation is unrestricted
+//! (quaternion): the camera can roll around its line of sight and go all
+//! the way around a target. Every rotation happens in the camera's frame,
+//! as seen on screen.
 //!
-//! Repère local : X = avant, -Y = droite, Z = haut (l'orientation identité
-//! regarde vers +X avec le haut vers +Z).
+//! Local frame: X = forward, -Y = right, Z = up (the identity orientation
+//! looks towards +X with up towards +Z).
 //!
-//! Calculs en `f64` ; les matrices envoyées au GPU sont exprimées
-//! relativement à une ancre.
+//! Computation in `f64`; matrices sent to the GPU are expressed relative to
+//! an anchor.
 
 use glam::{DMat4, DQuat, DVec3, EulerRot, Mat4};
 use stellar_application::ViewState;
@@ -21,12 +21,12 @@ pub const MAX_FOV: f64 = 120.0 * std::f64::consts::PI / 180.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
     Free,
-    /// Orbite autour du corps `target`, à la distance `distance`.
+    /// Orbit around body `target`, at distance `distance`.
     Orbit {
         target: BodyId,
         distance: f64,
     },
-    /// Orbite autour du centre de gravité, à la distance `distance`.
+    /// Orbit around the center of gravity, at distance `distance`.
     Barycenter {
         distance: f64,
     },
@@ -35,18 +35,18 @@ pub enum Mode {
 #[derive(Debug, Clone)]
 pub struct Camera {
     pub position: DVec3,
-    /// Passage du repère local de la caméra au repère du monde.
+    /// Transformation from the camera's local frame to the world frame.
     pub orientation: DQuat,
     pub fov_y: f64,
     pub mode: Mode,
-    /// Multiplicateur de vitesse : en vol libre, la caméra parcourt chaque
-    /// seconde cette fraction de sa distance à la référence ; en orbite, la
-    /// distance à la cible varie au même rythme (exponentiel).
+    /// Speed multiplier: in free flight, the camera travels this fraction of
+    /// its distance to the reference every second; in orbit, the distance to
+    /// the target changes at the same (exponential) rate.
     pub speed: f64,
 }
 
 impl Camera {
-    /// Caméra regardant `target` depuis `position`, le haut vers +Z.
+    /// Camera looking at `target` from `position`, up towards +Z.
     pub fn looking_at(position: DVec3, target: DVec3, speed: f64) -> Self {
         let mut c = Self {
             position,
@@ -109,16 +109,16 @@ impl Camera {
         self.orientation * DVec3::Z
     }
 
-    /// Oriente le regard dans la direction `dir` par la plus petite rotation
-    /// possible : la bascule de la vue est conservée autant que possible.
+    /// Turns the line of sight towards `dir` by the smallest possible rotation:
+    /// the roll of the view is kept as much as possible.
     pub fn look_towards(&mut self, dir: DVec3) {
         let Some(d) = dir.try_normalize() else { return };
         let arc = DQuat::from_rotation_arc(self.forward(), d);
         self.orientation = (arc * self.orientation).normalize();
     }
 
-    /// Oriente le regard dans la direction `dir`, le haut de l'écran aussi
-    /// près que possible de +Z.
+    /// Turns the line of sight towards `dir`, with the top of the screen as
+    /// close as possible to +Z.
     fn set_upright(&mut self, dir: DVec3) {
         let d = dir.normalize_or(DVec3::X);
         let yaw = d.y.atan2(d.x);
@@ -126,22 +126,22 @@ impl Camera {
         self.orientation = DQuat::from_euler(EulerRot::ZYX, yaw, -pitch, 0.0);
     }
 
-    /// Rotation à la souris, dans le repère de l'écran (radians) :
-    /// `d_yaw` > 0 tourne vers la gauche, `d_pitch` > 0 lève le regard.
+    /// Mouse rotation, in the screen's frame (radians): `d_yaw` > 0 turns
+    /// left, `d_pitch` > 0 looks up.
     pub fn rotate(&mut self, d_yaw: f64, d_pitch: f64) {
         let local = DQuat::from_rotation_z(d_yaw) * DQuat::from_rotation_y(-d_pitch);
         self.orientation = (self.orientation * local).normalize();
     }
 
-    /// Bascule autour de l'axe de visée ; `angle` > 0 incline le haut de
-    /// l'écran vers la droite.
+    /// Roll around the line of sight; `angle` > 0 tilts the top of the screen
+    /// to the right.
     pub fn roll(&mut self, angle: f64) {
         self.orientation = (self.orientation * DQuat::from_rotation_x(angle)).normalize();
     }
 
-    /// Angle de bascule (signé, autour de l'axe de visée) qui amènerait le
-    /// haut de l'écran sur la projection de `normal`. `None` si `normal` est
-    /// (presque) parallèle à l'axe de visée.
+    /// Roll angle (signed, around the line of sight) that would bring the top
+    /// of the screen onto the projection of `normal`. `None` if `normal` is
+    /// (nearly) parallel to the line of sight.
     pub fn roll_to(&self, normal: DVec3) -> Option<f64> {
         let f = self.forward();
         let target = (normal - f * normal.dot(f)).try_normalize()?;
@@ -149,18 +149,18 @@ impl Camera {
             return None;
         }
         let up = self.up();
-        // Rotation positive (autour de +avant) : le haut part vers la droite.
+        // Positive rotation (around +forward): the top moves to the right.
         let sin = up.cross(target).dot(f);
         let cos = up.dot(target);
         Some(sin.atan2(cos))
     }
 
-    /// Déplacement en vol libre ; `local` = (droite, haut, avant).
+    /// Free-flight movement; `local` = (right, up, forward).
     pub fn translate_local(&mut self, local: DVec3) {
         self.position += self.right() * local.x + self.up() * local.y + self.forward() * local.z;
     }
 
-    /// Recalcule la position en mode orbite, autour de `target_pos`.
+    /// Recomputes the position in orbit mode, around `target_pos`.
     pub fn place_in_orbit(&mut self, target_pos: DVec3) {
         if let Mode::Orbit { distance, .. } | Mode::Barycenter { distance } = self.mode {
             self.position = target_pos - self.forward() * distance;
@@ -174,7 +174,7 @@ impl Camera {
         }
     }
 
-    /// Distance à la cible en mode orbite (corps ou barycentre).
+    /// Distance to the target in orbit mode (body or barycenter).
     pub fn orbit_distance(&self) -> Option<f64> {
         match self.mode {
             Mode::Orbit { distance, .. } | Mode::Barycenter { distance } => Some(distance),
@@ -186,7 +186,7 @@ impl Camera {
         !matches!(self.mode, Mode::Free)
     }
 
-    /// Matrice de vue en `f32`, relative à l'ancre.
+    /// View matrix in `f32`, relative to the anchor.
     pub fn view_matrix(&self, anchor: DVec3) -> Mat4 {
         let eye = self.position - anchor;
         DMat4::look_to_rh(eye, self.forward(), self.up()).as_mat4()
@@ -196,22 +196,22 @@ impl Camera {
         Mat4::perspective_infinite_rh(self.fov_y as f32, aspect.max(1e-3), 1e-5)
     }
 
-    /// Rayon (origine, direction unitaire) passant par un point du viewport
-    /// exprimé en coordonnées normalisées ([-1, 1], y vers le haut).
+    /// Ray (origin, unit direction) through a point of the viewport given in
+    /// normalized coordinates ([-1, 1], y up).
     pub fn ray(&self, ndc_x: f64, ndc_y: f64, aspect: f64) -> (DVec3, DVec3) {
         let t = (0.5 * self.fov_y).tan();
         let dir = self.forward() + self.right() * (ndc_x * t * aspect) + self.up() * (ndc_y * t);
         (self.position, dir.normalize())
     }
 
-    /// Coordonnées d'un point dans le repère de la caméra : (droite, haut, avant).
+    /// Coordinates of a point in the camera's frame: (right, up, forward).
     pub fn to_local(&self, p: DVec3) -> DVec3 {
         let v = p - self.position;
         DVec3::new(v.dot(self.right()), v.dot(self.up()), v.dot(self.forward()))
     }
 
-    /// Projection d'un point du repère caméra en coordonnées normalisées ;
-    /// `None` s'il est derrière la caméra.
+    /// Projection of a point of the camera frame to normalized coordinates;
+    /// `None` if it is behind the camera.
     pub fn project_local(&self, l: DVec3, aspect: f64) -> Option<(f64, f64)> {
         if l.z <= 0.0 {
             return None;
@@ -220,8 +220,8 @@ impl Camera {
         Some((l.x / (l.z * t * aspect), l.y / (l.z * t)))
     }
 
-    /// Projection d'un point du monde en coordonnées normalisées ; `None`
-    /// s'il est derrière la caméra.
+    /// Projection of a world point to normalized coordinates; `None` if it is
+    /// behind the camera.
     pub fn project(&self, p: DVec3, aspect: f64) -> Option<(f64, f64)> {
         self.project_local(self.to_local(p), aspect)
     }
@@ -265,10 +265,10 @@ mod tests {
     #[test]
     fn mouse_follows_screen_axes_after_roll() {
         let mut c = Camera::looking_at(DVec3::ZERO, DVec3::X, 1.0);
-        c.roll(std::f64::consts::FRAC_PI_2); // haut de l'écran vers -Y (ancienne droite)
+        c.roll(std::f64::consts::FRAC_PI_2); // top of the screen towards -Y (the former right)
         let up = c.up();
         c.rotate(0.0, 0.1);
-        // Lever le regard le fait pencher vers le haut de l'écran.
+        // Looking up tilts the view towards the top of the screen.
         assert!(c.forward().dot(up) > 0.09);
     }
 
@@ -300,7 +300,7 @@ mod tests {
         assert!((a - 1.1).abs() < 1e-9);
         c.roll(a);
         assert!(c.roll_to(DVec3::Z).unwrap().abs() < 1e-9);
-        // Visée selon la normale : rien à redresser.
+        // Looking along the normal: nothing to level.
         let c = Camera::looking_at(DVec3::ZERO, DVec3::NEG_Z, 1.0);
         assert!(c.roll_to(DVec3::Z).is_none());
     }

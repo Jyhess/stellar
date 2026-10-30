@@ -1,16 +1,16 @@
-//! Rendu GPU des corps, intégré à egui par un « paint callback » wgpu.
+//! GPU rendering of the bodies, integrated into egui through a wgpu "paint
+//! callback".
 //!
-//! Deux sources de corps, dessinés en billboards avec mélange additif :
-//! - **directe** : les tampons du moteur GPU, qui calcule sur la même carte
-//!   ([`BodiesView`]) ; position et masse sont lues telles quelles, couleur
-//!   et rayon sont déduits dans le shader. Aucune copie. Une simulation
-//!   découpée en sous-systèmes ([`SystemsView`]) a un tampon par
-//!   sous-système, chacun dans son repère : l'ancre de chaque dessin est
-//!   celle de la caméra, rapportée à l'origine du sous-système.
-//! - **instances** (moteur CPU, relecture) : à chaque nouvel instantané, les
-//!   positions (relatives à un point d'ancrage proche de la caméra, pour
-//!   préserver la précision en `f32`) sont téléversées dans un tampon
-//!   d'instances.
+//! Two sources of bodies, drawn as billboards with additive blending:
+//! - **direct**: the buffers of the GPU engine, which computes on the same
+//!   device ([`BodiesView`]); position and mass are read as they are, colour
+//!   and radius are derived in the shader. No copy. A simulation split into
+//!   subsystems ([`SystemsView`]) has one buffer per subsystem, each in its
+//!   own frame: the anchor of each draw is the camera's, translated to the
+//!   subsystem's origin.
+//! - **instances** (CPU engine, playback): at each new snapshot, positions
+//!   (relative to an anchor near the camera, to preserve `f32` precision)
+//!   are uploaded to an instance buffer.
 
 use std::sync::Arc;
 
@@ -23,13 +23,13 @@ use stellar_domain::systems::ViewPart;
 use stellar_domain::SystemsView;
 use stellar_engine_gpu::BodiesView;
 
-/// Une instance = un corps à l'écran (20 octets).
+/// One instance = one body on screen (20 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct Instance {
-    /// Position relative à l'ancre (xyz) et rayon (w).
+    /// Position relative to the anchor (xyz) and radius (w).
     pub pos_radius: [f32; 4],
-    /// Couleur RGBA 8 bits.
+    /// 8-bit RGBA colour.
     pub color: [u8; 4],
 }
 
@@ -38,41 +38,41 @@ pub struct Instance {
 pub struct Uniforms {
     pub view: [[f32; 4]; 4],
     pub proj: [[f32; 4]; 4],
-    /// x : hauteur du viewport (px), y : tan(fov/2), z : taille minimale (px).
+    /// x: viewport height (px), y: tan(fov/2), z: minimum size (px).
     pub screen: [f32; 4],
-    /// x : luminosité, y : plancher d'intensité.
+    /// x: brightness, y: intensity floor.
     pub look: [f32; 4],
-    /// Source directe : ancre (xyz, retranchée aux positions) et rayon de
-    /// base r₀ (w).
+    /// Direct source: anchor (xyz, subtracted from the positions) and base
+    /// radius r₀ (w).
     pub anchor: [f32; 4],
-    /// Source directe : x = ln(masse maximale) (0 si ≤ 1), pour la couleur.
+    /// Direct source: x = ln(maximum mass) (0 if ≤ 1), for the colour.
     pub mass: [f32; 4],
 }
 
-/// Lot d'instances à téléverser, identifié par une génération.
+/// Batch of instances to upload, identified by a generation.
 #[derive(Clone)]
 pub struct InstanceBatch {
     pub generation: u64,
     pub instances: Arc<Vec<Instance>>,
 }
 
-/// Ressources GPU persistantes, stockées dans les `CallbackResources` d'egui.
+/// Persistent GPU resources, stored in egui's `CallbackResources`.
 pub struct PointRenderer {
     pipeline: wgpu::RenderPipeline,
-    /// Dessin direct depuis les tampons de corps du moteur GPU.
+    /// Direct drawing from the GPU engine's body buffers.
     bodies_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     bind_group_layout: wgpu::BindGroupLayout,
-    /// Affichage direct : un jeu d'uniformes par sous-système, et les
-    /// sous-systèmes de l'image en cours.
+    /// Live view: one set of uniforms per subsystem, and the subsystems of the
+    /// current frame.
     part_uniforms: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     parts: Arc<Vec<ViewPart>>,
-    /// Tampons d'instances : un même tampon ne peut dépasser la limite
-    /// `max_buffer_size` du GPU (256 Mo par défaut, soit ~13 millions de
-    /// corps), d'où un découpage en tronçons.
+    /// Instance buffers: a single buffer cannot exceed the GPU's
+    /// `max_buffer_size` limit (256 MB by default, ~13 million bodies), hence
+    /// the split into chunks.
     chunks: Vec<Chunk>,
-    /// Nombre maximal d'instances par tronçon.
+    /// Maximum number of instances per chunk.
     chunk_capacity: usize,
     generation: u64,
 }
@@ -83,11 +83,11 @@ struct Chunk {
     count: u32,
 }
 
-/// Plafond d'instances par tronçon (80 Mo), bien en deçà des limites usuelles.
+/// Cap of instances per chunk (80 MB), well below the usual limits.
 const MAX_CHUNK_INSTANCES: usize = 4 * 1024 * 1024;
 
 impl PointRenderer {
-    /// Installe le moteur de rendu dans l'état wgpu d'eframe.
+    /// Installs the renderer in eframe's wgpu state.
     pub fn install(render_state: &egui_wgpu::RenderState) {
         let renderer = Self::new(&render_state.device, render_state.target_format);
         render_state
@@ -191,7 +191,7 @@ impl PointRenderer {
                 ],
             },
         );
-        // Corps du moteur GPU, lus en place : position (3 × f32) et masse.
+        // Bodies of the GPU engine, read in place: position (3 × f32) and mass.
         let bodies_pipeline = make_pipeline(
             "stellar-bodies-pipeline",
             "vs_bodies",
@@ -228,14 +228,14 @@ impl PointRenderer {
         }
     }
 
-    /// Téléverse les instances, tronçon par tronçon.
+    /// Uploads the instances, chunk by chunk.
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[Instance]) {
         let parts: Vec<&[Instance]> = instances.chunks(self.chunk_capacity).collect();
         for (i, part) in parts.iter().enumerate() {
             let needed = part.len();
             let fits = self.chunks.get(i).is_some_and(|c| c.capacity >= needed);
             if !fits {
-                // Marge de 25 % pour limiter les réallocations, sans dépasser le plafond.
+                // 25 % margin to limit reallocations, without exceeding the cap.
                 let capacity = (needed + needed / 4).clamp(1024, self.chunk_capacity);
                 let chunk = Chunk {
                     buffer: Self::create_instance_buffer(device, capacity),
@@ -251,7 +251,7 @@ impl PointRenderer {
             queue.write_buffer(&self.chunks[i].buffer, 0, bytemuck::cast_slice(part));
             self.chunks[i].count = needed as u32;
         }
-        // Tronçons devenus inutiles : libérés.
+        // Chunks no longer needed: released.
         self.chunks.truncate(parts.len());
     }
 
@@ -265,15 +265,15 @@ impl PointRenderer {
     }
 }
 
-/// Corps à dessiner.
+/// Bodies to draw.
 pub enum PointsSource {
-    /// Instances téléversées depuis un instantané.
+    /// Instances uploaded from a snapshot.
     Batch(Option<InstanceBatch>),
-    /// Tampons du moteur GPU, lus en place ; ancre : position de la caméra.
+    /// Buffers of the GPU engine, read in place; anchor: position of the camera.
     Direct { view: Arc<SystemsView>, anchor: DVec3 },
 }
 
-/// Commande de dessin d'une image.
+/// Draw command of a frame.
 pub struct PointsCallback {
     pub uniforms: Uniforms,
     pub source: PointsSource,
@@ -364,8 +364,8 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
     }
 }
 
-/// Couleur d'un corps selon sa masse (échelle logarithmique) :
-/// bleu pâle → blanc → jaune → orangé.
+/// Colour of a body by its mass (logarithmic scale): pale blue → white →
+/// yellow → orange.
 pub fn mass_color(mass: f64, max_mass: f64) -> [u8; 4] {
     let t = if max_mass > 1.0 {
         (mass.max(1.0).ln() / max_mass.ln()).clamp(0.0, 1.0)
@@ -404,8 +404,8 @@ pub fn mass_color(mass: f64, max_mass: f64) -> [u8; 4] {
 mod tests {
     use super::*;
 
-    /// Les shaders et les deux pipelines (instances, lecture directe des
-    /// corps) passent la validation de wgpu.
+    /// The shaders and both pipelines (instances, direct reading of the bodies)
+    /// pass wgpu's validation.
     #[test]
     fn pipelines_are_valid() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {

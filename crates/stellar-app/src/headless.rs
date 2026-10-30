@@ -1,5 +1,5 @@
-//! Écran de suivi d'une simulation sans affichage : aucun rendu des corps,
-//! toute la carte graphique pour le calcul ; l'enregistrement est automatique.
+//! Monitoring screen of a simulation without display: no rendering of the
+//! bodies, the whole graphics card for the computation; recording is automatic.
 
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use crate::i18n::tr;
 
 pub enum HeadlessAction {
     None,
-    /// Afficher la simulation (le calcul et l'enregistrement continuent).
+    /// Show the simulation (computation and recording continue).
     Show(Box<HeadlessRun>),
     BackHome,
 }
@@ -29,7 +29,7 @@ pub struct HeadlessScreen {
     state: Option<State>,
 }
 
-/// Durée lisible : 1 h 02 min 03 s.
+/// Readable duration: 1 h 02 min 03 s.
 pub fn hms(d: Duration) -> String {
     let s = d.as_secs();
     let (h, m, s) = (s / 3600, (s / 60) % 60, s % 60);
@@ -51,8 +51,8 @@ impl HeadlessScreen {
         }
     }
 
-    /// Arrêt immédiat (fermeture de la fenêtre) : clôture et sauvegarde,
-    /// en attendant leur fin.
+    /// Immediate stop (window closed): closing and saving, waiting for them to
+    /// finish.
     pub fn finish_now(&mut self) {
         self.finish();
         if let Some(State::Finishing(rx)) = &self.state {
@@ -64,7 +64,7 @@ impl HeadlessScreen {
         matches!(self.state, Some(State::Running(_)) | Some(State::Finishing(_)))
     }
 
-    /// Arrêt : clôture et sauvegarde en arrière-plan.
+    /// Stop: closing and saving in the background.
     fn finish(&mut self) {
         if let Some(State::Running(run)) = self.state.take() {
             let (tx, rx) = mpsc::channel();
@@ -200,7 +200,7 @@ impl HeadlessScreen {
                 action = HeadlessAction::Show(run);
             }
         }
-        // Rafraîchissement modéré : rien à dessiner d'autre.
+        // Moderate refresh: nothing else to draw.
         ctx.request_repaint_after(Duration::from_millis(250));
         action
     }

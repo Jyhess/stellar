@@ -1,8 +1,8 @@
-//! Ligne de commande (`stellar-cli.exe`) : simulation sans fenêtre, reprise
-//! d'une sauvegarde ou d'un enregistrement.
+//! Command line (`stellar-cli.exe`): simulation without a window, resumption
+//! of a save or a recording.
 //!
-//! Lance la simulation, l'enregistre et s'arrête à la cible (ou à Ctrl+C),
-//! puis clôt l'enregistrement et sauvegarde l'état final.
+//! Runs the simulation, records it and stops at the target (or on Ctrl+C),
+//! then closes the recording and saves the final state.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,7 +62,7 @@ sauvegardé (dossiers « {} » et « {} »).
 Les anciens noms français des options (--corps, --pas…) restent acceptés.", SAVES_DIR, RECORDINGS_DIR)
 }
 
-/// Anciens noms français des options et des valeurs, toujours acceptés.
+/// Former French names of the options and values, still accepted.
 const ALIASES: [(&str, &str); 22] = [
     ("--corps", "--bodies"),
     ("--rayon", "--radius"),
@@ -83,13 +83,13 @@ const ALIASES: [(&str, &str); 22] = [
     ("--duree", "--duration"),
     ("--aide", "--help"),
     ("-h", "--help"),
-    // Valeurs.
+    // Values.
     ("repos", "rest"),
     ("alea", "random"),
     ("toutes", "all"),
 ];
 
-/// Nom anglais d'une option ou d'une valeur (inchangé s'il n'a pas d'alias).
+/// English name of an option or value (unchanged if it has no alias).
 fn canonical(a: &str) -> &str {
     ALIASES
         .iter()
@@ -97,13 +97,13 @@ fn canonical(a: &str) -> &str {
         .map_or(a, |&(_, en)| en)
 }
 
-/// Point de départ de la simulation.
+/// Starting point of the simulation.
 #[derive(Debug, Clone, PartialEq)]
 enum Start {
     New,
-    /// Sauvegarde, et enregistrement à poursuivre éventuel.
+    /// Save, and the recording to continue, if any.
     Save(PathBuf, Option<PathBuf>),
-    /// Enregistrement à poursuivre depuis sa dernière sauvegarde liée.
+    /// Recording to continue from its latest linked save.
     Recording(PathBuf),
 }
 
@@ -111,7 +111,7 @@ enum Start {
 struct Options {
     start: Start,
     initial: InitialConditions,
-    /// Options de nouvelle simulation données (refusées en reprise).
+    /// New-simulation options given (refused when resuming).
     new_options: Vec<String>,
     engine: Option<String>,
     name: Option<String>,
@@ -119,8 +119,8 @@ struct Options {
     target: RunTarget,
 }
 
-/// Analyse la ligne de commande (`Err("")` : aide demandée ; `Err(message)` :
-/// erreur).
+/// Parses the command line (`Err("")`: help requested; `Err(message)`:
+/// error).
 fn parse(args: &[String]) -> Result<Options, String> {
     if args.iter().any(|a| canonical(a) == "--help") {
         return Err(String::new());
@@ -165,7 +165,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             o.new_options.push(a.clone());
         }
         match canonical(a) {
-            // Ancienne forme (`stellar.exe --sans-affichage`) : sans effet.
+            // Former form (`stellar.exe --sans-affichage`): no effect.
             "--sans-affichage" => {}
             "--bodies" => o.initial.count = num(&value(&mut it, a)?, a)?,
             "--radius" => o.initial.radius = num(&value(&mut it, a)?, a)?,
@@ -233,8 +233,8 @@ fn setup_console() {
         STOP.store(true, Ordering::Release);
         1
     }
-    // SAFETY : appels Win32 sans pointeur à conserver ; le gestionnaire
-    // ne fait que lever un drapeau atomique.
+    // SAFETY: Win32 calls with no pointer to keep; the handler only raises an
+    // atomic flag.
     unsafe {
         SetConsoleOutputCP(65001);
         SetConsoleCtrlHandler(Some(on_ctrl), 1);
@@ -244,11 +244,11 @@ fn setup_console() {
 #[cfg(not(windows))]
 fn setup_console() {}
 
-/// `stellar.exe` lancé avec des arguments : l'exécutable fenêtré ne peut pas
-/// tenir l'invite ; renvoi vers `stellar-cli`. Renvoie le code de sortie.
+/// `stellar.exe` started with arguments: the windowed executable cannot hold
+/// the prompt; redirect to `stellar-cli`. Returns the exit code.
 pub fn redirect() -> i32 {
     #[cfg(windows)]
-    // SAFETY : rattachement à la console du parent, sans pointeur.
+    // SAFETY: attaches to the parent's console, no pointer involved.
     unsafe {
         use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
         AttachConsole(ATTACH_PARENT_PROCESS);
@@ -263,7 +263,7 @@ pub fn redirect() -> i32 {
     2
 }
 
-/// Exécute la ligne de commande ; renvoie le code de sortie.
+/// Runs the command line; returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     setup_console();
     let o = match parse(args) {
@@ -327,7 +327,7 @@ pub fn run(args: &[String]) -> i32 {
             HeadlessRun::resume(&service, save, follow.as_deref(), o.name.as_deref(), o.record, o.target)
         }
         Start::Recording(rec) => {
-            // Dernière sauvegarde liée à l'enregistrement.
+            // Latest save linked to the recording.
             let save = service
                 .linked_saves(rec)
                 .into_iter()
@@ -453,7 +453,7 @@ mod tests {
         let o = parse(&args("--charger a.stellar --poursuivre r.stellarec")).unwrap();
         assert_eq!(o.start, Start::Save("a.stellar".into(), Some("r.stellarec".into())));
         assert_eq!(parse(&args("--aide")).err().as_deref(), Some(""));
-        // L'option est citée telle qu'elle a été écrite.
+        // The option is quoted as it was written.
         let e = parse(&args("--charger a --corps 10")).unwrap_err();
         assert!(e.contains("--corps"), "{e}");
     }

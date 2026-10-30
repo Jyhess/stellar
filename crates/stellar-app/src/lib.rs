@@ -1,9 +1,9 @@
 //! # Stellar
 //!
-//! Racine de composition : assemble les couches (domaine, cas d'usage,
-//! moteurs, persistance). Deux exécutables s'en servent :
-//! - `stellar` (`main.rs`) : l'interface graphique ([`run_gui`]) ;
-//! - `stellar-cli` (`cli.rs`) : la ligne de commande ([`console::run`]).
+//! Composition root: assembles the layers (domain, use cases, engines,
+//! persistence). Two executables use it:
+//! - `stellar` (`main.rs`): the graphical interface ([`run_gui`]);
+//! - `stellar-cli` (`cli.rs`): the command line ([`console::run`]).
 
 #[macro_use]
 pub mod i18n;
@@ -29,16 +29,16 @@ use stellar_persistence::{FileRecordingRepository, FileRepository};
 
 use crate::i18n::tr;
 
-/// Dossier des sauvegardes, relatif au répertoire de lancement.
+/// Folder of the saves, relative to the current directory.
 const SAVES_DIR: &str = "saves";
-/// Dossier des enregistrements (relecture).
+/// Folder of the recordings (playback).
 const RECORDINGS_DIR: &str = "recordings";
 
-/// Journal des plantages, écrit dans le répertoire de lancement.
+/// Crash log, written in the current directory.
 const CRASH_LOG: &str = "stellar-crash.log";
 
-/// En mode fenêtré, Windows n'affiche pas la console : toute erreur fatale est
-/// consignée dans `stellar-crash.log` et signalée par une boîte de dialogue.
+/// In windowed mode, Windows shows no console: any fatal error is written to
+/// `stellar-crash.log` and reported in a dialog box.
 pub fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -62,16 +62,16 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Lance l'interface graphique.
+/// Starts the graphical interface.
 pub fn run_gui() -> eframe::Result {
     install_panic_hook();
     i18n::init();
     let mut registry = EngineRegistry::new();
-    // Le moteur GPU devient le moteur par défaut si une carte compatible est
-    // présente ; le moteur CPU reste toujours disponible.
+    // The GPU engine becomes the default engine if a compatible card is
+    // present; the CPU engine always remains available.
     let gpu = GpuEngineFactory::probe();
-    // Le moteur GPU partagera la carte graphique de l'interface (affichage
-    // des corps sans copie) dès que celle-ci sera ouverte.
+    // The GPU engine will share the interface's device (drawing the bodies
+    // without copy) as soon as it is opened.
     let gpu_factory = gpu.is_ok().then(|| Arc::new(GpuEngineFactory::new()));
     if let Some(f) = &gpu_factory {
         registry.register(f.clone());
@@ -103,9 +103,9 @@ pub fn run_gui() -> eframe::Result {
     )
 }
 
-/// Carte graphique de l'interface : la plus performante, avec toutes ses
-/// limites (le moteur GPU, qui la partage, manipule des tampons de plusieurs
-/// centaines de mégaoctets, bien au-delà des limites par défaut de wgpu).
+/// Graphics device of the interface: the most powerful one, with all its
+/// limits (the GPU engine, which shares it, handles buffers of several
+/// hundred megabytes, well beyond wgpu's default limits).
 fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
     let mut setup = egui_wgpu::WgpuSetupCreateNew {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -128,16 +128,16 @@ fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
     }
 }
 
-/// Mode de présentation de l'interface.
+/// Presentation mode of the interface.
 ///
-/// En mode synchronisé classique (Fifo), l'acquisition de l'image suivante
-/// attend le balayage de l'écran en tenant un verrou de la carte que toute
-/// soumission de travaux réclame aussi : le moteur GPU, qui partage la carte,
-/// perdrait jusqu'à une image entière à chaque pas. Le mode Mailbox reste
-/// synchronisé (pas de déchirement) sans cette attente ; il est garanti sous
-/// DirectX 12 et proposé par les pilotes Vulkan de NVIDIA et d'AMD.
+/// In classic synchronized mode (Fifo), acquiring the next frame waits for
+/// the screen refresh while holding a device lock that every submission
+/// also needs: the GPU engine, which shares the device, would lose up to a
+/// whole frame at every step. Mailbox mode stays synchronized (no tearing)
+/// without that wait; it is guaranteed under DirectX 12 and offered by the
+/// NVIDIA and AMD Vulkan drivers.
 ///
-/// `STELLAR_PRESENT=fifo|mailbox|immediate` impose un mode (essais).
+/// `STELLAR_PRESENT=fifo|mailbox|immediate` forces a mode (testing).
 fn present_mode() -> wgpu::PresentMode {
     match std::env::var("STELLAR_PRESENT").as_deref() {
         Ok("fifo") => return wgpu::PresentMode::AutoVsync,

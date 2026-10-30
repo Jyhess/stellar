@@ -1,4 +1,4 @@
-//! Écran d'accueil : création d'une simulation ou chargement d'une sauvegarde.
+//! Home screen: creating a simulation or loading a save.
 
 use std::path::PathBuf;
 
@@ -15,7 +15,7 @@ use crate::format;
 
 use crate::i18n::tr;
 
-/// Options d'enregistrement choisies à la création.
+/// Recording options chosen at creation.
 #[derive(Clone, Copy)]
 pub struct RecordOptions {
     pub interval: u32,
@@ -24,13 +24,13 @@ pub struct RecordOptions {
 
 pub enum HomeAction {
     None,
-    /// Configuration, enregistrement dès le départ, nom de la simulation.
+    /// Configuration, recording from the start, name of the simulation.
     Start(SimulationConfig, Option<RecordOptions>, String),
-    /// Simulation sans affichage : configuration, enregistrement, nom, cible.
+    /// Simulation without display: configuration, recording, name, target.
     StartHeadless(SimulationConfig, RecordSettings, String, RunTarget),
     Load(PathBuf),
-    /// Charge une sauvegarde déjà lue (nom de la sauvegarde) et poursuit
-    /// l'enregistrement indiqué.
+    /// Loads a save already read (name of the save) and continues the given
+    /// recording.
     LoadContinuing(Box<SaveData>, PathBuf, String),
     Replay(PathBuf),
     Quit,
@@ -66,8 +66,8 @@ impl VelKind {
 }
 
 pub struct HomeScreen {
-    /// Nom de la nouvelle simulation ; tant qu'il n'est pas saisi, il suit
-    /// les paramètres ([`default_name`]).
+    /// Name of the new simulation; until it is typed, it follows the parameters
+    /// ([`default_name`]).
     name: String,
     name_edited: bool,
     count: usize,
@@ -81,7 +81,7 @@ pub struct HomeScreen {
     vel_min: f64,
     vel_max: f64,
     vel_spread: f64,
-    /// Multiple de la vitesse orbitale d'équilibre.
+    /// Multiple of the orbital equilibrium speed.
     vel_factor: f64,
     g: f64,
     auto_physics: bool,
@@ -91,7 +91,7 @@ pub struct HomeScreen {
     saves_error: Option<String>,
     recordings: Vec<RecordingSummary>,
     record: bool,
-    /// Sans affichage (enregistrement automatique), et sa cible.
+    /// Without display (automatic recording), and its target.
     headless: bool,
     target_kind: TargetKind,
     target_steps: u64,
@@ -105,7 +105,7 @@ pub struct HomeScreen {
     file_dialog: Option<FileDialog>,
 }
 
-/// Fichier visé par une suppression ou un renommage.
+/// File targeted by a deletion or a rename.
 #[derive(Clone)]
 enum FileTarget {
     Save(SaveSummary),
@@ -121,23 +121,23 @@ impl FileTarget {
     }
 }
 
-/// Confirmation d'une suppression, ou saisie d'un nouveau nom.
+/// Confirmation of a deletion, or input of a new name.
 enum FileDialog {
     Delete {
         target: FileTarget,
-        /// Fichiers liés (noms), proposés à la suppression.
+        /// Linked files (names), offered for deletion.
         linked: Vec<String>,
         with_linked: bool,
     },
     Rename {
         target: FileTarget,
         name: String,
-        /// Fichiers liés renommés avec lui.
+        /// Linked files renamed along with it.
         linked: Vec<String>,
     },
 }
 
-/// Condition d'arrêt d'une simulation sans affichage.
+/// Stop condition of a simulation without display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TargetKind {
     Manual,
@@ -164,7 +164,7 @@ impl TargetKind {
     }
 }
 
-/// Choix de l'enregistrement à poursuivre depuis une sauvegarde.
+/// Choice of the recording to continue from a save.
 struct ContinueDialog {
     save_name: String,
     data: Box<SaveData>,
@@ -323,8 +323,8 @@ impl HomeScreen {
         action
     }
 
-    /// Noms des fichiers liés à `target` : enregistrement d'une sauvegarde,
-    /// sauvegardes d'un enregistrement.
+    /// Names of the files linked to `target`: the recording of a save, the saves
+    /// of a recording.
     fn linked_names(service: &SimulatorService, target: &FileTarget) -> Vec<String> {
         match target {
             FileTarget::Save(s) => service
@@ -358,7 +358,7 @@ impl HomeScreen {
         });
     }
 
-    /// Fenêtre de confirmation (suppression) ou de saisie (renommage).
+    /// Confirmation window (deletion) or input window (rename).
     fn file_window(&mut self, ctx: &egui::Context, service: &SimulatorService) {
         let Some(dialog) = &mut self.file_dialog else {
             return;
@@ -455,7 +455,7 @@ impl HomeScreen {
         self.refresh(service);
     }
 
-    /// Fenêtre de choix de l'enregistrement à poursuivre.
+    /// Window to choose the recording to continue.
     fn continue_window(&mut self, ctx: &egui::Context) -> Option<HomeAction> {
         let dialog = self.continue_dialog.as_ref()?;
         let mut chosen = None;
@@ -793,7 +793,7 @@ impl HomeScreen {
         }
 
         ui.add_space(10.0);
-        // Mesuré : ≈ 4,2 Go pour 10 millions de corps (moteur, instantanés, rendu).
+        // Measured: ≈ 4.2 GB for 10 million bodies (engine, snapshots, rendering).
         let size = |mb: f64| {
             if mb >= 1000.0 {
                 tr!("{} Go", format!("{:.1}", mb / 1000.0)).replace('.', crate::format::decimal_sep())
@@ -803,7 +803,7 @@ impl HomeScreen {
         };
         let mut text = tr!("Mémoire estimée : ≈ {}", size(self.count as f64 * 420.0 / 1e6));
         if self.engine.starts_with("gpu") {
-            // Moteur GPU : ≈ 330 octets par corps en mémoire vidéo.
+            // GPU engine: ≈ 330 bytes of video memory per body.
             text.push_str(&tr!(" · mémoire vidéo ≈ {}", size(self.count as f64 * 330.0 / 1e6)));
         }
         ui.label(RichText::new(text).weak());
@@ -993,9 +993,9 @@ impl HomeScreen {
         self.physics.reference_radius = ic.radius;
     }
 
-    /// En mode automatique, dt, ε, r₀ et la liaison des amas suivent les
-    /// conditions initiales ; θ, le nettoyage et les seuils des amas restent
-    /// ceux saisis.
+    /// In automatic mode, dt, ε, r₀ and the cluster link length follow the
+    /// initial conditions; θ, the cleanup and the cluster thresholds keep the
+    /// values typed in.
     fn apply_auto(&mut self, ic: &InitialConditions) {
         if self.auto_physics {
             let keep = self.physics;
@@ -1128,7 +1128,7 @@ impl HomeScreen {
                     if ui.button(tr("Rejouer")).clicked() {
                         action = Some(HomeAction::Replay(r.path.clone()));
                     }
-                    // Sauvegarde de reprise la plus récente liée à cet enregistrement.
+                    // Most recent resume save linked to this recording.
                     let file = r.path.file_name().map(|n| n.to_string_lossy().into_owned());
                     if let Some(save) = self.saves.iter().find(|s| s.recording.is_some() && s.recording == file) {
                         if ui
@@ -1157,13 +1157,13 @@ impl HomeScreen {
     }
 }
 
-/// Octets de mémoire centrale par corps (mesuré : ≈ 4,2 Go pour 10 millions
-/// de corps, moteur, instantanés et rendu compris).
+/// Bytes of main memory per body (measured: ≈ 4.2 GB for 10 million bodies,
+/// engine, snapshots and rendering included).
 const RAM_PER_BODY: f64 = 420.0;
-/// Plafond du nombre de corps proposé.
+/// Cap of the offered body count.
 const MAX_COUNT: usize = 1_000_000_000;
 
-/// Mémoire centrale totale de la machine (octets), si elle est connue.
+/// Total main memory of the machine (bytes), if known.
 #[cfg(windows)]
 fn total_memory() -> Option<u64> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
@@ -1171,7 +1171,7 @@ fn total_memory() -> Option<u64> {
         dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
         ..unsafe { std::mem::zeroed() }
     };
-    // SAFETY : structure initialisée, de taille renseignée.
+    // SAFETY: initialized structure, with its size filled in.
     (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some(status.ullTotalPhys)
 }
 
@@ -1180,8 +1180,8 @@ fn total_memory() -> Option<u64> {
     None
 }
 
-/// Nombre maximal de corps proposé : limite du moteur, 80 % de la mémoire
-/// centrale, un milliard au plus.
+/// Maximum body count offered: engine limit, 80 % of main memory, one
+/// billion at most.
 fn max_bodies(service: &SimulatorService, engine: &str) -> usize {
     let by_ram = total_memory().map_or(usize::MAX, |m| (m as f64 * 0.8 / RAM_PER_BODY) as usize);
     service
@@ -1191,7 +1191,7 @@ fn max_bodies(service: &SimulatorService, engine: &str) -> usize {
         .clamp(1_000, MAX_COUNT)
 }
 
-/// Crans 1-2-5 de 1 000 à `max` (inclus, ajouté s'il n'est pas un cran).
+/// 1-2-5 steps from 1,000 to `max` (included, added if it is not a step).
 pub fn count_steps(max: usize) -> Vec<usize> {
     let mut steps = Vec::new();
     let mut decade = 1_000usize;
@@ -1211,11 +1211,11 @@ pub fn count_steps(max: usize) -> Vec<usize> {
     steps
 }
 
-/// Curseur logarithmique (crans 1-2-5) et saisie exacte du nombre de corps.
+/// Logarithmic slider (1-2-5 steps) and exact input of the body count.
 fn count_picker(ui: &mut egui::Ui, count: &mut usize, max: usize) {
     *count = (*count).clamp(2, max);
     let steps = count_steps(max);
-    // Cran le plus proche par valeur inférieure ou égale.
+    // Nearest step at or below the value.
     let mut index = steps.iter().rposition(|&s| s <= *count).unwrap_or(0);
     ui.horizontal(|ui| {
         let slider = egui::Slider::new(&mut index, 0..=steps.len() - 1).show_value(false);
@@ -1232,13 +1232,13 @@ fn count_picker(ui: &mut egui::Ui, count: &mut usize, max: usize) {
     });
 }
 
-/// Pastille « ? » dont la bulle explique un paramètre.
+/// "?" badge whose tooltip explains a parameter.
 fn help(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new("?").small().strong().weak()).sense(egui::Sense::hover()))
         .on_hover_text(text);
 }
 
-/// Libellé d'un paramètre suivi de sa pastille d'aide.
+/// Label of a parameter followed by its help badge.
 fn param(ui: &mut egui::Ui, label: &str, text: &str) {
     ui.horizontal(|ui| {
         ui.label(label);
@@ -1246,8 +1246,8 @@ fn param(ui: &mut egui::Ui, label: &str, text: &str) {
     });
 }
 
-/// Durée estimée d'un pas (secondes), d'après le banc d'essai : GPU, 2,2 ms
-/// à 100 000 corps, 14 ms à 1 M, 62 ms à 4 M ; CPU, 232 ms à 1 M, en
+/// Estimated duration of a step (seconds), from the benchmark: GPU, 2.2 ms
+/// at 100,000 bodies, 14 ms at 1 M, 62 ms at 4 M; CPU, 232 ms at 1 M; in
 /// n·log n.
 pub fn step_estimate(count: usize, gpu: bool) -> f64 {
     let n = count.max(2) as f64;
@@ -1258,7 +1258,7 @@ pub fn step_estimate(count: usize, gpu: bool) -> f64 {
     }
 }
 
-/// Durée lisible : millisecondes, secondes ou minutes.
+/// Readable duration: milliseconds, seconds or minutes.
 fn format_duration(seconds: f64) -> String {
     let text = if seconds < 1.0 {
         format!("{:.1} ms", seconds * 1e3)
@@ -1270,7 +1270,7 @@ fn format_duration(seconds: f64) -> String {
     text.replace('.', crate::format::decimal_sep())
 }
 
-/// Nombre abrégé : 1k, 2,5M, 1G…
+/// Abbreviated number: 1k, 2,5M (2.5M in English), 1G…
 fn abbreviate(n: usize) -> String {
     let (unit, scale) = match n {
         n if n >= 1_000_000_000 => ("G", 1e9),
@@ -1294,9 +1294,9 @@ fn abbreviate(n: usize) -> String {
     format!("{}{unit}", text.replace('.', crate::format::decimal_sep()))
 }
 
-/// Nom par défaut d'une simulation : date, nombre de particules abrégé,
-/// répartition et vitesse initiale (`2026-10-28_1M_sph_orb`) ; l'heure est
-/// ajoutée si `taken` indique que le nom existe déjà.
+/// Default name of a simulation: date, abbreviated particle count,
+/// distribution and initial velocity (`2026-10-28_1M_sph_orb`); the time is
+/// added if `taken` says the name already exists.
 pub fn default_name(
     ic: &InitialConditions,
     now: chrono::DateTime<chrono::Local>,
