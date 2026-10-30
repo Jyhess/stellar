@@ -416,12 +416,12 @@ mod tests {
         let Some(adapter) =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
         else {
-            eprintln!("test ignoré : aucune carte graphique");
+            eprintln!("test skipped: no graphics card");
             return;
         };
         let (device, _queue) =
             pollster::block_on(adapter.request_device(&Default::default(), None))
-                .expect("ouverture de la carte graphique");
+                .expect("opening the graphics card");
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _renderer = PointRenderer::new(&device, wgpu::TextureFormat::Bgra8Unorm);
         let error = pollster::block_on(device.pop_error_scope());

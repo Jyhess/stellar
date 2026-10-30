@@ -76,7 +76,7 @@ fn populate(f: &Fixture) -> PathBuf {
         pending: Vec::new(),
     };
     f.saves.save("rec_a_reprise", &data(Some(link))).unwrap();
-    f.saves.save("autre", &data(None)).unwrap();
+    f.saves.save("other", &data(None)).unwrap();
     rec
 }
 
@@ -94,31 +94,31 @@ fn renaming_a_recording_carries_its_saves_along() {
     let f = fixture(&dir);
     populate(&f);
     let rec = f.recordings.list().unwrap().remove(0);
-    f.service.rename_recording(&rec, "orbites").unwrap();
+    f.service.rename_recording(&rec, "orbits").unwrap();
     assert_eq!(
         names(&f),
-        (vec!["autre".into(), "orbites_reprise".into()], vec!["orbites".into()])
+        (vec!["orbits_reprise".into(), "other".into()], vec!["orbits".into()])
     );
     let save = f
         .saves
         .list()
         .unwrap()
         .into_iter()
-        .find(|s| s.name == "orbites_reprise")
+        .find(|s| s.name == "orbits_reprise")
         .unwrap();
-    assert_eq!(save.recording.as_deref(), Some("orbites.stellarec"));
+    assert_eq!(save.recording.as_deref(), Some("orbits.stellarec"));
     let link = f.saves.load(&save.path).unwrap().recording.unwrap();
-    assert_eq!(link.path.file_name().unwrap(), "orbites.stellarec");
+    assert_eq!(link.path.file_name().unwrap(), "orbits.stellarec");
 
     // Renaming the save also renames the linked recording.
     f.service.rename_save(&save, "final_reprise").unwrap();
     assert_eq!(
         names(&f),
-        (vec!["autre".into(), "final_reprise".into()], vec!["final".into()])
+        (vec!["final_reprise".into(), "other".into()], vec!["final".into()])
     );
     // A name already taken is refused.
-    let autre = f.saves.list().unwrap().into_iter().find(|s| s.name == "autre").unwrap();
-    assert!(f.service.rename_save(&autre, "final_reprise").is_err());
+    let other = f.saves.list().unwrap().into_iter().find(|s| s.name == "other").unwrap();
+    assert!(f.service.rename_save(&other, "final_reprise").is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -129,7 +129,7 @@ fn deleting_with_or_without_the_linked_file() {
     populate(&f);
     let save = |name: &str| f.saves.list().unwrap().into_iter().find(|s| s.name == name).unwrap();
     // Without the linked file: the recording stays.
-    f.service.delete_save(&save("autre"), true).unwrap();
+    f.service.delete_save(&save("other"), true).unwrap();
     assert_eq!(names(&f), (vec!["rec_a_reprise".into()], vec!["rec_a".into()]));
     // With it: the linked save goes too.
     let rec = f.recordings.list().unwrap().remove(0);
@@ -138,7 +138,7 @@ fn deleting_with_or_without_the_linked_file() {
 
     populate(&f);
     f.service.delete_save(&save("rec_a_reprise"), false).unwrap();
-    assert_eq!(names(&f), (vec!["autre".into()], vec!["rec_a".into()]));
+    assert_eq!(names(&f), (vec!["other".into()], vec!["rec_a".into()]));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -166,7 +166,7 @@ fn headless_run_stops_at_target_and_saves() {
     let run = HeadlessRun::start(
         &service,
         config,
-        "essai_sans_affichage",
+        "headless_test",
         RecordSettings {
             interval: 5,
             dust_budget: None,
@@ -176,7 +176,7 @@ fn headless_run_stops_at_target_and_saves() {
     .unwrap();
     let t0 = std::time::Instant::now();
     while !run.done() {
-        assert!(t0.elapsed().as_secs() < 60, "cible jamais atteinte");
+        assert!(t0.elapsed().as_secs() < 60, "target never reached");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let outcome = run.finish(&service).unwrap();
@@ -188,13 +188,13 @@ fn headless_run_stops_at_target_and_saves() {
     assert_eq!(steps.first(), Some(&0));
     assert_eq!(steps.last(), Some(&40), "{steps:?}");
     assert!(r.read_frame(steps.len() - 1).is_ok());
-    assert_eq!(f_names(&dir), vec!["essai_sans_affichage".to_owned()]);
+    assert_eq!(f_names(&dir), vec!["headless_test".to_owned()]);
     drop(r);
 
     let wait = |run: &HeadlessRun| {
         let t0 = std::time::Instant::now();
         while !run.done() {
-            assert!(t0.elapsed().as_secs() < 60, "cible jamais atteinte");
+            assert!(t0.elapsed().as_secs() < 60, "target never reached");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     };
@@ -214,7 +214,7 @@ fn headless_run_stops_at_target_and_saves() {
     )
     .unwrap();
     assert_eq!(continued.as_deref(), Some(rec.as_path()));
-    assert_eq!(run.handle().name(), "essai_sans_affichage");
+    assert_eq!(run.handle().name(), "headless_test");
     wait(&run);
     let second = run.finish(&service).unwrap();
     assert_eq!(second.step, 60);
@@ -229,7 +229,7 @@ fn headless_run_stops_at_target_and_saves() {
         &service,
         &second.save,
         None,
-        Some("suite"),
+        Some("next"),
         record,
         RunTarget::Steps(10),
     )

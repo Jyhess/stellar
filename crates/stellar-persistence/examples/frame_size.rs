@@ -29,9 +29,9 @@ fn main() {
     let t = Instant::now();
     let raw = encode_frame(&frame, VERSION);
     let packed = zstd::bulk::compress(&raw, 3).unwrap();
-    println!("codage + compression : {:?}", t.elapsed());
+    println!("encoding + compression: {:?}", t.elapsed());
     println!(
-        "taille : {:.1} Mo brut, {:.1} Mo compressé ({:.1} octets/corps)",
+        "size: {:.1} MB raw, {:.1} MB compressed ({:.1} bytes/body)",
         raw.len() as f64 / 1e6,
         packed.len() as f64 / 1e6,
         packed.len() as f64 / n as f64
@@ -45,7 +45,7 @@ fn main() {
     };
     let d = decode_frame(meta, &unpacked, VERSION).unwrap();
     println!(
-        "décompression + décodage : {:?} ({} corps)",
+        "decompression + decoding: {:?} ({} bodies)",
         t.elapsed(),
         d.bodies.len()
     );

@@ -40,7 +40,7 @@ The first build takes a few minutes while the dependencies are downloaded and co
 > Always build with `--release`: in debug mode, the computation is several tens of times slower.
 
 - Display is capped at 120 frames per second. With NVIDIA and AMD cards (Vulkan) or under DirectX 12, it is synchronized in **Mailbox** mode: no tearing, and waiting for the screen does not block the GPU engine, which shares the card (see [`docs/gpu-engine.md`](docs/gpu-engine.md#live-view)).
-- Memory: about 420 bytes of RAM per particle (about 4.2 GB for 10 million) and, with the GPU engine, about 240 bytes of video memory per particle.
+- Memory: about 420 bytes of RAM per particle (about 4.2 GB for 10 million) and, with the GPU engine, about 300 bytes of video memory per particle (about 3.1 GB for 10 million).
 - Saves go to the `saves\` subfolder and recordings to `recordings\`, both relative to the current directory.
 
 ---
@@ -67,7 +67,7 @@ The first build takes a few minutes while the dependencies are downloaded and co
 For long computations: no rendering of the bodies, the whole graphics card for the computation, and automatic recording with an adjustable interval and dust budget.
 
 - **From the home screen**: tick "Without display", then choose a stop condition: number of steps, simulated time, real duration, or manual. A monitoring screen shows progress (step, steps/s, estimated remaining time, recording). "Stop and save" closes the recording and saves the final state under the simulation's name. "Show the simulation" switches to the usual display while computation and recording continue. Closing the window stops cleanly.
-- **From the command line**: `stellar-cli.exe` is a console application installed next to `stellar.exe`. The prompt waits for it to finish, and Ctrl+C stops it cleanly. `stellar-cli --help` lists the options, in the interface language. The former French option names (`--corps`, `--pas`, `--charger`…) and values (`repos`, `alea`, `toutes`) are still accepted. An unknown argument is reported with exit code 2. `stellar.exe` started with arguments forwards them to `stellar-cli`.
+- **From the command line**: `stellar-cli.exe` is a console application installed next to `stellar.exe`. The prompt waits for it to finish, and Ctrl+C stops it cleanly. `stellar-cli --help` lists the options, in the interface language. An unknown argument is reported with exit code 2. `stellar.exe` started with arguments forwards them to `stellar-cli`.
 
   ```powershell
   .\stellar-cli.exe --bodies 4000000 --disc --steps 200000 --interval 20 --name galaxy
@@ -277,7 +277,7 @@ GPU tests also run without a graphics card, with software rendering: `$env:WGPU_
 
 | Command | Measures |
 |---|---|
-| `cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10` | CPU / GPU benchmark: body count, step count; `gpu` or `cpu` to test a single engine, `disque` for a rotating disc. `STELLAR_GPU_PROFILE=1`: time per kernel. |
+| `cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10` | CPU / GPU benchmark: body count, step count; `gpu` or `cpu` to test a single engine, `disc` for a rotating disc. `STELLAR_GPU_PROFILE=1`: time per kernel. |
 | `cargo run --release -p stellar-engine-cpu --example timing -- 1000000 5` | CPU engine with its evolution (remaining bodies, mergers, energy drift) |
 | `cargo run --release -p stellar-application --example interp_timing -- 1000000` | cost of interpolating one playback frame |
 | `cargo run --release -p stellar-persistence --example frame_size -- 1000000` | size and cost of a recording snapshot |

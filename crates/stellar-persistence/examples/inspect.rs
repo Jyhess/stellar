@@ -6,7 +6,7 @@ use stellar_application::{RecordingRepository, SimulationRepository};
 use stellar_persistence::{FileRecordingRepository, FileRepository};
 
 fn main() {
-    let arg = std::env::args().nth(1).expect("chemin attendu");
+    let arg = std::env::args().nth(1).expect("path expected");
     let path = Path::new(&arg);
     let dir = path.parent().unwrap_or(Path::new("."));
     if path.extension().and_then(|e| e.to_str()) == Some("stellarec") {
@@ -20,18 +20,18 @@ fn main() {
         let r = repo.open(path).unwrap();
         let steps: Vec<u64> = r.info().frames.iter().map(|f| f.step).collect();
         println!(
-            "instantanés : {} · clos : {}",
+            "snapshots: {} · closed: {}",
             steps.len(),
             summary.complete
         );
-        println!("premiers pas : {:?}", &steps[..steps.len().min(5)]);
+        println!("first steps: {:?}", &steps[..steps.len().min(5)]);
         println!(
-            "derniers pas : {:?}",
+            "last steps: {:?}",
             &steps[steps.len().saturating_sub(5)..]
         );
         let gaps: Vec<u64> = steps.windows(2).map(|w| w[1] - w[0]).collect();
         println!(
-            "écarts min/max : {:?} / {:?}",
+            "min/max gaps: {:?} / {:?}",
             gaps.iter().min(),
             gaps.iter().max()
         );
@@ -39,12 +39,12 @@ fn main() {
         let repo = FileRepository::new(dir);
         let data = repo.load(path).unwrap();
         println!(
-            "pas : {} · corps : {}",
+            "step: {} · bodies: {}",
             data.state.step,
             data.state.bodies.len()
         );
         println!(
-            "lien : {:?}",
+            "link: {:?}",
             data.recording
                 .map(|l| (l.path, l.last_frame_step, l.next_step, l.pending.len()))
         );

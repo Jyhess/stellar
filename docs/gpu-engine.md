@@ -4,7 +4,13 @@
 
 - **Accuracy:** median relative error of the acceleration of about 10⁻³ compared with the direct sum (θ = 0.5). After 50 steps, positions differ from the CPU engine by less than 10⁻³.
 - **Reference timings** (RTX 4060 Ti, sphere at rest): about 14 ms per step for 1 M bodies, of which about 9 ms are spent on forces; about 62 ms for 4 M bodies.
-- **Video memory:** about 240 bytes per body, i.e. 2.4 GB for 10 M bodies.
+- **Video memory:** about 300 bytes per body plus about 130 MB fixed, i.e.
+  about 3.1 GB for 10 M bodies (measured with the benchmark from 0.5 to 4 M
+  bodies). Buffers sized per capacity slot (capacity = n × 1.125): two body
+  arrays (96 bytes), tree nodes (48), swept boxes (32), sort keys and values
+  (16), tree links and levels (28), scan and lookup tables (12), i.e. about
+  232 bytes; contact pairs and merge operations take up to 63 MB (2¹⁸ pairs).
+  The rest is allocator granularity and driver overhead.
 
 ## Constants (`lib.rs`)
 

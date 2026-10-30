@@ -342,9 +342,9 @@ mod tests {
         assert!(repo.list().unwrap().is_empty());
 
         let data = sample();
-        let p1 = repo.save("ma simulation", &data).unwrap();
-        let p2 = repo.save("ma simulation", &data).unwrap();
-        assert_ne!(p1, p2, "les noms doivent être uniques");
+        let p1 = repo.save("my simulation", &data).unwrap();
+        let p2 = repo.save("my simulation", &data).unwrap();
+        assert_ne!(p1, p2, "names must be unique");
         assert_eq!(repo.load(&p1).unwrap(), data);
 
         let list = repo.list().unwrap();
@@ -359,7 +359,7 @@ mod tests {
     fn rejects_other_versions() {
         let dir = temp_dir("version");
         let repo = FileRepository::new(&dir);
-        let path = repo.save("autre", &sample()).unwrap();
+        let path = repo.save("other", &sample()).unwrap();
         let mut bytes = fs::read(&path).unwrap();
         bytes[8..12].copy_from_slice(&(OLDEST - 1).to_le_bytes());
         fs::write(&path, bytes).unwrap();
@@ -412,7 +412,7 @@ mod tests {
         };
         let summary = SaveSummary {
             path: PathBuf::new(),
-            name: "ancienne".to_owned(),
+            name: "old".to_owned(),
             saved_at_unix: 1,
             body_count: 1_000,
             step: 42,
@@ -420,7 +420,7 @@ mod tests {
             engine: data.config.engine.clone(),
             recording: None,
         };
-        let path = dir.join("ancienne.stellar");
+        let path = dir.join("old.stellar");
         write_old(&path, 3, &summary, &old);
         let repo = FileRepository::new(&dir);
         assert_eq!(repo.list().unwrap().len(), 1);

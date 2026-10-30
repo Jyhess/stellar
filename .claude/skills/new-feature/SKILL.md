@@ -13,6 +13,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 ## 2. Implementation rules
 
 - **Interface text**: source strings are in French. Any displayed text goes through `tr("…")` or `tr!("… {} …", x)` (only `{}` placeholders) and gets its English translation in the `EN` table of `crates/stellar-app/src/i18n.rs`. A test checks duplicates and placeholders.
+- **New error message in a lower crate**: written in French, with its English template (named placeholders written `{}`) in the `MESSAGES` table of `i18n.rs`; the test `lower_layer_messages_are_translated` fails otherwise. An error displayed without `tr!` goes through `tr_msg`.
 - **Numbers**: use `format.rs` (`count`, `real`, `decimal_sep()`); never hard-code `.replace('.', ",")`.
 - **Symbols**: some characters are missing from egui's fonts (●, ✦, U+202F). Check that a symbol is displayed before using it.
 - **Layers**: no egui or wgpu in `stellar-domain` / `stellar-application`; engines are reached only through the domain traits.
@@ -30,7 +31,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 | New engine | registration in `crates/stellar-app/src/lib.rs`, `--engine` mapping in `console.rs` |
 | Any feature | `SPEC.md` (rules in force), a line in the current or a new entry of `docs/history.md`, README sections concerned |
 
-Documentation, code comments and CLI option names are written in **English**; interface source strings and error messages of the lower layers stay in **French**.
+Documentation, code comments and CLI option names are written in **English**; interface source strings and messages of the lower layers are written in **French** and translated; developer-facing text (panics, tests, examples) is in **English**.
 
 ## 4. Tests
 

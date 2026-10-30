@@ -53,7 +53,7 @@ fn wait_ready(h: &SimulationHandle) {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    panic!("simulation jamais prête");
+    panic!("simulation never ready");
 }
 
 fn step_to(h: &SimulationHandle, step: u64) {
@@ -82,7 +82,7 @@ fn continues_a_recording_from_an_unlinked_save() {
     let snap = h.latest();
     let save_step = snap.state.step;
     let save = service
-        .save("milieu", h.config(), &snap, None, None)
+        .save("middle", h.config(), &snap, None, None)
         .unwrap();
     step_to(&h, save_step + 20);
     let n_before = h.latest().state.bodies.len();
@@ -148,7 +148,7 @@ fn rejects_recordings_of_another_simulation() {
     wait_ready(&other);
     step_to(&other, other.latest().state.step + 6);
     let save = service
-        .save("autre", other.config(), &other.latest(), None, None)
+        .save("other", other.config(), &other.latest(), None, None)
         .unwrap();
     other.shutdown();
 

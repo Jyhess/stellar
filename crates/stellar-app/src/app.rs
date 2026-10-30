@@ -200,7 +200,7 @@ impl eframe::App for StellarApp {
                                 run,
                             )));
                         }
-                        Err(e) => home.message = Some(e.to_string()),
+                        Err(e) => home.message = Some(crate::i18n::tr_msg(&e.to_string())),
                     }
                 }
                 // Paused, to arm the recording before the first step.
@@ -224,7 +224,7 @@ impl eframe::App for StellarApp {
                             None,
                         ));
                     }
-                    Err(e) => home.message = Some(e.to_string()),
+                    Err(e) => home.message = Some(crate::i18n::tr_msg(&e.to_string())),
                 },
                 a @ (HomeAction::Load(_) | HomeAction::LoadContinuing(..)) => match match a {
                     HomeAction::LoadContinuing(data, path, save_name) => {

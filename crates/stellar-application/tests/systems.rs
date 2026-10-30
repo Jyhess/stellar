@@ -48,13 +48,13 @@ fn composite(bodies: BodySet, systems: Vec<SystemSpan>, p: PhysicsParams) -> Mul
         systems,
         ..Default::default()
     };
-    MultiSystem::new(Arc::new(CpuEngineFactory), state, p).expect("moteur composite")
+    MultiSystem::new(Arc::new(CpuEngineFactory), state, p).expect("composite engine")
 }
 
 fn center_of(e: &dyn PhysicsEngine, first: u64, n: u64) -> Vec3 {
     let ids: Vec<u64> = (first..first + n).collect();
     let p = e.positions_of(&ids);
-    p.iter().map(|p| p.expect("corps présent")).sum::<Vec3>() / n as f64
+    p.iter().map(|p| p.expect("body present")).sum::<Vec3>() / n as f64
 }
 
 /// Two compact clusters in orbit: the computation split into two
@@ -149,10 +149,10 @@ fn approaching_subsystems_merge() {
         e.step();
         steps += 1;
     }
-    assert_eq!(e.systems().len(), 1, "pas de réunion");
+    assert_eq!(e.systems().len(), 1, "no merge of subsystems");
     // Merge when 1.5 > 0.6 × distance, i.e. below 2.5: after about 0.6 time
     // units (the next cleanup).
-    assert!((500..900).contains(&steps), "{steps} pas");
+    assert!((500..900).contains(&steps), "{steps} steps");
     assert_eq!(e.body_count(), 70);
     assert!(e.state().systems.is_empty());
 }
@@ -179,6 +179,6 @@ fn escapee_joins_the_main_system() {
     assert_eq!(systems.len(), 2);
     assert_eq!(systems[0].bodies, 51);
     assert_eq!(systems[1].bodies, 20);
-    let p = e.positions_of(&[500])[0].expect("évadé présent");
+    let p = e.positions_of(&[500])[0].expect("escapee present");
     assert!((p - Vec3::new(40.0, 8.02, 0.0)).length() < 0.05, "{p}");
 }

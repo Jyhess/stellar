@@ -1617,7 +1617,7 @@ impl PhysicsEngine for GpuEngine {
         self.queries
             .borrow()
             .cached(ids, self.step)
-            .expect("liste suivie")
+            .expect("tracked list")
     }
 
     fn center_of_mass(&self) -> Option<DVec3> {

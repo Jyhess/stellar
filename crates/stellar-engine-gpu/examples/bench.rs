@@ -1,7 +1,7 @@
 //! CPU / GPU benchmark on a spherical cloud at rest:
 //! `cargo run --release -p stellar-engine-gpu --example bench -- 1000000 10`
 //! (body count, step count; add `gpu` or `cpu` to test only one engine, and
-//! `disque` for a rotating disc, like `STELLAR_AUTODISK`).
+//! `disc` for a rotating disc, like `STELLAR_AUTODISK`).
 //!
 //! With `STELLAR_GPU_PROFILE=1`, the time of each GPU kernel is printed.
 use std::time::Instant;
@@ -14,7 +14,7 @@ use stellar_engine_cpu::CpuEngine;
 use stellar_engine_gpu::GpuEngine;
 
 fn run(label: &str, engine: &mut dyn PhysicsEngine, steps: usize, created: f64) {
-    println!("{label} : création (premier calcul des forces) {created:.2} s");
+    println!("{label}: creation (first force computation) {created:.2} s");
     let t = Instant::now();
     let mut merges = 0;
     for _ in 0..steps {
@@ -22,7 +22,7 @@ fn run(label: &str, engine: &mut dyn PhysicsEngine, steps: usize, created: f64) 
     }
     let per = t.elapsed().as_secs_f64() / steps as f64;
     println!(
-        "{label} : {:.1} ms par pas ({:.1} pas/s) · {} fusions · {} corps restants",
+        "{label}: {:.1} ms per step ({:.1} steps/s) · {} mergers · {} bodies left",
         per * 1e3,
         1.0 / per,
         merges,
@@ -31,7 +31,7 @@ fn run(label: &str, engine: &mut dyn PhysicsEngine, steps: usize, created: f64) 
     let t = Instant::now();
     let s = engine.state();
     println!(
-        "{label} : relecture complète de l'état : {:.1} ms ({} corps)",
+        "{label}: full state readback: {:.1} ms ({} bodies)",
         t.elapsed().as_secs_f64() * 1e3,
         s.bodies.len()
     );
@@ -49,7 +49,7 @@ fn main() {
         count: n,
         ..Default::default()
     };
-    if args.iter().any(|a| a == "disque") {
+    if args.iter().any(|a| a == "disc") {
         ic.distribution = Distribution::Disk {
             thickness: 0.05,
             profile: DensityProfile::Exponential { scale: 0.3 },
@@ -57,7 +57,7 @@ fn main() {
         ic.velocity = VelocityMode::CircularOrbital { spread: 0.05, factor: 1.0 };
     }
     let params = PhysicsParams::suggested(&ic, 1.0);
-    println!("{n} corps, {steps} pas");
+    println!("{n} bodies, {steps} steps");
     if only != Some("cpu") {
         let t = Instant::now();
         match GpuEngine::new(generate_state(&ic, 1.0), params) {
@@ -67,17 +67,17 @@ fn main() {
                 run("GPU", &mut e, steps, created);
                 let profile = e.profile();
                 if !profile.is_empty() {
-                    println!("Profil GPU (temps par pas, profilage STELLAR_GPU_PROFILE) :");
+                    println!("GPU profile (time per step, STELLAR_GPU_PROFILE profiling):");
                     for (name, ms, count) in profile {
                         println!(
-                            "  {name:<16} {:>8.3} ms  ({} lancements par pas)",
+                            "  {name:<16} {:>8.3} ms  ({} dispatches per step)",
                             ms / (steps + 1) as f64,
                             count as f64 / (steps + 1) as f64
                         );
                     }
                 }
             }
-            Err(e) => println!("GPU indisponible : {e}"),
+            Err(e) => println!("GPU unavailable: {e}"),
         }
     }
     if only != Some("gpu") {

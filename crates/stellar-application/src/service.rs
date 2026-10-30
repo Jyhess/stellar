@@ -504,9 +504,9 @@ mod tests {
     fn simulation_name_from_file_names() {
         assert_eq!(name_from_file("2026-10-28_1M_sph_orb"), "2026-10-28_1M_sph_orb");
         assert_eq!(name_from_file("2026-10-28_1M_sph_orb_2"), "2026-10-28_1M_sph_orb");
-        assert_eq!(name_from_file("galaxie_reprise"), "galaxie");
-        assert_eq!(name_from_file("galaxie_reprise_3"), "galaxie_reprise");
-        assert_eq!(name_from_file("essai_2026"), "essai_2026");
+        assert_eq!(name_from_file("galaxy_reprise"), "galaxy");
+        assert_eq!(name_from_file("galaxy_reprise_3"), "galaxy_reprise");
+        assert_eq!(name_from_file("test_2026"), "test_2026");
     }
 }
 

@@ -42,7 +42,7 @@ pub struct MergeInput {
 /// - the identifier is that of the most massive member (for equal masses,
 ///   the smallest identifier).
 pub fn merge(group: &[MergeInput]) -> MergeInput {
-    assert!(!group.is_empty(), "fusion d'un groupe vide");
+    assert!(!group.is_empty(), "merge of an empty group");
     let mut mass = 0.0;
     let mut mx = Vec3::ZERO;
     let mut mv = Vec3::ZERO;

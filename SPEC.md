@@ -7,7 +7,7 @@ The rules currently in force. This document is the reference when the code and t
 - **Rust + wgpu + egui**, Windows only (native executables `stellar.exe` and `stellar-cli.exe`).
 - Two engines: **GPU** (wgpu compute shaders, single precision; the default when a compatible card is present) and **CPU** (rayon, AVX2/FMA, double precision).
 - Target: **1 million particles and more**. GPU limit: 65,535 × 256 ≈ 16.7 M bodies. Creation limit: engine limit, 80 % of main memory, one billion.
-- Interface in French and English; documentation, code comments, command-line option names and commit messages in English; error messages of the lower layers in French.
+- Interface in French and English; documentation, code comments, command-line option names and commit messages in English; error messages of the lower layers written in French and translated by the interface; developer-facing text (panics, tests, examples, statistics) in English.
 
 ## Architecture
 - **Clean architecture** (domain / use cases / adapters / infrastructure), except inside the engines, which are freely optimized (SoA, SIMD, GPU).
@@ -53,5 +53,5 @@ The rules currently in force. This document is the reference when the code and t
 
 ## Simulation without display
 - From the home screen (monitoring screen, switch to the display) or with `stellar-cli.exe`. Automatic recording; stop at a step count, a simulated time, a real duration, or on demand; on stop, the recording is closed and the final state is saved under the simulation's name.
-- Command line: English option names (`--bodies`, `--load`, `--continue`, `--resume`, `--steps`…), former French names still accepted; `--help` in the interface language; exit code 2 on an unknown argument.
+- Command line: English option names (`--bodies`, `--load`, `--continue`, `--resume`, `--steps`…); `--help` in the interface language; exit code 2 on an unknown argument.
 

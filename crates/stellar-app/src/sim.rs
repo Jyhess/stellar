@@ -21,7 +21,7 @@ use crate::picking::{pick, visible_top_k};
 use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, PointsSource, Uniforms};
 use crate::source::{angular_momentum, weighted_barycenter, Source};
 
-use crate::i18n::tr;
+use crate::i18n::{tr, tr_msg};
 
 /// Initial brightness: additive blending saturates when bodies overlap,
 /// hence an attenuation with their number (1 for a million).
@@ -2268,7 +2268,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                 );
             });
             if let Some(e) = st.error.lock().ok().and_then(|g| g.clone()) {
-                ui.colored_label(Color32::LIGHT_RED, e);
+                ui.colored_label(Color32::LIGHT_RED, tr_msg(&e));
             } else if let Some(p) = st.last_path.lock().ok().and_then(|g| g.clone()) {
                 ui.label(
                     RichText::new(tr!("Dernier : {}", p.display()))
@@ -2351,7 +2351,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                 }
             });
         if let Some(e) = error {
-            ui.colored_label(Color32::LIGHT_RED, e);
+            ui.colored_label(Color32::LIGHT_RED, tr_msg(&e));
         }
         let mut pos = c.position;
         let last = c.last();
@@ -2510,7 +2510,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         self.last_stats = Some(now);
         let snap = &self.snapshot;
         eprintln!(
-            "stats : pas {} · {:.1} pas/s · {:.1} ms par pas · {:.0} images/s · {} corps",
+            "stats: step {} · {:.1} steps/s · {:.1} ms per step · {:.0} frames/s · {} bodies",
             snap.step, snap.steps_per_second, snap.last_step_ms, self.fps, snap.body_count
         );
     }

@@ -41,7 +41,7 @@ fn engine(s: SimulationState, p: PhysicsParams) -> Option<GpuEngine> {
     match GpuEngine::new(s, p) {
         Ok(e) => Some(e),
         Err(msg) if msg.contains("carte graphique") => {
-            eprintln!("test GPU ignoré : {msg}");
+            eprintln!("GPU test skipped: {msg}");
             None
         }
         Err(msg) => panic!("{msg}"),
@@ -88,15 +88,15 @@ fn barnes_hut_matches_direct_sum() {
             (a - exact).length() / exact.length()
         })
         .collect();
-    eprintln!("Barnes-Hut GPU : erreur maximale sur le potentiel {worst_phi:.2e}");
-    assert!(worst_phi < 1e-2, "erreur sur le potentiel {worst_phi}");
+    eprintln!("GPU Barnes-Hut: maximum potential error {worst_phi:.2e}");
+    assert!(worst_phi < 1e-2, "potential error {worst_phi}");
     assert_eq!(errors.len(), 3_000);
     errors.sort_by(f64::total_cmp);
     let median = errors[errors.len() / 2];
     let p99 = errors[errors.len() * 99 / 100];
-    eprintln!("Barnes-Hut GPU : erreur médiane {median:.2e}, 99e centile {p99:.2e}");
-    assert!(median < 1e-2, "erreur médiane {median}");
-    assert!(p99 < 5e-2, "erreur 99e centile {p99}");
+    eprintln!("GPU Barnes-Hut: median error {median:.2e}, 99th percentile {p99:.2e}");
+    assert!(median < 1e-2, "median error {median}");
+    assert!(p99 < 5e-2, "99th percentile error {p99}");
 }
 
 #[test]
@@ -134,15 +134,15 @@ fn agrees_with_cpu_engine_over_steps() {
     }
     // Gap due to single precision and to the different trees: well below the
     // mean distance between particles (~1.3).
-    assert!(worst < 0.05, "écart maximal CPU/GPU : {worst}");
+    assert!(worst < 0.05, "maximum CPU/GPU difference: {worst}");
     let (dg, dc) = (gpu.diagnostics(), cpu.diagnostics());
     let rel = (dg.total_energy() - dc.total_energy()).abs() / dc.total_energy().abs();
     eprintln!(
-        "CPU/GPU après 50 pas : écart de position max {worst:.2e}, écart d'énergie {rel:.2e}"
+        "CPU/GPU after 50 steps: max position difference {worst:.2e}, energy difference {rel:.2e}"
     );
     assert!(
         rel < 1e-3,
-        "énergies : GPU {} / CPU {}",
+        "energies: GPU {} / CPU {}",
         dg.total_energy(),
         dc.total_energy()
     );
@@ -170,10 +170,10 @@ fn two_body_orbit_conserves_energy() {
     }
     let e1 = e.diagnostics().total_energy();
     eprintln!(
-        "orbite à deux corps : dérive d'énergie {:.2e}",
+        "two-body orbit: energy drift {:.2e}",
         (e1 - e0) / e0
     );
-    assert!(((e1 - e0) / e0).abs() < 1e-3, "dérive {}", (e1 - e0) / e0);
+    assert!(((e1 - e0) / e0).abs() < 1e-3, "drift {}", (e1 - e0) / e0);
 }
 
 #[test]
@@ -361,7 +361,7 @@ fn tracked_positions_follow_steps_and_merges() {
             let expected = s.bodies.index_of(*id).map(|i| s.bodies.positions[i]);
             match (pos[k], expected) {
                 (Some(a), Some(b)) => assert!((a - b).length() < 1e-5, "{id} : {a} ≠ {b}"),
-                (a, b) => assert_eq!(a, b, "corps {id}"),
+                (a, b) => assert_eq!(a, b, "body {id}"),
             }
         }
         let c = e.center_of_mass().unwrap();
@@ -372,7 +372,7 @@ fn tracked_positions_follow_steps_and_merges() {
             merged = true;
         }
     }
-    assert!(merged, "le test doit provoquer une fusion");
+    assert!(merged, "the test must cause a merger");
 }
 
 /// Shared device: the buffers exposed to the display contain, at the
@@ -389,7 +389,7 @@ fn shared_device_exposes_current_bodies() {
     let Some(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
     else {
-        eprintln!("test GPU ignoré : aucune carte graphique");
+        eprintln!("GPU test skipped: no graphics card");
         return;
     };
     let (device, queue) = pollster::block_on(adapter.request_device(
@@ -401,7 +401,7 @@ fn shared_device_exposes_current_bodies() {
         },
         None,
     ))
-    .expect("ouverture de la carte graphique");
+    .expect("opening the graphics card");
     let shared = SharedDevice {
         adapter,
         device: device.clone(),
@@ -421,21 +421,21 @@ fn shared_device_exposes_current_bodies() {
     let mut e = match GpuEngine::with_device(generate_state(&ic, 1.0), p, &shared) {
         Ok(e) => e,
         Err(msg) => {
-            eprintln!("test GPU ignoré : {msg}");
+            eprintln!("GPU test skipped: {msg}");
             return;
         }
     };
     let view = e
         .live_view()
-        .expect("vue exposée sur carte partagée")
+        .expect("view exposed on a shared device")
         .downcast::<BodiesView>()
-        .expect("vue du moteur GPU");
+        .expect("GPU engine view");
 
     let mut merged = 0;
     for _ in 0..300 {
         merged += e.step().merges.len();
     }
-    assert!(merged > 0, "le test doit provoquer des fusions");
+    assert!(merged > 0, "the test must cause mergers");
 
     let (buffer, count) = view.current();
     assert_eq!(count as usize, e.body_count());
@@ -464,7 +464,7 @@ fn shared_device_exposes_current_bodies() {
         let mass = f(i * stride + BodiesView::MASS_OFFSET as usize);
         assert_eq!(pos, s.bodies.positions[i]);
         assert_eq!(mass, s.bodies.masses[i]);
-        assert!(mass > 0.0, "corps mort dans l'état publié");
+        assert!(mass > 0.0, "dead body in the published state");
     }
 
     // Without a shared device: no view.
@@ -518,7 +518,7 @@ fn cleanup_keeps_bound_ejected_cluster() {
     let r = e.step();
     assert_eq!(r.removed, vec![200]);
     assert_eq!(e.body_count(), 70);
-    let clusters = r.clusters.expect("amas décrits au nettoyage");
+    let clusters = r.clusters.expect("clusters described at clean-up");
     assert_eq!(clusters.len(), 1);
     assert_eq!(clusters[0].bodies, 20);
     assert!((clusters[0].mass - 20.0).abs() < 1e-4);
@@ -587,7 +587,7 @@ fn external_field_and_insertion_match_cpu() {
     assert!((mg.center - mc.center).length() < 1e-2, "{} ≠ {}", mg.center, mc.center);
     let ids = [900, 901, 17];
     for (a, c) in gpu.positions_of(&ids).iter().zip(cpu.positions_of(&ids)) {
-        let (a, c) = (a.expect("présent"), c.expect("présent"));
+        let (a, c) = (a.expect("present"), c.expect("present"));
         assert!((a - c).length() < 5e-2, "{a} ≠ {c}");
     }
 }
@@ -607,7 +607,7 @@ fn composite_split_on_gpu() {
         ..state(ejection_scene(20))
     };
     let mut e = MultiSystem::new(std::sync::Arc::new(GpuEngineFactory::new()), s, p)
-        .expect("moteur composite");
+        .expect("composite engine");
     let r = e.step();
     assert_eq!(r.removed, vec![200]);
     let systems = e.systems();

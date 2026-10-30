@@ -58,43 +58,7 @@ Dans tous les cas :
   --time T           s'arrêter après un temps simulé T (de plus, en reprise)
   --duration M       s'arrêter après M minutes de calcul
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
-sauvegardé (dossiers « {} » et « {} »).
-Les anciens noms français des options (--corps, --pas…) restent acceptés.", SAVES_DIR, RECORDINGS_DIR)
-}
-
-/// Former French names of the options and values, still accepted.
-const ALIASES: [(&str, &str); 22] = [
-    ("--corps", "--bodies"),
-    ("--rayon", "--radius"),
-    ("--graine", "--seed"),
-    ("--disque", "--disc"),
-    ("--vitesse", "--velocity"),
-    ("--dispersion", "--spread"),
-    ("--facteur", "--factor"),
-    ("--moteur", "--engine"),
-    ("--charger", "--load"),
-    ("--poursuivre", "--continue"),
-    ("--reprendre", "--resume"),
-    ("--nom", "--name"),
-    ("--intervalle", "--interval"),
-    ("--poussiere", "--dust"),
-    ("--pas", "--steps"),
-    ("--temps", "--time"),
-    ("--duree", "--duration"),
-    ("--aide", "--help"),
-    ("-h", "--help"),
-    // Values.
-    ("repos", "rest"),
-    ("alea", "random"),
-    ("toutes", "all"),
-];
-
-/// English name of an option or value (unchanged if it has no alias).
-fn canonical(a: &str) -> &str {
-    ALIASES
-        .iter()
-        .find(|(fr, _)| *fr == a)
-        .map_or(a, |&(_, en)| en)
+sauvegardé (dossiers « {} » et « {} »).", SAVES_DIR, RECORDINGS_DIR)
 }
 
 /// Starting point of the simulation.
@@ -122,7 +86,7 @@ struct Options {
 /// Parses the command line (`Err("")`: help requested; `Err(message)`:
 /// error).
 fn parse(args: &[String]) -> Result<Options, String> {
-    if args.iter().any(|a| canonical(a) == "--help") {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
         return Err(String::new());
     }
     let mut o = Options {
@@ -157,16 +121,14 @@ fn parse(args: &[String]) -> Result<Options, String> {
     }
     while let Some(a) = it.next() {
         let new_option = matches!(
-            canonical(a),
+            a.as_str(),
             "--bodies" | "--radius" | "--seed" | "--disc" | "--velocity" | "--spread"
                 | "--factor" | "--vmin" | "--vmax" | "--engine"
         );
         if new_option {
             o.new_options.push(a.clone());
         }
-        match canonical(a) {
-            // Former form (`stellar.exe --sans-affichage`): no effect.
-            "--sans-affichage" => {}
+        match a.as_str() {
             "--bodies" => o.initial.count = num(&value(&mut it, a)?, a)?,
             "--radius" => o.initial.radius = num(&value(&mut it, a)?, a)?,
             "--seed" => o.initial.seed = num(&value(&mut it, a)?, a)?,
@@ -189,7 +151,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--interval" => o.record.interval = num::<u32>(&value(&mut it, a)?, a)?.max(1),
             "--dust" => {
                 let v = value(&mut it, a)?;
-                o.record.dust_budget = if canonical(&v) == "all" { None } else { Some(num(&v, a)?) };
+                o.record.dust_budget = if v == "all" { None } else { Some(num(&v, a)?) };
             }
             "--steps" => o.target = RunTarget::Steps(num(&value(&mut it, a)?, a)?),
             "--time" => o.target = RunTarget::SimTime(num(&value(&mut it, a)?, a)?),
@@ -214,7 +176,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             return Err(tr!("{} ne s'applique qu'à une nouvelle simulation", opt));
         }
     }
-    o.initial.velocity = match canonical(&velocity) {
+    o.initial.velocity = match velocity.as_str() {
         "rest" => VelocityMode::Rest,
         "random" => VelocityMode::Random { min: vmin, max: vmax },
         "circ" => VelocityMode::CircularFixed { min: vmin, max: vmax },
@@ -419,7 +381,7 @@ mod tests {
     #[test]
     fn parses_new_simulation_options() {
         let o = parse(&args(
-            "--bodies 2000 --disc --velocity rest --steps 500 --dust all --name essai",
+            "--bodies 2000 --disc --velocity rest --steps 500 --dust all --name test",
         ))
         .unwrap();
         assert_eq!(o.start, Start::New);
@@ -428,34 +390,13 @@ mod tests {
         assert_eq!(o.initial.velocity, VelocityMode::Rest);
         assert_eq!(o.target, RunTarget::Steps(500));
         assert_eq!(o.record.dust_budget, None);
-        assert_eq!(o.name.as_deref(), Some("essai"));
-        let o = parse(&args("--sans-affichage --duration 1,5 --spread 0,1 --factor 0,8")).unwrap();
+        assert_eq!(o.name.as_deref(), Some("test"));
+        let o = parse(&args("--duration 1,5 --spread 0,1 --factor 0,8")).unwrap();
         assert_eq!(o.target, RunTarget::WallTime(Duration::from_secs(90)));
         assert_eq!(
             o.initial.velocity,
             VelocityMode::CircularOrbital { spread: 0.1, factor: 0.8 }
         );
-    }
-
-    #[test]
-    fn accepts_former_french_names() {
-        let o = parse(&args(
-            "--corps 2000 --disque --vitesse repos --pas 500 --poussiere toutes --nom essai",
-        ))
-        .unwrap();
-        assert_eq!(o.initial.count, 2000);
-        assert!(matches!(o.initial.distribution, Distribution::Disk { .. }));
-        assert_eq!(o.initial.velocity, VelocityMode::Rest);
-        assert_eq!(o.target, RunTarget::Steps(500));
-        assert_eq!(o.record.dust_budget, None);
-        let o = parse(&args("--vitesse alea --vmin 1 --vmax 2 --duree 2")).unwrap();
-        assert_eq!(o.initial.velocity, VelocityMode::Random { min: 1.0, max: 2.0 });
-        let o = parse(&args("--charger a.stellar --poursuivre r.stellarec")).unwrap();
-        assert_eq!(o.start, Start::Save("a.stellar".into(), Some("r.stellarec".into())));
-        assert_eq!(parse(&args("--aide")).err().as_deref(), Some(""));
-        // The option is quoted as it was written.
-        let e = parse(&args("--charger a --corps 10")).unwrap_err();
-        assert!(e.contains("--corps"), "{e}");
     }
 
     #[test]
@@ -479,11 +420,13 @@ mod tests {
     fn help_and_unknown_arguments() {
         assert_eq!(parse(&args("--help")).err().as_deref(), Some(""));
         assert_eq!(parse(&args("--steps 10 -h")).err().as_deref(), Some(""));
-        let e = parse(&args("--bidule")).unwrap_err();
-        assert!(e.contains("--bidule"), "{e}");
-        let e = parse(&args("--steps 10 fichier.txt")).unwrap_err();
-        assert!(e.contains("fichier.txt"), "{e}");
+        let e = parse(&args("--bogus")).unwrap_err();
+        assert!(e.contains("--bogus"), "{e}");
+        let e = parse(&args("--steps 10 file.txt")).unwrap_err();
+        assert!(e.contains("file.txt"), "{e}");
         assert!(parse(&args("--bodies")).is_err());
         assert!(parse(&args("--steps 10")).is_ok());
+        // The former French names are refused.
+        assert!(parse(&args("--corps 10")).is_err());
     }
 }

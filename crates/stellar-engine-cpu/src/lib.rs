@@ -94,7 +94,7 @@ impl CpuEngine {
                 .num_threads(threads)
                 .thread_name(|i| format!("stellar-cpu-{i}"))
                 .build()
-                .expect("impossible de créer le pool de calcul"),
+                .expect("cannot create the thread pool"),
         );
         let BodySet {
             ids,

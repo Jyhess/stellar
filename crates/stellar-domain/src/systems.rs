@@ -141,10 +141,10 @@ pub struct SystemsView {
 
 impl SystemsView {
     pub fn parts(&self) -> Arc<Vec<ViewPart>> {
-        Arc::clone(&self.parts.lock().expect("verrou empoisonné"))
+        Arc::clone(&self.parts.lock().expect("poisoned lock"))
     }
 
     pub fn set(&self, parts: Vec<ViewPart>) {
-        *self.parts.lock().expect("verrou empoisonné") = Arc::new(parts);
+        *self.parts.lock().expect("poisoned lock") = Arc::new(parts);
     }
 }

@@ -225,11 +225,11 @@ impl Loader {
                     let mut batch = vec![first];
                     batch.extend(rx.try_iter());
                     for &i in batch.iter().rev() {
-                        if c.lock().expect("verrou").frames.contains_key(&i) {
+                        if c.lock().expect("lock").frames.contains_key(&i) {
                             continue;
                         }
                         let result = reader.read_frame(i);
-                        let mut g = c.lock().expect("verrou");
+                        let mut g = c.lock().expect("lock");
                         g.pending.remove(&i);
                         match result {
                             Ok(f) => {
@@ -241,7 +241,7 @@ impl Loader {
                                         .frames
                                         .keys()
                                         .max_by_key(|&&k| k.abs_diff(focus))
-                                        .expect("cache non vide");
+                                        .expect("cache not empty");
                                     g.frames.remove(&far);
                                 }
                             }
@@ -250,7 +250,7 @@ impl Loader {
                     }
                 }
             })
-            .expect("impossible de lancer le thread de relecture");
+            .expect("cannot start the replay thread");
         Self {
             cache,
             tx: Some(tx),
@@ -260,7 +260,7 @@ impl Loader {
 
     /// Returns the snapshot if it is ready; otherwise requests it.
     fn get(&self, i: usize) -> Option<Arc<Keyframe>> {
-        let mut g = self.cache.lock().expect("verrou");
+        let mut g = self.cache.lock().expect("lock");
         if let Some(f) = g.frames.get(&i) {
             return Some(Arc::clone(f));
         }
@@ -277,11 +277,11 @@ impl Loader {
     }
 
     fn set_focus(&self, i: usize) {
-        self.cache.lock().expect("verrou").focus = i;
+        self.cache.lock().expect("lock").focus = i;
     }
 
     fn error(&self) -> Option<String> {
-        self.cache.lock().expect("verrou").error.clone()
+        self.cache.lock().expect("lock").error.clone()
     }
 }
 
@@ -459,7 +459,7 @@ impl ReplayPlayer {
         if self.shown == Some(self.clock.position) {
             return false;
         }
-        let p = self.pair.as_ref().expect("paire prête");
+        let p = self.pair.as_ref().expect("pair ready");
         if p.a == p.b {
             self.state.bodies = p.fa.bodies.clone();
         } else {
@@ -534,7 +534,7 @@ mod tests {
             let t = k as f64 / 10.0;
             interpolate(&a, &b, &targets, t, &mut out);
             let err = (out.positions[0] - pos(0.5 * t)).length();
-            assert!(err < 1e-3, "erreur {err} à t = {t}");
+            assert!(err < 1e-3, "error {err} at t = {t}");
         }
         // Exact ends.
         interpolate(&a, &b, &targets, 1.0, &mut out);
@@ -593,7 +593,7 @@ mod tests {
             self.frames
                 .get(index)
                 .cloned()
-                .ok_or_else(|| RepositoryError::Format("hors limites".into()))
+                .ok_or_else(|| RepositoryError::Format("out of range".into()))
         }
     }
 

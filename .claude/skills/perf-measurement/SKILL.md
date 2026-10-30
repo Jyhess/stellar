@@ -11,7 +11,7 @@ Always measure in `--release`, before and after the change, on the same scene an
 
 | Need | Command |
 |---|---|
-| CPU vs GPU time per step | `cargo run --release -p stellar-engine-gpu --example bench -- <bodies> <steps> [gpu\|cpu] [disque]` |
+| CPU vs GPU time per step | `cargo run --release -p stellar-engine-gpu --example bench -- <bodies> <steps> [gpu\|cpu] [disc]` |
 | Time per GPU kernel | `$env:STELLAR_GPU_PROFILE=1` before the bench (engine on its own device only) |
 | CPU engine with its evolution | `cargo run --release -p stellar-engine-cpu --example timing -- 1000000 5` |
 | CPU step, statistically | `cargo bench -p stellar-engine-cpu` (criterion, 10k / 100k / 1M) |

@@ -15,7 +15,8 @@ Project skills (`.claude/skills/`):
 - Do not try to prolong the discussion; ask a question only if it helps answer the request. Do ask every clarifying question **before** implementing a feature.
 - **Documentation** (`*.md`, skills) is in **English**.
 - **Code comments** (including doc comments and WGSL shaders), **CLI option names** and **commit messages** are in **English**.
-- **Error messages of the lower layers** (domain, application, engines, persistence) stay in **French**; the CLI help and messages are translated like the interface.
+- **Messages of the lower layers** (domain, application, engines, persistence) are written in **French** and translated by the interface: `MESSAGES` table of `i18n.rs`, `tr_msg` (also applied to every `tr!` argument and to errors displayed directly). A test fails if a French literal of those crates is missing from the table. The CLI help and messages are translated like the interface.
+- **Developer-facing text** (`expect` / `panic!` messages, test messages and data, examples, `STELLAR_STATS` output) is in **English**.
 - The **interface** has French source strings translated into English (`stellar-app/src/i18n.rs`): every displayed text goes through `tr("…")` or `tr!("… {} …", x)` and gets its entry in the `EN` table. Numbers are formatted by language (`format.rs`).
 - Update `README.md` and `SPEC.md` with every feature.
 

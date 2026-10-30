@@ -292,8 +292,8 @@ impl Gpu {
             .device
             .poll(wgpu::Maintain::WaitForSubmissionIndex(index));
         rx.recv()
-            .expect("relecture GPU interrompue")
-            .expect("relecture GPU impossible");
+            .expect("GPU readback interrupted")
+            .expect("GPU readback failed");
         f(&slice.get_mapped_range());
         buffer.unmap();
     }
@@ -523,8 +523,8 @@ impl Gpu {
             .device
             .poll(wgpu::Maintain::WaitForSubmissionIndex(index));
         rx.recv()
-            .expect("relecture GPU interrompue")
-            .expect("relecture GPU impossible");
+            .expect("GPU readback interrupted")
+            .expect("GPU readback failed");
         let r = f(&slice.get_mapped_range()[..size as usize]);
         staging.unmap();
         r

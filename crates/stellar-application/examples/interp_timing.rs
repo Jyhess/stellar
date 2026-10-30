@@ -34,12 +34,12 @@ fn main() {
     let (a, b) = (mk(0.0), mk(1.0));
     let t = Instant::now();
     let targets = build_targets(&a, &b);
-    println!("appariement (une fois par paire) : {:?}", t.elapsed());
+    println!("pairing (once per pair): {:?}", t.elapsed());
     let mut out = BodySet::default();
     interpolate(&a, &b, &targets, 0.5, &mut out);
     let t = Instant::now();
     for k in 0..20 {
         interpolate(&a, &b, &targets, k as f64 / 20.0, &mut out);
     }
-    println!("interpolation : {:?} par image", t.elapsed() / 20);
+    println!("interpolation: {:?} per frame", t.elapsed() / 20);
 }

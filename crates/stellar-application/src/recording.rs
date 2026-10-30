@@ -241,7 +241,7 @@ impl Recorder {
         dust_budget: Option<u64>,
     ) -> Self {
         let (tx, rx) = mpsc::sync_channel::<Msg>(QUEUE);
-        *status.current_path.lock().expect("verrou") = Some(writer.path());
+        *status.current_path.lock().expect("lock") = Some(writer.path());
         let st = Arc::clone(&status);
         let thread = std::thread::Builder::new()
             .name("stellar-recorder".into())
@@ -258,14 +258,14 @@ impl Recorder {
                             st.bytes.fetch_add(bytes, Ordering::Relaxed);
                         }
                         Err(e) => {
-                            *st.error.lock().expect("verrou") = Some(e.to_string());
+                            *st.error.lock().expect("lock") = Some(e.to_string());
                             return Err(e);
                         }
                     }
                 }
                 writer.finish()
             })
-            .expect("impossible de lancer le thread d'enregistrement");
+            .expect("cannot start the recording thread");
         status.active.store(true, Ordering::Release);
         Self {
             tx: Some(tx),
@@ -302,10 +302,10 @@ impl Recorder {
             None => Err(RepositoryError::Io("enregistrement déjà clos".into())),
         };
         self.status.active.store(false, Ordering::Release);
-        *self.status.current_path.lock().expect("verrou") = None;
+        *self.status.current_path.lock().expect("lock") = None;
         match &result {
-            Ok(p) => *self.status.last_path.lock().expect("verrou") = Some(p.clone()),
-            Err(e) => *self.status.error.lock().expect("verrou") = Some(e.to_string()),
+            Ok(p) => *self.status.last_path.lock().expect("lock") = Some(p.clone()),
+            Err(e) => *self.status.error.lock().expect("lock") = Some(e.to_string()),
         }
         result
     }

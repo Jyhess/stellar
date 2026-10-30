@@ -801,7 +801,7 @@ mod tests {
     fn write_list_and_read_back() {
         let dir = temp_dir("rw");
         let repo = FileRecordingRepository::new(&dir);
-        let mut w = repo.create("essai", &header()).unwrap();
+        let mut w = repo.create("test", &header()).unwrap();
         for k in 0..4 {
             w.write_frame(&frame(k)).unwrap();
         }
@@ -827,7 +827,7 @@ mod tests {
         // Version 1 file: old header, snapshots in the old layout, no index
         // (rebuilt on opening).
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("ancien.stellarec");
+        let path = dir.join("old.stellarec");
         let mut frames = Vec::new();
         for k in 0..3 {
             let f = frame(k);
@@ -904,7 +904,7 @@ mod tests {
     fn resume_truncates_and_appends() {
         let dir = temp_dir("resume");
         let repo = FileRecordingRepository::new(&dir);
-        let mut w = repo.create("suite", &header()).unwrap();
+        let mut w = repo.create("next", &header()).unwrap();
         for k in 0..5 {
             w.write_frame(&frame(k)).unwrap(); // steps 0, 10, 20, 30, 40
         }

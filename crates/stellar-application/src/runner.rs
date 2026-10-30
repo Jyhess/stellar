@@ -251,7 +251,7 @@ impl SimulationHandle {
                         s.phase = Phase::Failed;
                         s.error = Some(message);
                         s.sequence = 1;
-                        *worker_shared.latest.lock().expect("verrou empoisonné") = Arc::new(s);
+                        *worker_shared.latest.lock().expect("poisoned lock") = Arc::new(s);
                         worker_shared.sequence.store(1, Ordering::Release);
                         // Wait for the stop requested by the interface.
                         while let Ok(cmd) = rx.recv() {
@@ -266,7 +266,7 @@ impl SimulationHandle {
                     saved_energy.or_else(|| Some(engine.diagnostics().total_energy()));
                 let live_view = engine.live_view();
                 let direct_view = live_view.is_some();
-                *worker_shared.live_view.lock().expect("verrou empoisonné") = live_view;
+                *worker_shared.live_view.lock().expect("poisoned lock") = live_view;
                 Worker {
                     engine,
                     rx,
@@ -296,7 +296,7 @@ impl SimulationHandle {
                 }
                 .run();
             })
-            .expect("impossible de lancer le thread de simulation");
+            .expect("cannot start the simulation thread");
         Self {
             config,
             name: Mutex::new("simulation".to_owned()),
@@ -307,11 +307,11 @@ impl SimulationHandle {
     }
 
     pub fn name(&self) -> String {
-        self.name.lock().expect("verrou empoisonné").clone()
+        self.name.lock().expect("poisoned lock").clone()
     }
 
     pub fn set_name(&self, name: &str) {
-        *self.name.lock().expect("verrou empoisonné") = name.to_owned();
+        *self.name.lock().expect("poisoned lock") = name.to_owned();
     }
 
     pub fn config(&self) -> &SimulationConfig {
@@ -320,7 +320,7 @@ impl SimulationHandle {
 
     /// Last published snapshot (a read that never blocks the computation).
     pub fn latest(&self) -> Arc<Snapshot> {
-        Arc::clone(&self.shared.latest.lock().expect("verrou empoisonné"))
+        Arc::clone(&self.shared.latest.lock().expect("poisoned lock"))
     }
 
     /// Direct access of the engine for display (`None` until the engine is
@@ -329,7 +329,7 @@ impl SimulationHandle {
         self.shared
             .live_view
             .lock()
-            .expect("verrou empoisonné")
+            .expect("poisoned lock")
             .clone()
     }
 
@@ -430,13 +430,13 @@ impl SimulationHandle {
 
     /// Read access to the traces (short lock: copy what is needed).
     pub fn traces(&self) -> MutexGuard<'_, Option<TraceSet>> {
-        self.shared.traces.lock().expect("verrou empoisonné")
+        self.shared.traces.lock().expect("poisoned lock")
     }
 
     /// Current identifier of a body, following the chain of mergers. `None` if
     /// the body was removed (ejection).
     pub fn resolve(&self, id: BodyId) -> Option<BodyId> {
-        let fates = self.shared.fates.lock().expect("verrou empoisonné");
+        let fates = self.shared.fates.lock().expect("poisoned lock");
         let mut cur = id;
         for _ in 0..1_000 {
             match fates.get(&cur) {
@@ -537,7 +537,7 @@ impl Worker {
         status
             .interval
             .store(interval.max(1) as u64, Ordering::Relaxed);
-        *status.error.lock().expect("verrou empoisonné") = None;
+        *status.error.lock().expect("poisoned lock") = None;
         let recorder = Recorder::start(writer, Arc::clone(status), dust_budget);
         let mut rec = ActiveRecording {
             recorder,
@@ -559,7 +559,7 @@ impl Worker {
         status
             .interval
             .store(link.interval.max(1) as u64, Ordering::Relaxed);
-        *status.error.lock().expect("verrou empoisonné") = None;
+        *status.error.lock().expect("poisoned lock") = None;
         let recorder = Recorder::start(writer, Arc::clone(status), link.dust_budget);
         let mut rec = ActiveRecording {
             recorder,
@@ -677,11 +677,11 @@ impl Worker {
                         if let Some(c) = self.engine.center_of_mass() {
                             set.push_barycenter(self.step, c);
                         }
-                        *self.shared.traces.lock().expect("verrou empoisonné") = Some(set);
+                        *self.shared.traces.lock().expect("poisoned lock") = Some(set);
                         self.shared.tracing.store(true, Ordering::Release);
                     }
                     Command::SetTraceReference(id) => {
-                        let mut guard = self.shared.traces.lock().expect("verrou empoisonné");
+                        let mut guard = self.shared.traces.lock().expect("poisoned lock");
                         if let Some(set) = guard.as_mut() {
                             set.set_reference_kind(id);
                             self.update_cluster(set);
@@ -704,7 +704,7 @@ impl Worker {
                     }
                     Command::StopTraces => {
                         self.shared.tracing.store(false, Ordering::Release);
-                        *self.shared.traces.lock().expect("verrou empoisonné") = None;
+                        *self.shared.traces.lock().expect("poisoned lock") = None;
                     }
                     Command::Shutdown => return,
                 }
@@ -773,7 +773,7 @@ impl Worker {
             0.9 * self.steps_per_second + 0.1 * inst
         };
         if self.shared.tracing.load(Ordering::Acquire) {
-            let mut guard = self.shared.traces.lock().expect("verrou empoisonné");
+            let mut guard = self.shared.traces.lock().expect("poisoned lock");
             if let Some(set) = guard.as_mut() {
                 set.apply_fates(&report.merges, &report.removed);
                 let ids = set.current_ids();
@@ -801,7 +801,7 @@ impl Worker {
             self.recording = Some(rec);
         }
         if !report.merges.is_empty() || !report.removed.is_empty() {
-            let mut fates = self.shared.fates.lock().expect("verrou empoisonné");
+            let mut fates = self.shared.fates.lock().expect("poisoned lock");
             for (absorbed, survivor) in report.merges {
                 fates.insert(absorbed, Fate::MergedInto(survivor));
             }
@@ -834,7 +834,7 @@ impl Worker {
         self.last_full = Some(Instant::now());
         if self.shared.tracing.load(Ordering::Acquire) {
             let shared = Arc::clone(&self.shared);
-            let mut guard = shared.traces.lock().expect("verrou empoisonné");
+            let mut guard = shared.traces.lock().expect("poisoned lock");
             if let Some(set) = guard.as_mut() {
                 self.update_cluster(set);
             }
@@ -895,7 +895,7 @@ impl Worker {
             sequence,
             error: None,
         });
-        *self.shared.latest.lock().expect("verrou empoisonné") = snapshot;
+        *self.shared.latest.lock().expect("poisoned lock") = snapshot;
         self.shared.sequence.store(sequence, Ordering::Release);
         self.last_publish = Some(Instant::now());
     }
@@ -1028,7 +1028,7 @@ mod tests {
         assert!(snap.step >= 50);
         assert_eq!(snap.body_count, 1);
         // Body 1 moves one unit per step; it has absorbed body 2.
-        let p = snap.watched_position(1).expect("corps suivi");
+        let p = snap.watched_position(1).expect("tracked body");
         assert_eq!(p.x, snap.step as f64);
         assert!(snap.center_of_mass.is_some());
         handle.pause();
@@ -1041,7 +1041,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        panic!("pas de copie complète à la pause");
+        panic!("no full copy on pause");
     }
 
     #[derive(Clone, Default)]
@@ -1066,7 +1066,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        panic!("pas {step} jamais atteint");
+        panic!("step {step} never reached");
     }
 
     #[test]
@@ -1092,7 +1092,7 @@ mod tests {
             handle.step_once();
             wait_for(&handle, k);
         }
-        let (link, saved) = handle.suspend_recording().expect("enregistrement actif");
+        let (link, saved) = handle.suspend_recording().expect("active recording");
         assert!(!handle.is_recording());
         let steps: Vec<u64> = mem.0.lock().unwrap().iter().map(|f| f.step).collect();
         assert_eq!(steps, vec![0, 2, 4]);

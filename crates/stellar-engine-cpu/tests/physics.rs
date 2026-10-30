@@ -68,8 +68,8 @@ fn barnes_hut_matches_direct_sum() {
     errors.sort_by(f64::total_cmp);
     let median = errors[errors.len() / 2];
     let p99 = errors[errors.len() * 99 / 100];
-    assert!(median < 5e-3, "erreur médiane {median}");
-    assert!(p99 < 3e-2, "erreur 99e centile {p99}");
+    assert!(median < 5e-3, "median error {median}");
+    assert!(p99 < 3e-2, "99th percentile error {p99}");
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn two_body_orbit_conserves_energy() {
         e.step();
     }
     let e1 = e.diagnostics().total_energy();
-    assert!(((e1 - e0) / e0).abs() < 1e-4, "dérive {}", (e1 - e0) / e0);
+    assert!(((e1 - e0) / e0).abs() < 1e-4, "drift {}", (e1 - e0) / e0);
     let s = e.state();
     assert!(s.bodies.momentum().length() < 1e-12);
 }
@@ -227,7 +227,7 @@ fn collapse_conserves_mass_through_merges() {
         merged += e.step().merges.len();
     }
     let s = e.state();
-    assert!(merged > 0, "aucune fusion observée");
+    assert!(merged > 0, "no merger observed");
     assert_eq!(s.bodies.len() + merged, 2_000);
     assert!((s.bodies.total_mass() - 2_000.0).abs() < 1e-9);
     // Barnes-Hut is not exactly antisymmetric: tolerance relative to the
@@ -289,7 +289,7 @@ fn cleanup_keeps_bound_ejected_cluster() {
     let r = e.step();
     assert_eq!(r.removed, vec![200]);
     assert_eq!(e.body_count(), 70);
-    let clusters = r.clusters.expect("amas décrits au nettoyage");
+    let clusters = r.clusters.expect("clusters described at clean-up");
     assert_eq!(clusters.len(), 1);
     assert_eq!(clusters[0].bodies, 20);
     assert!((clusters[0].mass - 20.0).abs() < 1e-9);

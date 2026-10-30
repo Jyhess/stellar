@@ -8,7 +8,7 @@ use eframe::egui::{self, RichText};
 use stellar_application::{HeadlessRun, RunOutcome, RunTarget, SimulatorService};
 
 use crate::format;
-use crate::i18n::tr;
+use crate::i18n::{tr, tr_msg};
 
 pub enum HeadlessAction {
     None,
@@ -102,7 +102,7 @@ impl HeadlessScreen {
                     let p = run.poll();
                     let target = run.target();
                     if let Some(e) = p.error {
-                        ui.colored_label(egui::Color32::LIGHT_RED, e);
+                        ui.colored_label(egui::Color32::LIGHT_RED, tr_msg(e));
                     }
                     if let Some(f) = p.fraction {
                         let eta = (f > 0.0 && f < 1.0)

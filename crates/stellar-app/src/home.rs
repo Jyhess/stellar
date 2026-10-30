@@ -13,7 +13,7 @@ use stellar_domain::{
 
 use crate::format;
 
-use crate::i18n::tr;
+use crate::i18n::{tr, tr_msg};
 
 /// Recording options chosen at creation.
 #[derive(Clone, Copy)]
@@ -803,8 +803,10 @@ impl HomeScreen {
         };
         let mut text = tr!("Mémoire estimée : ≈ {}", size(self.count as f64 * 420.0 / 1e6));
         if self.engine.starts_with("gpu") {
-            // GPU engine: ≈ 330 bytes of video memory per body.
-            text.push_str(&tr!(" · mémoire vidéo ≈ {}", size(self.count as f64 * 330.0 / 1e6)));
+            // GPU engine, measured with the benchmark from 0.5 to 4 M bodies:
+            // ≈ 300 bytes of video memory per body plus ≈ 130 MB fixed.
+            let video = 130.0 + self.count as f64 * 300.0 / 1e6;
+            text.push_str(&tr!(" · mémoire vidéo ≈ {}", size(video)));
         }
         ui.label(RichText::new(text).weak());
         let gpu = self.engine.starts_with("gpu");
@@ -1028,7 +1030,7 @@ impl HomeScreen {
         });
         ui.add_space(4.0);
         if let Some(e) = &self.saves_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, e);
+            ui.colored_label(egui::Color32::LIGHT_RED, tr_msg(e));
         }
         if self.saves.is_empty() {
             ui.label(RichText::new(tr("Aucune sauvegarde dans le dossier « saves ». Appuyez sur F5 pendant une simulation.")).weak());

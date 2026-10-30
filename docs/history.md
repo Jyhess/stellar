@@ -45,7 +45,7 @@ Decisions in the order they were made; v1 came from the initial question session
 
 ## v1.6 — language and computation without display
 - Interface in French or English (Windows language by default, choice remembered, numbers formatted by language).
-- Simulation without display from the home screen or the console (first `stellar.exe --sans-affichage`, replaced by `stellar-cli.exe` in v1.7; the option is still accepted and ignored).
+- Simulation without display from the home screen or the console (first `stellar.exe --sans-affichage`, replaced by `stellar-cli.exe` in v1.7).
 
 ## v1.7 — command line
 - `stellar-cli.exe`, separate from `stellar.exe` (which forwards arguments to it); `--help`; exit code 2 on an unknown argument.
@@ -61,4 +61,6 @@ Decisions in the order they were made; v1 came from the initial question session
 - Esc menu help: F5 label translated, F10 (quit) added.
 
 ## v1.10 — command line in English
-- English option names (`--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|…`, `--spread`, `--factor`, `--engine`, `--load`, `--continue`, `--resume`, `--name`, `--interval`, `--dust N|all`, `--steps`, `--time`, `--duration`); the former French names and values remain accepted as aliases.
+- English option names (`--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|…`, `--spread`, `--factor`, `--engine`, `--load`, `--continue`, `--resume`, `--name`, `--interval`, `--dust N|all`, `--steps`, `--time`, `--duration`); the former French names are no longer accepted.
+- Code comments in English; error messages of the lower layers translated in the English interface (`MESSAGES`, `tr_msg`, checked by a test); developer-facing text (panics, tests, examples, `STELLAR_STATS`, benchmark with its `disc` argument) in English.
+- Video-memory estimate on the home screen measured: about 300 bytes per body plus 130 MB.
