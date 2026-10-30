@@ -1,13 +1,14 @@
 //! # stellar-application
 //!
-//! Cas d'usage du simulateur. Cette couche orchestre le domaine et déclare
-//! les **ports** (traits) que l'infrastructure implémente :
-//! - [`ports::SimulationRepository`] pour la persistance ;
-//! - [`stellar_domain::EngineFactory`] (via [`registry::EngineRegistry`]) pour
-//!   les moteurs de calcul.
+//! Use cases of the simulator. This layer orchestrates the domain and
+//! declares the **ports** (traits) that the infrastructure implements:
+//! - [`ports::SimulationRepository`] and the recording ports for
+//!   persistence;
+//! - [`stellar_domain::EngineFactory`] (through [`registry::EngineRegistry`])
+//!   for the computation engines.
 //!
-//! Elle ne connaît ni l'interface graphique, ni le format des fichiers, ni
-//! l'implémentation des moteurs.
+//! It knows neither the graphical interface, nor the file format, nor how
+//! the engines are implemented.
 
 pub mod generator;
 pub mod headless;

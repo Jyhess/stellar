@@ -1,14 +1,15 @@
-//! Pilotage d'une simulation dans un thread dédié, découplé de l'affichage.
+//! Driving a simulation on a dedicated thread, decoupled from the display.
 //!
-//! Le thread de simulation enchaîne les pas aussi vite que possible (ou à la
-//! cadence maximale demandée) et publie régulièrement un [`Snapshot`]
-//! immuable, que l'interface lit sans jamais bloquer le calcul.
+//! The simulation thread chains steps as fast as possible (or at the
+//! requested maximum rate) and regularly publishes an immutable
+//! [`Snapshot`], which the interface reads without ever blocking the
+//! computation.
 //!
-//! Quand le moteur offre un accès direct à ses données pour l'affichage
-//! ([`PhysicsEngine::live_view`]), la copie complète de l'état, coûteuse,
-//! n'est faite que toutes les une à deux secondes ; entre-temps, les
-//! publications légères ne portent que les grandeurs globales et les
-//! positions des corps suivis ([`SimulationHandle::set_watched`]).
+//! When the engine offers direct access to its data for display
+//! ([`PhysicsEngine::live_view`]), the expensive full copy of the state is
+//! made only every one to two seconds; in between, light publications
+//! carry only the global quantities and the positions of the watched bodies
+//! ([`SimulationHandle::set_watched`]).
 
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
@@ -27,69 +28,69 @@ use stellar_domain::{
     Vec3,
 };
 
-/// Nombre de corps listés dans le classement publié.
+/// Number of bodies listed in the published ranking.
 pub const TOP_COUNT: usize = 10;
 
-/// Intervalle minimal entre deux publications (≈ 60 Hz).
+/// Minimum interval between two publications (≈ 60 Hz).
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(16);
 
-/// Intervalle entre deux copies complètes de l'état quand l'affichage lit
-/// directement les données du moteur : une seconde par tranche de trois
-/// millions de corps, entre une et deux secondes.
+/// Interval between two full copies of the state when the display reads
+/// the engine's data directly: one second per three million bodies, between
+/// one and two seconds.
 fn full_state_interval(bodies: usize) -> Duration {
     Duration::from_secs_f64((bodies as f64 / 3e6).clamp(1.0, 2.0))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// Génération de l'état initial / construction du moteur en cours.
+    /// Generating the initial state / building the engine.
     Initialising,
     Ready,
-    /// Le moteur n'a pas pu démarrer (message dans [`Snapshot::error`]).
+    /// The engine could not start (message in [`Snapshot::error`]).
     Failed,
 }
 
-/// Instantané publié par le thread de simulation.
+/// Snapshot published by the simulation thread.
 ///
-/// `state` (et les grandeurs qui en dérivent : `top`, `total_mass`) peut
-/// dater de quelques pas quand le moteur est affiché directement ; `step`,
-/// `time`, `body_count`, `diagnostics`, `center_of_mass` et `watched` sont
-/// toujours à jour.
+/// `state` (and the quantities derived from it: `top`, `total_mass`) may be
+/// a few steps old when the engine is displayed directly; `step`, `time`,
+/// `body_count`, `diagnostics`, `center_of_mass` and `watched` are always
+/// up to date.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub phase: Phase,
-    /// Dernière copie complète de l'état (partagée entre publications).
+    /// Last full copy of the state (shared between publications).
     pub state: Arc<SimulationState>,
-    /// Pas courant.
+    /// Current step.
     pub step: u64,
-    /// Temps simulé courant.
+    /// Current simulated time.
     pub time: f64,
-    /// Nombre de corps courant.
+    /// Current body count.
     pub body_count: usize,
     pub diagnostics: Diagnostics,
-    /// Centre de masse courant, si le moteur le fournit à moindre coût.
+    /// Current center of mass, if the engine provides it cheaply.
     pub center_of_mass: Option<Vec3>,
-    /// Positions courantes des corps suivis (absents : éliminés ou fusionnés).
+    /// Current positions of the watched bodies (missing: removed or merged).
     pub watched: Vec<(BodyId, Vec3)>,
-    /// Classement des corps les plus massifs : (id, masse).
+    /// Ranking of the most massive bodies: (id, mass).
     pub top: Vec<(BodyId, f64)>,
-    /// Masse totale des corps présents dans la simulation.
+    /// Total mass of the bodies present in the simulation.
     pub total_mass: f64,
-    /// Amas éjectés conservés, décrits au dernier nettoyage.
+    /// Kept ejected clusters, described at the last cleanup.
     pub clusters: Arc<Vec<EjectedCluster>>,
-    /// Pas de ce nettoyage (`None` : aucun depuis le démarrage).
+    /// Step of that cleanup (`None`: none since the start).
     pub clusters_step: Option<u64>,
-    /// Sous-systèmes calculés séparément (vide ou un seul : simulation
-    /// d'un seul tenant).
+    /// Subsystems computed separately (empty or a single one: a simulation in
+    /// one piece).
     pub systems: Vec<SystemSummary>,
-    /// Cadence de calcul (moyenne glissante).
+    /// Computation rate (moving average).
     pub steps_per_second: f64,
-    /// Durée du dernier pas, en millisecondes.
+    /// Duration of the last step, in milliseconds.
     pub last_step_ms: f64,
     pub running: bool,
-    /// Numéro de publication, strictement croissant.
+    /// Publication number, strictly increasing.
     pub sequence: u64,
-    /// Message d'erreur si le moteur n'a pas pu démarrer.
+    /// Error message if the engine could not start.
     pub error: Option<String>,
 }
 
@@ -117,13 +118,13 @@ impl Snapshot {
         }
     }
 
-    /// Masse sortie de la simulation (corps éjectés puis éliminés).
+    /// Mass that left the simulation (bodies ejected, then removed).
     pub fn ejected_mass(&self) -> Option<f64> {
         let m0 = self.state.initial_mass?;
         (self.phase == Phase::Ready).then(|| (m0 - self.total_mass).max(0.0))
     }
 
-    /// Part de la masse présente portée par un corps de masse `m`.
+    /// Share of the present mass carried by a body of mass `m`.
     pub fn mass_fraction(&self, m: f64) -> f64 {
         if self.total_mass > 0.0 {
             m / self.total_mass
@@ -132,13 +133,13 @@ impl Snapshot {
         }
     }
 
-    /// Position courante d'un corps suivi ([`SimulationHandle::set_watched`]).
+    /// Current position of a watched body ([`SimulationHandle::set_watched`]).
     pub fn watched_position(&self, id: BodyId) -> Option<Vec3> {
         self.watched.iter().find(|(w, _)| *w == id).map(|(_, p)| *p)
     }
 
-    /// Position courante d'un corps : suivie si possible, sinon tirée de la
-    /// dernière copie complète de l'état (recherche linéaire).
+    /// Current position of a body: watched if possible, otherwise taken from
+    /// the last full copy of the state (linear search).
     pub fn position_of(&self, id: BodyId) -> Option<Vec3> {
         self.watched_position(id).or_else(|| {
             let b = &self.state.bodies;
@@ -146,7 +147,7 @@ impl Snapshot {
         })
     }
 
-    /// Variation relative de l'énergie totale depuis l'origine.
+    /// Relative change of the total energy since the start.
     pub fn energy_drift(&self) -> Option<f64> {
         let e0 = self.state.initial_energy?;
         (e0 != 0.0).then(|| (self.diagnostics.total_energy() - e0) / e0.abs())
@@ -169,8 +170,8 @@ enum Command {
         dust_budget: Option<u64>,
     },
     StopRecording,
-    /// Clôt l'enregistrement et renvoie de quoi le poursuivre, avec l'état
-    /// exact de la simulation au même instant.
+    /// Closes the recording and returns what is needed to continue it, with
+    /// the exact state of the simulation at the same moment.
     SuspendRecording(Sender<Option<(RecordingLink, SimulationState)>>),
     ResumeRecording {
         writer: Box<dyn RecordingWriter>,
@@ -179,7 +180,7 @@ enum Command {
     Shutdown,
 }
 
-/// Devenir d'un corps disparu.
+/// Fate of a body that disappeared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fate {
     MergedInto(BodyId),
@@ -193,15 +194,15 @@ struct Shared {
     traces: Mutex<Option<TraceSet>>,
     tracing: AtomicBool,
     recording: Arc<RecordingStatus>,
-    /// Accès direct du moteur pour l'affichage, une fois le moteur créé.
+    /// Direct access of the engine for display, once the engine is created.
     live_view: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
 }
 
-/// Poignée de pilotage d'une simulation en cours. L'arrêter (ou la détruire)
-/// termine proprement le thread de calcul.
+/// Handle driving a running simulation. Stopping (or dropping) it ends the
+/// computation thread cleanly.
 pub struct SimulationHandle {
     config: SimulationConfig,
-    /// Nom de la simulation : nom des sauvegardes (F5) et des enregistrements.
+    /// Name of the simulation: name of its saves (F5) and recordings.
     name: Mutex<String>,
     tx: Sender<Command>,
     shared: Arc<Shared>,
@@ -209,8 +210,8 @@ pub struct SimulationHandle {
 }
 
 impl SimulationHandle {
-    /// Démarre une simulation. `source` produit l'état initial ; il est
-    /// appelé dans le thread de simulation pour ne pas figer l'interface.
+    /// Starts a simulation. `source` produces the initial state; it is called
+    /// on the simulation thread so as not to freeze the interface.
     pub fn start<F>(
         config: SimulationConfig,
         factory: Arc<dyn EngineFactory>,
@@ -238,7 +239,7 @@ impl SimulationHandle {
             .spawn(move || {
                 let state = source();
                 let saved_energy = state.initial_energy;
-                // Sauvegardes antérieures : masse initiale déduite des conditions initiales.
+                // Older saves: initial mass derived from the initial conditions.
                 let initial_mass = state.initial_mass.or(Some(initial_count as f64));
                 let step = state.step;
                 let engine = match crate::MultiSystem::new(factory, state, params)
@@ -252,7 +253,7 @@ impl SimulationHandle {
                         s.sequence = 1;
                         *worker_shared.latest.lock().expect("verrou empoisonné") = Arc::new(s);
                         worker_shared.sequence.store(1, Ordering::Release);
-                        // Attente de l'arrêt demandé par l'interface.
+                        // Wait for the stop requested by the interface.
                         while let Ok(cmd) = rx.recv() {
                             if matches!(cmd, Command::Shutdown) {
                                 break;
@@ -317,13 +318,13 @@ impl SimulationHandle {
         &self.config
     }
 
-    /// Dernier instantané publié (lecture non bloquante pour le calcul).
+    /// Last published snapshot (a read that never blocks the computation).
     pub fn latest(&self) -> Arc<Snapshot> {
         Arc::clone(&self.shared.latest.lock().expect("verrou empoisonné"))
     }
 
-    /// Accès direct du moteur pour l'affichage (`None` tant que le moteur
-    /// n'est pas créé, ou s'il n'en offre pas). Voir [`PhysicsEngine::live_view`].
+    /// Direct access of the engine for display (`None` until the engine is
+    /// created, or if it offers none). See [`PhysicsEngine::live_view`].
     pub fn live_view(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         self.shared
             .live_view
@@ -332,13 +333,13 @@ impl SimulationHandle {
             .clone()
     }
 
-    /// Corps dont la position est publiée à chaque instantané
-    /// ([`Snapshot::watched`]), typiquement le corps sélectionné.
+    /// Bodies whose position is published in every snapshot
+    /// ([`Snapshot::watched`]), typically the selected body.
     pub fn set_watched(&self, ids: Vec<BodyId>) {
         let _ = self.tx.send(Command::SetWatched(ids));
     }
 
-    /// Numéro du dernier instantané publié.
+    /// Number of the last published snapshot.
     pub fn sequence(&self) -> u64 {
         self.shared.sequence.load(Ordering::Acquire)
     }
@@ -351,29 +352,29 @@ impl SimulationHandle {
         let _ = self.tx.send(Command::Resume);
     }
 
-    /// Effectue un unique pas (utile en pause).
+    /// Performs a single step (useful while paused).
     pub fn step_once(&self) {
         let _ = self.tx.send(Command::StepOnce);
     }
 
-    /// Limite la cadence de calcul (pas par seconde) ; `None` = illimitée.
+    /// Caps the computation rate (steps per second); `None` = unlimited.
     pub fn set_max_rate(&self, rate: Option<f64>) {
         let _ = self.tx.send(Command::SetMaxRate(rate));
     }
 
-    /// Met le calcul en pause dès le pas `step` atteint (`None` : jamais).
+    /// Pauses the computation once step `step` is reached (`None`: never).
     pub fn stop_at(&self, step: Option<u64>) {
         let _ = self.tx.send(Command::StopAt(step));
     }
 
-    /// Démarre l'enregistrement des traces des corps donnés (un point par
-    /// pas, à partir de maintenant). Remplace les traces existantes.
+    /// Starts recording the traces of the given bodies (one point per step,
+    /// from now on). Replaces the existing traces.
     pub fn start_traces(&self, ids: Vec<BodyId>) {
         let _ = self.tx.send(Command::StartTraces(ids));
     }
 
-    /// Démarre l'enregistrement : un instantané maintenant, puis tous les
-    /// `interval` pas. Remplace un éventuel enregistrement en cours.
+    /// Starts recording: a snapshot now, then every `interval` steps. Replaces
+    /// any running recording.
     pub fn start_recording(
         &self,
         writer: Box<dyn RecordingWriter>,
@@ -387,52 +388,53 @@ impl SimulationHandle {
         });
     }
 
-    /// Suspend l'enregistrement en cours (fichier clos proprement) et renvoie
-    /// le lien de reprise ainsi que l'état de la simulation au même pas.
-    /// `None` si aucun enregistrement n'est actif. Bloquant.
+    /// Suspends the running recording (file closed cleanly) and returns the
+    /// resume link along with the state of the simulation at the same step.
+    /// `None` if no recording is active. Blocking.
     pub fn suspend_recording(&self) -> Option<(RecordingLink, SimulationState)> {
         let (tx, rx) = mpsc::channel();
         self.tx.send(Command::SuspendRecording(tx)).ok()?;
         rx.recv().ok().flatten()
     }
 
-    /// Poursuit un enregistrement suspendu.
+    /// Continues a suspended recording.
     pub fn resume_recording(&self, writer: Box<dyn RecordingWriter>, link: RecordingLink) {
         let _ = self.tx.send(Command::ResumeRecording { writer, link });
     }
 
-    /// Vrai si un enregistrement est en cours.
+    /// True if a recording is running.
     pub fn is_recording(&self) -> bool {
         self.shared.recording.active.load(Ordering::Acquire)
     }
 
-    /// Arrête l'enregistrement (le fichier est clos par le thread de calcul).
+    /// Stops recording (the file is closed by the computation thread).
     pub fn stop_recording(&self) {
         let _ = self.tx.send(Command::StopRecording);
     }
 
-    /// État de l'enregistrement (instantanés écrits, octets, erreurs…).
+    /// State of the recording (snapshots written, bytes, errors…).
     pub fn recording_status(&self) -> &RecordingStatus {
         &self.shared.recording
     }
 
-    /// Corps de référence pour l'affichage relatif des traces.
+    /// Reference frame of the relative display of traces (body, barycenter or
+    /// local cluster).
     pub fn set_trace_reference(&self, id: Option<TraceReference>) {
         let _ = self.tx.send(Command::SetTraceReference(id));
     }
 
-    /// Arrête et efface les traces.
+    /// Stops and clears the traces.
     pub fn stop_traces(&self) {
         let _ = self.tx.send(Command::StopTraces);
     }
 
-    /// Accès en lecture aux traces (verrou bref : copier ce qui est utile).
+    /// Read access to the traces (short lock: copy what is needed).
     pub fn traces(&self) -> MutexGuard<'_, Option<TraceSet>> {
         self.shared.traces.lock().expect("verrou empoisonné")
     }
 
-    /// Identifiant actuel d'un corps, en suivant la chaîne des fusions.
-    /// `None` si le corps a été éliminé (éjection).
+    /// Current identifier of a body, following the chain of mergers. `None` if
+    /// the body was removed (ejection).
     pub fn resolve(&self, id: BodyId) -> Option<BodyId> {
         let fates = self.shared.fates.lock().expect("verrou empoisonné");
         let mut cur = id;
@@ -446,7 +448,7 @@ impl SimulationHandle {
         Some(cur)
     }
 
-    /// Arrête le thread de simulation et attend sa fin.
+    /// Stops the simulation thread and waits for it to end.
     pub fn shutdown(mut self) {
         self.stop();
     }
@@ -476,40 +478,40 @@ struct Worker {
     steps_per_second: f64,
     last_step_ms: f64,
     last_publish: Option<Instant>,
-    /// Dernière copie complète de l'état.
+    /// Last full copy of the state.
     last_full: Option<Instant>,
-    /// L'affichage lit directement les données du moteur : copies
-    /// complètes espacées, publications légères entre-temps.
+    /// The display reads the engine's data directly: spaced full copies, light
+    /// publications in between.
     direct_view: bool,
-    /// Corps dont la position accompagne chaque publication.
+    /// Bodies whose position comes with every publication.
     watched: Vec<BodyId>,
-    /// Dernière copie complète publiée, et grandeurs qui en dérivent.
+    /// Last published full copy, and the quantities derived from it.
     full: Arc<SimulationState>,
     top: Vec<(BodyId, f64)>,
     total_mass: f64,
     clusters: Arc<Vec<EjectedCluster>>,
     clusters_step: Option<u64>,
-    /// Copies récentes, dont les tableaux sont recyclés quand l'interface
-    /// les a lâchées (évite de réallouer des centaines de mégaoctets).
+    /// Recent copies, whose arrays are recycled once the interface has let them
+    /// go (avoids reallocating hundreds of megabytes).
     recent: VecDeque<Arc<SimulationState>>,
     spare: Option<SimulationState>,
-    /// Numéro du pas courant (pour dater les points des traces).
+    /// Number of the current step (to date the points of traces).
     step: u64,
-    /// Pas de temps (fixe).
+    /// Time step (fixed).
     dt: f64,
-    /// Paramètres physiques (recherche de l'amas local des traces).
+    /// Physical parameters (search for the local cluster of traces).
     params: PhysicsParams,
-    /// Pas auquel se mettre en pause ([`SimulationHandle::stop_at`]).
+    /// Step at which to pause ([`SimulationHandle::stop_at`]).
     stop_at: Option<u64>,
     recording: Option<ActiveRecording>,
 }
 
-/// Enregistrement en cours : un instantané tous les `interval` pas.
+/// Running recording: a snapshot every `interval` steps.
 struct ActiveRecording {
     recorder: Recorder,
     interval: u64,
     next_step: u64,
-    /// Devenirs accumulés depuis le dernier instantané.
+    /// Fates accumulated since the last snapshot.
     pending: Vec<(BodyId, BodyFate)>,
     dust_budget: Option<u64>,
     last_frame_step: u64,
@@ -518,7 +520,7 @@ struct ActiveRecording {
 impl Worker {
     fn run(mut self) {
         self.run_loop();
-        // Fin du thread : un enregistrement en cours est clos proprement.
+        // End of the thread: a running recording is closed cleanly.
         self.stop_recording();
     }
 
@@ -567,8 +569,8 @@ impl Worker {
             dust_budget: link.dust_budget,
             last_frame_step: link.last_frame_step,
         };
-        // Poursuite d'un enregistrement depuis une sauvegarde non liée : un
-        // instantané est écrit aussitôt, au pas de la sauvegarde.
+        // Continuing a recording from an unlinked save: a snapshot is written
+        // immediately, at the save's step.
         if rec.next_step <= self.step {
             self.record_keyframe(&mut rec);
         }
@@ -636,7 +638,7 @@ impl Worker {
     fn run_loop(&mut self) {
         self.publish(true);
         loop {
-            // 1. Traitement des commandes (bloquant en pause).
+            // 1. Handling of commands (blocking while paused).
             loop {
                 let cmd = if self.running {
                     match self.rx.try_recv() {
@@ -708,7 +710,7 @@ impl Worker {
                 }
             }
 
-            // 2. Un pas de calcul.
+            // 2. One computation step.
             let started = Instant::now();
             self.step();
             if self.stop_at.is_some_and(|s| self.step >= s) {
@@ -719,8 +721,8 @@ impl Worker {
             }
             let n = self.engine.body_count();
             if self.direct_view {
-                // Affichage direct : copie complète toutes les une à deux
-                // secondes, publications légères entre-temps.
+                // Live view: full copy every one to two seconds, light
+                // publications in between.
                 let full = self
                     .last_full
                     .is_none_or(|t| t.elapsed() >= full_state_interval(n));
@@ -732,8 +734,8 @@ impl Worker {
                     self.publish(full);
                 }
             } else {
-                // Au-delà d'un million de corps, la copie de l'état devient
-                // coûteuse : publications plus espacées.
+                // Beyond a million bodies, copying the state becomes
+                // expensive: publications are spaced out.
                 let scale = (n as f64 / 1e6).max(1.0);
                 if self
                     .last_publish
@@ -743,7 +745,7 @@ impl Worker {
                 }
             }
 
-            // 3. Limitation éventuelle de cadence.
+            // 3. Rate limiting, if any.
             if let Some(rate) = self.max_rate {
                 let target = Duration::from_secs_f64(1.0 / rate);
                 let spent = started.elapsed();
@@ -809,11 +811,11 @@ impl Worker {
         }
     }
 
-    /// Copie complète de l'état, dans les tableaux d'une copie que plus
-    /// personne n'utilise quand c'est possible.
+    /// Full copy of the state, into the arrays of a copy nobody uses any more
+    /// when possible.
     fn refresh_full_state(&mut self) {
-        // La copie publiée en dernier est encore affichée ; les précédentes
-        // ont en principe été lâchées par l'interface.
+        // The copy published last is still displayed; the previous ones have
+        // normally been released by the interface.
         while self.recent.len() > 1 {
             if let Some(old) = self.recent.pop_front() {
                 if let Ok(s) = Arc::try_unwrap(old) {
@@ -839,8 +841,8 @@ impl Worker {
         }
     }
 
-    /// Redésigne les membres de l'amas local servant de référentiel aux
-    /// traces, d'après la dernière copie complète de l'état.
+    /// Picks again the members of the local cluster used as reference frame
+    /// for the traces, from the last full copy of the state.
     fn update_cluster(&self, set: &mut TraceSet) {
         if let Some(around) = set.cluster_around() {
             if let Some(members) = cluster_members(&self.full.bodies, around, &self.params) {
@@ -849,8 +851,8 @@ impl Worker {
         }
     }
 
-    /// Publie un instantané ; `full` : avec une nouvelle copie complète de
-    /// l'état (sinon, la précédente est reprise).
+    /// Publishes a snapshot; `full`: with a new full copy of the state
+    /// (otherwise, the previous one is reused).
     fn publish(&mut self, full: bool) {
         if full {
             self.refresh_full_state();
@@ -865,7 +867,7 @@ impl Worker {
                 .filter_map(|(&id, p)| p.map(|p| (id, p)))
                 .collect()
         };
-        // Sans affichage direct, l'interface le déduit de l'état complet.
+        // Without live view, the interface derives it from the full state.
         let center_of_mass = if self.direct_view {
             self.engine.center_of_mass()
         } else {
@@ -876,7 +878,7 @@ impl Worker {
             phase: Phase::Ready,
             state: Arc::clone(&self.full),
             step: self.step,
-            // Pas de temps fixe : temps courant déduit de la dernière copie.
+            // Fixed time step: current time derived from the last copy.
             time: self.full.time + (self.step as f64 - self.full.step as f64) * self.dt,
             body_count: self.engine.body_count(),
             diagnostics: self.engine.diagnostics(),
@@ -906,7 +908,7 @@ mod tests {
     use std::path::PathBuf;
     use stellar_domain::{BodySet, EngineDescriptor, PhysicsParams, StepReport, Vec3};
 
-    /// Moteur factice : translation uniforme, le corps 2 absorbé au pas 3.
+    /// Fake engine: uniform translation, body 2 absorbed at step 3.
     struct Drift {
         state: SimulationState,
     }
@@ -959,7 +961,7 @@ mod tests {
         }
     }
 
-    /// Même moteur, mais qui se déclare affiché directement.
+    /// The same engine, but declaring itself directly displayed.
     struct DirectDrift(Drift);
 
     impl PhysicsEngine for DirectDrift {
@@ -998,9 +1000,9 @@ mod tests {
         }
     }
 
-    /// Affichage direct : l'état complet n'est recopié que toutes les une à
-    /// deux secondes, mais le pas, le centre de masse et les corps suivis
-    /// sont publiés à jour.
+    /// Live view: the full state is copied only every one to two seconds, but
+    /// the step, the center of mass and the watched bodies are published up to
+    /// date.
     #[test]
     fn direct_view_publishes_light_snapshots_between_full_copies() {
         let mut bodies = BodySet::default();
@@ -1021,16 +1023,16 @@ mod tests {
         wait_for(&handle, 50);
         let snap = handle.latest();
         assert!(handle.live_view().is_some());
-        // Copie complète initiale (pas 0), pas encore renouvelée.
+        // Initial full copy (step 0), not renewed yet.
         assert_eq!(snap.state.step, 0);
         assert!(snap.step >= 50);
         assert_eq!(snap.body_count, 1);
-        // Le corps 1 avance d'une unité par pas ; il a absorbé le corps 2.
+        // Body 1 moves one unit per step; it has absorbed body 2.
         let p = snap.watched_position(1).expect("corps suivi");
         assert_eq!(p.x, snap.step as f64);
         assert!(snap.center_of_mass.is_some());
         handle.pause();
-        // La pause publie une copie complète à jour.
+        // Pausing publishes an up-to-date full copy.
         for _ in 0..500 {
             let s = handle.latest();
             if !s.running && s.state.step == s.step {
@@ -1099,14 +1101,14 @@ mod tests {
         assert_eq!(link.next_step, 6);
         assert_eq!(link.interval, 2);
         assert_eq!(saved.initial_mass, Some(2.0));
-        // La fusion du pas 3 figure dans l'instantané du pas 4.
+        // The merger of step 3 appears in the snapshot of step 4.
         assert_eq!(
             mem.0.lock().unwrap()[2].fates,
             vec![(2, BodyFate::MergedInto(1))]
         );
         handle.shutdown();
 
-        // Reprise depuis la sauvegarde : l'instantané suivant est au pas 6.
+        // Resume from the save: the next snapshot is at step 6.
         let handle = SimulationHandle::start(config, Arc::new(DriftFactory), move || saved, true);
         let mem2 = MemWriter::default();
         handle.resume_recording(Box::new(mem2.clone()), link);

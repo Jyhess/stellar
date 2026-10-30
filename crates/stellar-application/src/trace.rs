@@ -1,23 +1,23 @@
-//! Traces : trajectoires de quelques corps, enregistrées à chaque pas par le
-//! thread de simulation à partir de leur activation.
+//! Traces: trajectories of a few bodies, recorded at every step by the
+//! simulation thread from their activation.
 //!
-//! Les traces sont une aide visuelle propre à la session : elles ne sont pas
-//! sauvegardées. Chaque trace garde deux mémoires d'échantillons (pas, position) :
-//! - l'**historique complet**, borné à [`MAX_HISTORY`] points par décimation
-//!   (un point sur deux est éliminé et le pas d'échantillonnage double) ;
-//! - une **queue** récente à pleine résolution (un point par pas), d'au plus
+//! Traces are a visual aid specific to the session: they are not saved.
+//! Each trace keeps two sample stores (step, position):
+//! - the **full history**, bounded to [`MAX_HISTORY`] points by decimation
+//!   (every other point is dropped and the sampling step doubles);
+//! - a recent **tail** at full resolution (one point per step), of at most
 //!   [`MAX_TAIL`] points.
 //!
-//! Les traces peuvent être affichées **relativement à un corps de
-//! référence** (voir [`relative_to`]) : chaque point devient
-//! p(t) − r(t) + r(maintenant), ce qui fait apparaître les orbites autour de ce
-//! corps. La trajectoire de la référence provient de sa propre trace si elle
-//! est tracée, sinon d'une piste dédiée enregistrée depuis sa sélection.
+//! Traces can be displayed **relative to a reference body** (see
+//! [`relative_to`]): each point becomes p(t) − r(t) + r(now), which reveals
+//! the orbits around that body. The reference's trajectory comes from its
+//! own trace if it is traced, otherwise from a dedicated track recorded
+//! since its selection.
 //!
-//! Autres référentiels : le barycentre de la simulation, ou celui de l'amas
-//! local d'un corps (groupe lié qui le contient, voir
-//! [`stellar_domain::ejection::local_cluster`]) ; les membres de l'amas sont
-//! redésignés périodiquement par l'appelant ([`TraceSet::set_cluster_members`]).
+//! Other reference frames: the simulation barycenter, or that of a body's
+//! local cluster (the bound group that contains it, see
+//! [`stellar_domain::ejection::local_cluster`]); the cluster's members are
+//! picked again periodically by the caller ([`TraceSet::set_cluster_members`]).
 
 use std::collections::VecDeque;
 
@@ -26,18 +26,18 @@ use stellar_domain::{BodyId, BodySet, PhysicsParams, Vec3};
 
 pub const MAX_HISTORY: usize = 4096;
 pub const MAX_TAIL: usize = 5000;
-/// Membres d'un amas local suivis au plus (les plus massifs) : leurs
-/// positions sont relues à chaque pas.
+/// Maximum number of tracked members of a local cluster (the most massive):
+/// their positions are read back at every step.
 pub const MAX_CLUSTER_MEMBERS: usize = 512;
 
-/// Échantillon : (numéro de pas, position).
+/// Sample: (step number, position).
 pub type Sample = (u64, Vec3);
 
 #[derive(Debug, Clone)]
 pub struct Trace {
-    /// Corps tracé à l'activation.
+    /// Body traced at activation.
     pub origin: BodyId,
-    /// Corps actuellement suivi (après fusions) ; `None` s'il a été éliminé.
+    /// Body currently followed (after mergers); `None` if it was removed.
     pub current: Option<BodyId>,
     history: Vec<Sample>,
     stride: u32,
@@ -59,7 +59,7 @@ impl Trace {
 
     fn push(&mut self, s: Sample) {
         if self.tail.back().is_some_and(|b| b.0 == s.0) {
-            return; // un seul point par pas
+            return; // a single point per step
         }
         self.tail.push_back(s);
         if self.tail.len() > MAX_TAIL {
@@ -70,7 +70,7 @@ impl Trace {
             self.counter = 0;
             self.history.push(s);
             if self.history.len() > MAX_HISTORY {
-                // Décimation : on garde un point sur deux (dont le premier).
+                // Decimation: keep every other point (including the first).
                 let mut k = 0;
                 self.history.retain(|_| {
                     k += 1;
@@ -81,7 +81,7 @@ impl Trace {
         }
     }
 
-    /// Historique complet (décimé), prolongé jusqu'à la dernière position.
+    /// Full (decimated) history, extended to the last position.
     pub fn full(&self) -> Vec<Sample> {
         let mut v = self.history.clone();
         if let Some(&last) = self.tail.back() {
@@ -92,14 +92,14 @@ impl Trace {
         v
     }
 
-    /// Les `n` derniers points, à pleine résolution (un par pas).
+    /// The last `n` points, at full resolution (one per step).
     pub fn recent(&self, n: usize) -> Vec<Sample> {
         let skip = self.tail.len().saturating_sub(n);
         self.tail.iter().skip(skip).copied().collect()
     }
 
-    /// Tous les échantillons connus, triés par pas : l'historique décimé
-    /// pour le passé lointain, la queue à pleine résolution ensuite.
+    /// Every known sample, sorted by step: the decimated history for the
+    /// distant past, then the tail at full resolution.
     pub fn samples(&self) -> Vec<Sample> {
         let first_tail = self.tail.front().map_or(u64::MAX, |s| s.0);
         let mut v: Vec<Sample> = self
@@ -112,35 +112,35 @@ impl Trace {
         v
     }
 
-    /// Dernière position enregistrée.
+    /// Last recorded position.
     pub fn last(&self) -> Option<Sample> {
         self.tail.back().copied()
     }
 }
 
-/// Référentiel d'affichage relatif des traces.
+/// Reference frame for the relative display of traces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraceReference {
-    /// Un corps (suivi à travers ses fusions).
+    /// A body (followed through its mergers).
     Body(BodyId),
-    /// Le centre de gravité du système.
+    /// The center of gravity of the system.
     Barycenter,
-    /// Le centre de gravité de l'amas lié qui contient ce corps.
+    /// The center of gravity of the bound cluster that contains this body.
     Cluster(BodyId),
 }
 
-/// Barycentre de l'amas local d'un corps : membres (identifiant, masse) et
-/// trajectoire.
+/// Barycenter of a body's local cluster: members (identifier, mass) and
+/// trajectory.
 #[derive(Debug, Clone)]
 pub struct ClusterTrack {
-    /// Corps autour duquel l'amas est cherché (suivi à travers ses fusions).
+    /// Body around which the cluster is searched (followed through its mergers).
     pub around: Option<BodyId>,
     members: Vec<(BodyId, f64)>,
     track: Trace,
 }
 
-/// Membres (identifiant, masse) de l'amas local du corps `around` dans
-/// `bodies`, les plus massifs d'abord (au plus [`MAX_CLUSTER_MEMBERS`]).
+/// Members (identifier, mass) of the local cluster of body `around` in
+/// `bodies`, most massive first (at most [`MAX_CLUSTER_MEMBERS`]).
 pub fn cluster_members(
     bodies: &BodySet,
     around: BodyId,
@@ -157,23 +157,23 @@ pub fn cluster_members(
     Some(members)
 }
 
-/// Ensemble des traces actives, plus les pistes de référence.
+/// Set of active traces, plus the reference tracks.
 #[derive(Debug, Clone)]
 pub struct TraceSet {
     pub traces: Vec<Trace>,
-    /// Piste du corps de référence, quand il ne fait pas partie des traces.
+    /// Track of the reference body, when it is not among the traces.
     pub reference: Option<Trace>,
-    /// Trajectoire du barycentre, enregistrée en permanence depuis
-    /// l'activation des traces.
+    /// Trajectory of the barycenter, recorded continuously since the traces
+    /// were activated.
     pub barycenter: Trace,
-    /// Barycentre de l'amas local, quand c'est le référentiel choisi.
+    /// Barycenter of the local cluster, when it is the chosen reference frame.
     pub cluster: Option<ClusterTrack>,
 }
 
 impl TraceSet {
     pub fn new(ids: impl IntoIterator<Item = BodyId>) -> Self {
         let mut barycenter = Trace::new(BodyId::MAX);
-        barycenter.current = None; // n'est pas un corps : jamais résolu ni recherché
+        barycenter.current = None; // not a body: never resolved nor looked up
         Self {
             traces: ids.into_iter().map(Trace::new).collect(),
             reference: None,
@@ -182,12 +182,12 @@ impl TraceSet {
         }
     }
 
-    /// Ajoute un point à la trajectoire du barycentre.
+    /// Adds a point to the barycenter's trajectory.
     pub fn push_barycenter(&mut self, step: u64, p: Vec3) {
         self.barycenter.push((step, p));
     }
 
-    /// Choisit le référentiel (corps, barycentre ou amas local).
+    /// Chooses the reference frame (body, barycenter or local cluster).
     pub fn set_reference_kind(&mut self, reference: Option<TraceReference>) {
         if !matches!(reference, Some(TraceReference::Cluster(_))) {
             self.cluster = None;
@@ -210,24 +210,24 @@ impl TraceSet {
         }
     }
 
-    /// Corps dont l'amas local sert de référentiel.
+    /// Body whose local cluster is the reference frame.
     pub fn cluster_around(&self) -> Option<BodyId> {
         self.cluster.as_ref().and_then(|c| c.around)
     }
 
-    /// Désigne les membres (identifiant, masse) de l'amas local.
+    /// Sets the members (identifier, mass) of the local cluster.
     pub fn set_cluster_members(&mut self, members: Vec<(BodyId, f64)>) {
         if let Some(c) = &mut self.cluster {
             c.members = members;
         }
     }
 
-    /// Nombre de membres suivis de l'amas local.
+    /// Number of tracked members of the local cluster.
     pub fn cluster_size(&self) -> usize {
         self.cluster.as_ref().map_or(0, |c| c.members.len())
     }
 
-    /// Trajectoire connue de la référence, pour l'affichage relatif.
+    /// Known trajectory of the reference, for the relative display.
     pub fn samples_for(&self, reference: TraceReference) -> Option<Vec<Sample>> {
         match reference {
             TraceReference::Body(id) => self.reference_samples(id),
@@ -242,8 +242,8 @@ impl TraceSet {
         }
     }
 
-    /// Corps dont les positions sont à enregistrer à chaque pas : traces
-    /// actives, référence éventuelle, puis membres de l'amas local.
+    /// Bodies whose positions must be recorded at every step: active traces,
+    /// the reference if any, then the members of the local cluster.
     pub fn current_ids(&self) -> Vec<BodyId> {
         self.traces
             .iter()
@@ -253,9 +253,9 @@ impl TraceSet {
             .collect()
     }
 
-    /// Choisit le corps de référence. Si ce corps est déjà tracé (et n'a pas
-    /// fusionné dans un autre), sa trace sert de référence ; sinon une piste
-    /// dédiée démarre maintenant.
+    /// Chooses the reference body. If this body is already traced (and has not
+    /// merged into another one), its trace serves as reference; otherwise a
+    /// dedicated track starts now.
     pub fn set_reference(&mut self, id: Option<BodyId>) {
         match id {
             Some(id) if self.own_trace(id).is_none() => {
@@ -273,7 +273,7 @@ impl TraceSet {
             .find(|t| t.origin == id && t.current == Some(id))
     }
 
-    /// Trajectoire connue du corps `id`, pour l'affichage relatif.
+    /// Known trajectory of body `id`, for the relative display.
     pub fn reference_samples(&self, id: BodyId) -> Option<Vec<Sample>> {
         if let Some(t) = self.own_trace(id) {
             return Some(t.samples());
@@ -284,8 +284,8 @@ impl TraceSet {
             .map(Trace::samples)
     }
 
-    /// Met à jour les corps suivis après un pas : `merges` liste les couples
-    /// (absorbé, résultant), `removed` les corps éliminés.
+    /// Updates the followed bodies after a step: `merges` lists the pairs
+    /// (absorbed, resulting), `removed` the removed bodies.
     pub fn apply_fates(&mut self, merges: &[(BodyId, BodyId)], removed: &[BodyId]) {
         if merges.is_empty() && removed.is_empty() {
             return;
@@ -306,8 +306,8 @@ impl TraceSet {
         }
     }
 
-    /// Met à jour les corps suivis à l'aide d'une fonction de résolution
-    /// (identifiant actuel après fusions, `None` si éliminé).
+    /// Updates the followed bodies with a resolution function (current
+    /// identifier after mergers, `None` if removed).
     pub fn resolve_with(&mut self, resolve: impl Fn(BodyId) -> Option<BodyId>) {
         for t in self.traces.iter_mut().chain(self.reference.iter_mut()) {
             t.current = t.current.and_then(&resolve);
@@ -317,7 +317,7 @@ impl TraceSet {
         }
     }
 
-    /// Ajoute un point au pas `step`. `positions` est aligné sur
+    /// Adds a point at step `step`. `positions` is aligned with
     /// [`Self::current_ids`].
     pub fn push(&mut self, step: u64, positions: &[Option<Vec3>]) {
         let mut k = 0;
@@ -344,7 +344,7 @@ impl TraceSet {
     }
 }
 
-/// Position interpolée de la référence au pas `step`, si `step` est couvert.
+/// Interpolated position of the reference at step `step`, if `step` is covered.
 fn interpolate(reference: &[Sample], step: u64) -> Option<Vec3> {
     let i = reference.partition_point(|s| s.0 < step);
     let after = reference.get(i)?;
@@ -356,9 +356,8 @@ fn interpolate(reference: &[Sample], step: u64) -> Option<Vec3> {
     Some(before.1.lerp(after.1, t))
 }
 
-/// Exprime une trace dans le référentiel d'un corps : p(t) − r(t) + r(maintenant).
-/// Les points antérieurs à la trajectoire connue de la référence donnent `None`
-/// (le tracé est interrompu).
+/// Expresses a trace in a body's frame: p(t) − r(t) + r(now). Points before
+/// the known trajectory of the reference give `None` (the line is broken).
 pub fn relative_to(points: &[Sample], reference: &[Sample]) -> Vec<Option<Vec3>> {
     let Some(&(_, now)) = reference.last() else {
         return vec![None; points.len()];
@@ -394,7 +393,7 @@ mod tests {
         let r = set.samples_for(TraceReference::Cluster(7)).unwrap();
         assert_eq!(r.len(), 3);
         assert!((r[2].1 - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-12);
-        // Le corps repère suit ses fusions ; un autre référentiel efface l'amas.
+        // The marker body follows its mergers; another reference frame clears the cluster.
         set.apply_fates(&[(7, 9)], &[]);
         assert_eq!(set.cluster_around(), Some(9));
         set.set_reference_kind(Some(TraceReference::Barycenter));
@@ -434,7 +433,7 @@ mod tests {
 
     #[test]
     fn circular_orbit_becomes_a_circle_around_the_reference() {
-        // Une étoile en translation uniforme, une planète en orbite autour.
+        // A star in uniform translation, a planet orbiting it.
         let star = |k: u64| Vec3::new(k as f64, 0.0, 0.0);
         let planet = |k: u64| {
             let a = k as f64 * 0.1;
@@ -451,7 +450,7 @@ mod tests {
             let d = (p.unwrap() - now).length();
             assert!((d - 1.0).abs() < 1e-9, "distance {d}");
         }
-        // La référence elle-même se réduit à un point.
+        // The reference itself shrinks to a point.
         let own = relative_to(&t.traces[0].full(), &reference);
         assert!(own.iter().all(|p| (p.unwrap() - now).length() < 1e-9));
     }
@@ -466,14 +465,14 @@ mod tests {
         let reference = t.reference_samples(9).unwrap();
         let rel = relative_to(&t.traces[0].full(), &reference);
         assert_eq!(rel, vec![None, Some(Vec3::X)]);
-        // Une référence déjà tracée n'ouvre pas de piste dédiée.
+        // A reference that is already traced opens no dedicated track.
         t.set_reference(Some(1));
         assert!(t.reference.is_none());
     }
 
     #[test]
     fn orbits_around_the_barycenter() {
-        // Deux corps égaux en orbite autour d'un barycentre qui dérive.
+        // Two equal bodies orbiting a drifting barycenter.
         let mut t = TraceSet::new([1, 2]);
         for k in 0..50u64 {
             let a = k as f64 * 0.2;
@@ -491,7 +490,7 @@ mod tests {
                 assert!(((p.unwrap() - now).length() - 1.0).abs() < 1e-9);
             }
         }
-        // Le barycentre n'est jamais demandé au moteur.
+        // The barycenter is never requested from the engine.
         assert_eq!(t.current_ids(), vec![1, 2]);
     }
 

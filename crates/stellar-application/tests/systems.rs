@@ -1,4 +1,4 @@
-//! Moteur composite : sous-systèmes couplés par leurs champs de marée.
+//! Composite engine: subsystems coupled through their tidal fields.
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ fn params() -> PhysicsParams {
         g: 1.0,
         dt: 1e-3,
         softening: 0.2,
-        // Forces quasi exactes : les écarts mesurés sont ceux du découpage.
+        // Nearly exact forces: the measured gaps are those of the split.
         theta: 0.05,
         base_radius: 0.0,
         cleanup_period: 0,
@@ -25,7 +25,7 @@ fn params() -> PhysicsParams {
     }
 }
 
-/// Amas de `n` corps de masse 1 dans une boule de rayon `radius`.
+/// Cluster of `n` bodies of mass 1 in a ball of radius `radius`.
 fn cluster(b: &mut BodySet, first: u64, n: u64, center: Vec3, radius: f64, velocity: Vec3) {
     for k in 0..n {
         let a = k as f64 * 2.399_963;
@@ -57,8 +57,8 @@ fn center_of(e: &dyn PhysicsEngine, first: u64, n: u64) -> Vec3 {
     p.iter().map(|p| p.expect("corps présent")).sum::<Vec3>() / n as f64
 }
 
-/// Deux amas compacts en orbite : le calcul en deux sous-systèmes suit le
-/// calcul d'un seul tenant.
+/// Two compact clusters in orbit: the computation split into two
+/// subsystems follows the computation in one piece.
 #[test]
 fn split_orbit_follows_the_full_computation() {
     let d: f64 = 20.0;
@@ -86,18 +86,18 @@ fn split_orbit_follows_the_full_computation() {
     }
     let rel_split = center_of(&split, 100, 20) - center_of(&split, 0, 50);
     let rel_whole = center_of(&whole, 100, 20) - center_of(&whole, 0, 50);
-    // Trois unités de temps : l'amas a parcouru plus de 5 unités sur son orbite.
+    // Three time units: the cluster has travelled more than 5 units along its orbit.
     assert!((rel_whole - Vec3::new(d, 0.0, 0.0)).length() > 5.0);
     assert!(
         (rel_split - rel_whole).length() < 1e-2,
         "{rel_split} ≠ {rel_whole}"
     );
-    // Énergie totale : propres + interaction.
+    // Total energy: own energies + interaction.
     let (es, ew) = (split.diagnostics().total_energy(), whole.diagnostics().total_energy());
     assert!(((es - ew) / ew).abs() < 1e-2, "{es} ≠ {ew}");
 }
 
-/// Un amas éjecté lié devient un sous-système au nettoyage.
+/// A bound ejected cluster becomes a subsystem at cleanup.
 #[test]
 fn ejected_cluster_becomes_a_subsystem() {
     let mut b = BodySet::default();
@@ -119,11 +119,11 @@ fn ejected_cluster_becomes_a_subsystem() {
     assert_eq!(s.bodies.len(), 70);
     assert_eq!(s.systems.len(), 2);
     assert_eq!(s.systems[1].len, 20);
-    // L'état composite reconstruit les mêmes sous-systèmes.
+    // The composite state rebuilds the same subsystems.
     let again = composite(s.bodies.clone(), s.systems.clone(), p);
     assert_eq!(again.systems().len(), 2);
     assert!((center_of(&again, 1_000, 20) - center_of(&e, 1_000, 20)).length() < 1e-9);
-    // Rien n'est perdu ensuite, hors éliminations signalées.
+    // Nothing is lost afterwards, apart from reported removals.
     let mut removed = 0;
     for _ in 0..50 {
         removed += e.step().removed.len();
@@ -131,7 +131,7 @@ fn ejected_cluster_becomes_a_subsystem() {
     assert_eq!(e.body_count() + removed, 70);
 }
 
-/// Deux sous-systèmes qui se rapprochent sont réunis.
+/// Two subsystems moving closer are merged.
 #[test]
 fn approaching_subsystems_merge() {
     let mut b = BodySet::default();
@@ -150,20 +150,20 @@ fn approaching_subsystems_merge() {
         steps += 1;
     }
     assert_eq!(e.systems().len(), 1, "pas de réunion");
-    // Réunion quand 1,5 > 0,6 × distance, soit à moins de 2,5 : après
-    // environ 0,6 unité de temps (le premier nettoyage suivant).
+    // Merge when 1.5 > 0.6 × distance, i.e. below 2.5: after about 0.6 time
+    // units (the next cleanup).
     assert!((500..900).contains(&steps), "{steps} pas");
     assert_eq!(e.body_count(), 70);
     assert!(e.state().systems.is_empty());
 }
 
-/// Un corps qui s'évade d'un sous-système secondaire rejoint le principal.
+/// A body escaping from a secondary subsystem joins the main one.
 #[test]
 fn escapee_joins_the_main_system() {
     let mut b = BodySet::default();
     cluster(&mut b, 0, 50, Vec3::ZERO, 0.5, Vec3::ZERO);
     cluster(&mut b, 100, 20, Vec3::new(40.0, 0.0, 0.0), 0.2, Vec3::ZERO);
-    // Loin de son amas (au-delà de 10 × 0,5) et bien trop rapide pour lui.
+    // Far from its cluster (beyond 10 × 0.5) and much too fast for it.
     b.push(500, Vec3::new(40.0, 8.0, 0.0), Vec3::new(0.0, 20.0, 0.0), 1.0);
     let spans = vec![
         SystemSpan { start: 0, len: 50, size: 1.0 },

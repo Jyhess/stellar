@@ -1,8 +1,8 @@
-//! Simulation sans affichage : calcul et enregistrement automatique jusqu'à
-//! une cible (nombre de pas, temps simulé, durée réelle) ou jusqu'à l'arrêt
-//! demandé ; à la fin, l'enregistrement est clos et l'état final sauvegardé.
+//! Simulation without display: computation and automatic recording until a
+//! target (step count, simulated time, real duration) or until a stop is
+//! requested; at the end, the recording is closed and the final state saved.
 //!
-//! Utilisée par l'écran de suivi de l'interface et par le mode console.
+//! Used by the interface's monitoring screen and by the console mode.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -14,27 +14,27 @@ use crate::ports::RepositoryError;
 use crate::runner::{Phase, SimulationHandle};
 use crate::service::{name_from_file, AppError, SimulatorService};
 
-/// Condition d'arrêt.
+/// Stop condition.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RunTarget {
-    /// Jusqu'à l'arrêt demandé.
+    /// Until a stop is requested.
     Manual,
-    /// Ce nombre de pas.
+    /// This number of steps.
     Steps(u64),
-    /// Ce temps simulé.
+    /// This simulated time.
     SimTime(f64),
-    /// Cette durée réelle de calcul.
+    /// This real computation time.
     WallTime(Duration),
 }
 
-/// Options d'enregistrement.
+/// Recording options.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RecordSettings {
     pub interval: u32,
     pub dust_budget: Option<u64>,
 }
 
-/// Avancement d'une simulation sans affichage.
+/// Progress of a simulation without display.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Progress {
     pub ready: bool,
@@ -43,14 +43,14 @@ pub struct Progress {
     pub bodies: usize,
     pub steps_per_second: f64,
     pub elapsed: Duration,
-    /// Part de la cible atteinte (`None` sans cible).
+    /// Share of the target reached (`None` without a target).
     pub fraction: Option<f64>,
     pub frames: u64,
     pub bytes: u64,
     pub error: Option<&'static str>,
 }
 
-/// Résultat d'une simulation sans affichage.
+/// Result of a simulation without display.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunOutcome {
     pub save: PathBuf,
@@ -62,11 +62,11 @@ pub struct HeadlessRun {
     handle: SimulationHandle,
     target: RunTarget,
     started: Instant,
-    /// Pas et temps simulé au départ.
+    /// Step and simulated time at the start.
     origin: (u64, f64),
 }
 
-/// Pas d'arrêt d'une cible comptée à partir du pas `from`.
+/// Stop step of a target counted from step `from`.
 fn stop_step(target: RunTarget, from: u64, dt: f64) -> Option<u64> {
     match target {
         RunTarget::Steps(n) => Some(from + n),
@@ -76,7 +76,7 @@ fn stop_step(target: RunTarget, from: u64, dt: f64) -> Option<u64> {
 }
 
 impl HeadlessRun {
-    /// Crée la simulation et démarre l'enregistrement (sous le nom `name`).
+    /// Creates the simulation and starts recording (under the name `name`).
     pub fn start(
         service: &SimulatorService,
         config: SimulationConfig,
@@ -85,7 +85,7 @@ impl HeadlessRun {
         target: RunTarget,
     ) -> Result<Self, AppError> {
         let dt = config.physics.dt;
-        // En pause : pas d'arrêt et enregistrement armés avant le premier pas.
+        // Paused: stop step and recording armed before the first step.
         let handle = service.new_simulation_paused(config)?;
         handle.set_name(name);
         handle.stop_at(stop_step(target, 0, dt));
@@ -99,11 +99,11 @@ impl HeadlessRun {
         })
     }
 
-    /// Reprend la sauvegarde `save`. Enregistrement : `continue_with` s'il est
-    /// donné (poursuivi à partir du pas de la sauvegarde), sinon celui auquel
-    /// la sauvegarde est liée, sinon un nouvel enregistrement `record`. Nom :
-    /// `name`, ou celui de la sauvegarde. La cible se compte à partir du pas
-    /// de la sauvegarde. Renvoie aussi l'enregistrement poursuivi.
+    /// Resumes the save `save`. Recording: `continue_with` if given (continued
+    /// from the save's step), otherwise the one the save is linked to,
+    /// otherwise a new recording `record`. Name: `name`, or the save's. The
+    /// target is counted from the save's step. Also returns the continued
+    /// recording.
     pub fn resume(
         service: &SimulatorService,
         save: &Path,
@@ -132,7 +132,7 @@ impl HeadlessRun {
                 None
             }
         };
-        // Une sauvegarde chargée démarre en pause.
+        // A loaded save starts paused.
         handle.resume();
         Ok((
             Self {
@@ -149,7 +149,7 @@ impl HeadlessRun {
         &self.handle
     }
 
-    /// Rend la simulation (pour l'afficher) ; la cible n'est plus surveillée.
+    /// Hands the simulation over (to display it); the target is no longer watched.
     pub fn into_handle(self) -> SimulationHandle {
         self.handle.stop_at(None);
         self.handle
@@ -159,7 +159,7 @@ impl HeadlessRun {
         self.target
     }
 
-    /// Avancement.
+    /// Progress.
     pub fn poll(&self) -> Progress {
         let snap = self.handle.latest();
         let ready = snap.phase == Phase::Ready;
@@ -186,7 +186,7 @@ impl HeadlessRun {
         }
     }
 
-    /// La cible est-elle atteinte (ou la simulation en échec) ?
+    /// Is the target reached (or has the simulation failed)?
     pub fn done(&self) -> bool {
         let p = self.poll();
         if p.error.is_some() {
@@ -196,18 +196,18 @@ impl HeadlessRun {
         match self.target {
             RunTarget::Manual => false,
             RunTarget::WallTime(d) => p.ready && p.elapsed >= d,
-            // Le calcul s'est mis en pause au pas d'arrêt.
+            // The computation paused itself at the stop step.
             RunTarget::Steps(_) | RunTarget::SimTime(_) => {
                 p.ready && !snap.running && p.fraction.unwrap_or(0.0) >= 1.0
             }
         }
     }
 
-    /// Arrête le calcul, clôt l'enregistrement et sauvegarde l'état final.
+    /// Stops the computation, closes the recording and saves the final state.
     pub fn finish(self, service: &SimulatorService) -> Result<RunOutcome, AppError> {
         let h = &self.handle;
         h.pause();
-        // La pause publie un état complet à jour.
+        // Pausing publishes an up-to-date full state.
         let deadline = Instant::now() + Duration::from_secs(60);
         let snap = loop {
             let s = h.latest();

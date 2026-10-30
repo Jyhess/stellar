@@ -1,5 +1,5 @@
-//! Génération déterministe de l'état initial à partir des
-//! [`InitialConditions`] (même graine ⇒ même nuage).
+//! Deterministic generation of the initial state from the
+//! [`InitialConditions`] (same seed ⇒ same cloud).
 
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64Mcg;
@@ -7,8 +7,8 @@ use stellar_domain::{
     BodySet, DensityProfile, Distribution, InitialConditions, SimulationState, Vec3, VelocityMode,
 };
 
-/// Construit l'état initial : particules de masse 1, barycentre à l'origine,
-/// quantité de mouvement totale nulle.
+/// Builds the initial state: particles of mass 1, barycenter at the origin,
+/// zero total momentum.
 pub fn generate_state(ic: &InitialConditions, g: f64) -> SimulationState {
     let bodies = generate_bodies(ic, g);
     let initial_mass = Some(bodies.total_mass());
@@ -64,7 +64,7 @@ fn sample_position(rng: &mut impl Rng, ic: &InitialConditions) -> Vec3 {
             let rho = match profile {
                 DensityProfile::Uniform => r_max * rng.gen::<f64>().sqrt(),
                 DensityProfile::Exponential { scale } => {
-                    // Densité surfacique ∝ exp(−r/h) ⇒ r ~ Gamma(2, h), tronquée à R.
+                    // Surface density ∝ exp(−r/h) ⇒ r ~ Gamma(2, h), truncated at R.
                     let h = (scale.max(1e-6)) * r_max;
                     loop {
                         let u1: f64 = rng.gen::<f64>().max(f64::MIN_POSITIVE);
@@ -101,7 +101,7 @@ fn remove_net_momentum(b: &mut BodySet) {
     }
 }
 
-/// Tangente unitaire à une rotation autour de Oz (sens trigonométrique).
+/// Unit tangent of a rotation around Oz (counter-clockwise).
 fn azimuthal(p: Vec3) -> Option<Vec3> {
     let rho = (p.x * p.x + p.y * p.y).sqrt();
     (rho > 0.0).then(|| Vec3::new(-p.y / rho, p.x / rho, 0.0))
@@ -131,7 +131,7 @@ fn assign_velocities(rng: &mut impl Rng, ic: &InitialConditions, g: f64, b: &mut
             }
         }
         VelocityMode::CircularOrbital { spread, factor: scale } => {
-            // Masse intérieure M(<r) : rang dans le tri par rayon sphérique.
+            // Enclosed mass M(<r): rank in the sort by spherical radius.
             let n = b.len();
             let mut order: Vec<usize> = (0..n).collect();
             order.sort_unstable_by(|&i, &j| {
@@ -154,7 +154,7 @@ fn assign_velocities(rng: &mut impl Rng, ic: &InitialConditions, g: f64, b: &mut
                     continue;
                 }
                 let Some(t) = azimuthal(p) else { continue };
-                // Composante cylindrique de l'attraction : g_ρ = G·M(<r)·ρ / r³
+                // Cylindrical component of the attraction: g_ρ = G·M(<r)·ρ / r³
                 // ⇒ v = √(ρ·g_ρ) = √(G·M(<r)·ρ² / r³).
                 let v_circ = (g * inside * rho2 / (r2 * r2.sqrt())).sqrt();
                 let factor = if spread > 0.0 {
@@ -200,7 +200,7 @@ mod tests {
         let b = generate_bodies(&c, 1.0);
         assert_eq!(b.len(), 5_000);
         assert!(b.is_consistent());
-        // Recentrage : léger débordement possible, borné.
+        // Recentring: a slight, bounded overflow is possible.
         assert!(b.positions.iter().all(|p| p.length() <= 50.0 * 1.05));
         assert!(b.center_of_mass().unwrap().length() < 1e-9);
         assert!(b.masses.iter().all(|&m| m == 1.0));
@@ -245,7 +245,7 @@ mod tests {
             VelocityMode::CircularOrbital { spread: 0.0, factor: 1.0 },
         );
         let b = generate_bodies(&c, 2.0);
-        // Pour le corps le plus extérieur, M(<r) ≈ N − 1.
+        // For the outermost body, M(<r) ≈ N − 1.
         let (i, r) = b
             .positions
             .iter()
@@ -260,7 +260,7 @@ mod tests {
             "{got} vs {expected}"
         );
 
-        // Le facteur multiplie la vitesse d'équilibre.
+        // The factor multiplies the equilibrium speed.
         let slow = InitialConditions {
             velocity: VelocityMode::CircularOrbital { spread: 0.0, factor: 0.7 },
             ..c

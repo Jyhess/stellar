@@ -1,4 +1,4 @@
-//! Coût de l'interpolation d'une image de relecture :
+//! Cost of interpolating one playback frame:
 //! `cargo run --release -p stellar-application --example interp_timing -- 1000000`
 use std::time::Instant;
 

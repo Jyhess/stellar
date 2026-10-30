@@ -1,4 +1,4 @@
-//! Façade des cas d'usage, utilisée par la couche de présentation.
+//! Facade of the use cases, used by the presentation layer.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -15,8 +15,8 @@ use crate::registry::EngineRegistry;
 use crate::replay::ReplayPlayer;
 use crate::runner::{Phase, SimulationHandle, Snapshot};
 
-/// Nom d'une simulation d'après le nom d'un de ses fichiers : sans le
-/// suffixe « _reprise » ni le numéro ajouté pour rendre le nom unique.
+/// Name of a simulation from the name of one of its files: without the
+/// "_reprise" suffix or the number added to make the name unique.
 pub fn name_from_file(stem: &str) -> String {
     let base = stem.strip_suffix("_reprise").unwrap_or(stem);
     let base = match base.rsplit_once('_') {
@@ -36,31 +36,31 @@ pub enum AppError {
     Repository(#[from] RepositoryError),
 }
 
-/// Résultat du chargement d'une sauvegarde.
+/// Result of loading a save.
 pub struct LoadedSimulation {
     pub handle: SimulationHandle,
     pub view: Option<ViewState>,
-    /// Reprise d'un enregistrement lié : chemin du fichier, ou erreur.
+    /// Resumption of a linked recording: path of the file, or error.
     pub recording: Option<Result<PathBuf, String>>,
 }
 
-/// Enregistrement que l'on peut poursuivre depuis une sauvegarde.
+/// Recording that can be continued from a save.
 #[derive(Debug, Clone)]
 pub struct Continuation {
     pub summary: RecordingSummary,
-    /// Pas du dernier instantané conservé.
+    /// Step of the last kept snapshot.
     pub resume_step: u64,
-    /// Instantanés postérieurs à la sauvegarde, qui seront supprimés.
+    /// Snapshots after the save, which will be deleted.
     pub dropped_frames: usize,
 }
 
-/// Point d'entrée des cas d'usage : créer, charger, sauvegarder, lister.
+/// Entry point of the use cases: create, load, save, list.
 #[derive(Clone)]
 pub struct SimulatorService {
     registry: Arc<EngineRegistry>,
     repository: Arc<dyn SimulationRepository>,
     recordings: Arc<dyn RecordingRepository>,
-    /// Information sur les moteurs (carte graphique détectée ou absente).
+    /// Note about the engines (graphics card detected or missing).
     engine_note: Option<String>,
 }
 
@@ -86,13 +86,13 @@ impl SimulatorService {
         self.engine_note.as_deref()
     }
 
-    /// Moteurs de calcul disponibles.
+    /// Available computation engines.
     pub fn engines(&self) -> Vec<EngineDescriptor> {
         self.registry.descriptors()
     }
 
-    /// Nombre maximal de corps du moteur `engine` (voir
-    /// [`EngineFactory::max_bodies`]).
+    /// Maximum number of bodies of engine `engine` (see
+    /// [`stellar_domain::EngineFactory::max_bodies`]).
     pub fn max_bodies(&self, engine: &str) -> Option<usize> {
         self.registry.get(engine).and_then(|f| f.max_bodies())
     }
@@ -101,14 +101,14 @@ impl SimulatorService {
         self.registry.default_id()
     }
 
-    /// Crée et démarre une nouvelle simulation. La génération du nuage a lieu
-    /// dans le thread de simulation.
+    /// Creates and starts a new simulation. The cloud is generated on the
+    /// simulation thread.
     pub fn new_simulation(&self, config: SimulationConfig) -> Result<SimulationHandle, AppError> {
         self.create_simulation(config, false)
     }
 
-    /// Comme [`Self::new_simulation`], mais en pause : de quoi armer un
-    /// enregistrement avant le premier pas, puis relancer le calcul.
+    /// Like [`Self::new_simulation`], but paused: enough to arm a recording
+    /// before the first step, then restart the computation.
     pub fn new_simulation_paused(
         &self,
         config: SimulationConfig,
@@ -135,12 +135,12 @@ impl SimulatorService {
         ))
     }
 
-    /// Lit une sauvegarde sans la démarrer (le moteur absent est remplacé
-    /// par le moteur par défaut).
+    /// Reads a save without starting it (a missing engine is replaced by the
+    /// default engine).
     pub fn read_save(&self, path: &Path) -> Result<SaveData, AppError> {
         let mut data = self.repository.load(path)?;
-        // Moteur de la sauvegarde absent (ex. pas de carte graphique) : le
-        // moteur par défaut prend le relais.
+        // Engine of the save missing (e.g. no graphics card): the default engine
+        // takes over.
         if self.registry.get(&data.config.engine).is_none() {
             if let Some(id) = self.registry.default_id() {
                 data.config.engine = id.to_owned();
@@ -149,10 +149,10 @@ impl SimulatorService {
         Ok(data)
     }
 
-    /// Charge une sauvegarde et la redémarre en pause. Si elle est liée à
-    /// un enregistrement (suspendu, ou en cours lors d'une sauvegarde F5),
-    /// celui-ci est rouvert et reprend dès que le calcul est relancé (les
-    /// instantanés postérieurs sont supprimés).
+    /// Loads a save and restarts it paused. If it is linked to a recording
+    /// (suspended, or running during an F5 save), that recording is reopened
+    /// and resumes as soon as the computation restarts (later snapshots are
+    /// deleted).
     pub fn load_simulation(&self, path: &Path) -> Result<LoadedSimulation, AppError> {
         let data = self.read_save(path)?;
         let loaded = self.start_loaded(data, None)?;
@@ -162,9 +162,8 @@ impl SimulatorService {
         Ok(loaded)
     }
 
-    /// Démarre une sauvegarde lue par [`Self::read_save`]. `continue_with`
-    /// désigne un enregistrement à poursuivre ; à défaut, celui auquel la
-    /// sauvegarde est liée.
+    /// Starts a save read by [`Self::read_save`]. `continue_with` designates a
+    /// recording to continue; otherwise, the one the save is linked to.
     pub fn start_loaded(
         &self,
         data: SaveData,
@@ -174,7 +173,7 @@ impl SimulatorService {
             .registry
             .get(&data.config.engine)
             .ok_or_else(|| AppError::UnknownEngine(data.config.engine.clone()))?;
-        // Lien exact (suspension) seulement s'il désigne le fichier demandé.
+        // Exact link (suspension) only if it designates the requested file.
         let exact = data
             .recording
             .clone()
@@ -221,9 +220,8 @@ impl SimulatorService {
         })
     }
 
-    /// Enregistrements qui peuvent être poursuivis depuis cette sauvegarde :
-    /// mêmes conditions initiales, et au moins un instantané antérieur ou
-    /// égal au pas de la sauvegarde.
+    /// Recordings that can be continued from this save: same initial
+    /// conditions, and at least one snapshot before or at the save's step.
     pub fn continuable_recordings(&self, data: &SaveData) -> Vec<Continuation> {
         let step = data.state.step;
         let Ok(list) = self.recordings.list() else {
@@ -246,11 +244,11 @@ impl SimulatorService {
             .collect()
     }
 
-    /// Construit le lien de reprise d'un enregistrement à partir d'une
-    /// sauvegarde qui n'y est pas liée exactement. Les corps disparus entre
-    /// le dernier instantané conservé et la sauvegarde reçoivent leur devenir
-    /// réel s'il figure dans l'instantané suivant, « éliminé » sinon.
-    /// Renvoie aussi le nombre d'instantanés qui seront supprimés.
+    /// Builds the resume link of a recording from a save that is not exactly
+    /// linked to it. Bodies that disappeared between the last kept snapshot and
+    /// the save get their real fate if it appears in the next snapshot,
+    /// "removed" otherwise. Also returns the number of snapshots that will be
+    /// deleted.
     fn continuation_link(&self, data: &SaveData, path: &Path) -> Result<(RecordingLink, usize), String> {
         let step = data.state.step;
         let mut reader = self.recordings.open(path).map_err(|e| e.to_string())?;
@@ -266,9 +264,8 @@ impl SimulatorService {
         let frame = reader.read_frame(keep - 1).map_err(|e| e.to_string())?;
         let recorded: HashSet<BodyId> = frame.bodies.ids.iter().copied().collect();
         let present: HashSet<BodyId> = data.state.bodies.ids.iter().copied().collect();
-        // Les corps ne font que disparaître : tout corps massif de la
-        // sauvegarde doit figurer dans l'instantané (la poussière, elle, peut
-        // avoir été sous-échantillonnée).
+        // Bodies only ever disappear: every massive body of the save must appear
+        // in the snapshot (dust, on the other hand, may have been subsampled).
         if let Some(id) = data
             .state
             .bodies
@@ -318,9 +315,9 @@ impl SimulatorService {
         ))
     }
 
-    /// Suspend l'enregistrement en cours et sauvegarde la simulation au même
-    /// instant, en liant les deux : recharger cette sauvegarde poursuivra
-    /// l'enregistrement. `Ok(None)` si aucun enregistrement n'était actif.
+    /// Suspends the running recording and saves the simulation at the same
+    /// moment, linking both: reloading this save will continue the recording.
+    /// `Ok(None)` if no recording was active.
     pub fn suspend_recording(
         &self,
         handle: &SimulationHandle,
@@ -346,9 +343,9 @@ impl SimulatorService {
         ))
     }
 
-    /// Sauvegarde un instantané. Peut être appelé depuis un thread
-    /// d'arrière-plan : l'instantané est immuable et partagé. `recording` :
-    /// enregistrement en cours, que le chargement poursuivra.
+    /// Saves a snapshot. May be called from a background thread: the snapshot
+    /// is immutable and shared. `recording`: running recording, which loading
+    /// will continue.
     pub fn save(
         &self,
         name: &str,
@@ -374,8 +371,8 @@ impl SimulatorService {
         Ok(self.repository.list()?)
     }
 
-    /// Démarre l'enregistrement d'une simulation : un instantané maintenant,
-    /// puis tous les `interval` pas.
+    /// Starts recording a simulation: a snapshot now, then every `interval`
+    /// steps.
     pub fn start_recording(
         &self,
         name: &str,
@@ -402,8 +399,8 @@ impl SimulatorService {
         Ok(self.recordings.list()?)
     }
 
-    /// Enregistrement lié à une sauvegarde (repris ou poursuivi à son
-    /// chargement), s'il est dans le dossier des enregistrements.
+    /// Recording linked to a save (resumed or continued when it is loaded), if
+    /// it is in the recordings folder.
     pub fn linked_recording(&self, save: &SaveSummary) -> Option<RecordingSummary> {
         let name = save.recording.as_deref()?;
         self.recordings
@@ -413,7 +410,7 @@ impl SimulatorService {
             .find(|r| r.path.file_name().is_some_and(|n| n.to_string_lossy() == name))
     }
 
-    /// Sauvegardes liées à l'enregistrement `path`.
+    /// Saves linked to the recording `path`.
     pub fn linked_saves(&self, path: &Path) -> Vec<SaveSummary> {
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             return Vec::new();
@@ -426,7 +423,7 @@ impl SimulatorService {
             .collect()
     }
 
-    /// Supprime une sauvegarde ; `with_linked` : aussi l'enregistrement lié.
+    /// Deletes a save; `with_linked`: the linked recording too.
     pub fn delete_save(&self, save: &SaveSummary, with_linked: bool) -> Result<(), AppError> {
         let linked = with_linked.then(|| self.linked_recording(save)).flatten();
         self.repository.delete(&save.path)?;
@@ -436,8 +433,7 @@ impl SimulatorService {
         Ok(())
     }
 
-    /// Supprime un enregistrement ; `with_linked` : aussi les sauvegardes
-    /// liées.
+    /// Deletes a recording; `with_linked`: the linked saves too.
     pub fn delete_recording(&self, rec: &RecordingSummary, with_linked: bool) -> Result<(), AppError> {
         let linked = if with_linked {
             self.linked_saves(&rec.path)
@@ -451,10 +447,9 @@ impl SimulatorService {
         Ok(())
     }
 
-    /// Renomme une sauvegarde. Son enregistrement lié est renommé avec elle
-    /// (sans le suffixe « _reprise »), ainsi que les autres sauvegardes liées
-    /// dont le nom commence par celui de l'enregistrement ; tous les liens
-    /// sont mis à jour.
+    /// Renames a save. Its linked recording is renamed with it (without the
+    /// "_reprise" suffix), as well as the other linked saves whose name starts
+    /// with the recording's; every link is updated.
     pub fn rename_save(&self, save: &SaveSummary, name: &str) -> Result<(), AppError> {
         let linked = self.linked_recording(save);
         let path = self.repository.rename(&save.path, name)?;
@@ -469,8 +464,8 @@ impl SimulatorService {
         Ok(())
     }
 
-    /// Renomme un enregistrement ; les sauvegardes liées suivent (liens mis à
-    /// jour, et nom changé quand il commence par celui de l'enregistrement).
+    /// Renames a recording; the linked saves follow (links updated, and name
+    /// changed when it starts with the recording's).
     pub fn rename_recording(&self, rec: &RecordingSummary, name: &str) -> Result<(), AppError> {
         let saves = self.linked_saves(&rec.path);
         let new_path = self.recordings.rename(&rec.path, name)?;
@@ -489,7 +484,7 @@ impl SimulatorService {
         Ok(())
     }
 
-    /// Ouvre un enregistrement pour relecture.
+    /// Opens a recording for playback.
     pub fn open_replay(&self, path: &Path) -> Result<ReplayPlayer, AppError> {
         let reader = self.recordings.open(path)?;
         if reader.info().frames.is_empty() {

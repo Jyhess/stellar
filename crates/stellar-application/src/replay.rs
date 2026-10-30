@@ -1,14 +1,14 @@
-//! Relecture d'un enregistrement à cadence d'affichage.
+//! Playback of a recording at display rate.
 //!
-//! Entre deux instantanés A et B, chaque corps suit une **interpolation
-//! cubique d'Hermite** construite sur ses positions et vitesses aux deux
-//! extrémités : la trajectoire est lisse et respecte les vitesses
-//! enregistrées. Un corps absorbé entre A et B rejoint le corps qui l'a
-//! absorbé ; un corps éliminé poursuit en ligne droite puis disparaît.
+//! Between two snapshots A and B, each body follows a **cubic Hermite
+//! interpolation** built on its positions and velocities at both ends: the
+//! trajectory is smooth and matches the recorded velocities. A body
+//! absorbed between A and B joins the body that absorbed it; a removed body
+//! continues in a straight line, then disappears.
 //!
-//! Les instantanés sont lus et décodés par un thread dédié, avec un cache et
-//! une lecture anticipée dans le sens de lecture. Si un instantané n'est pas
-//! encore prêt, l'horloge attend au lieu de sauter.
+//! Snapshots are read and decoded by a dedicated thread, with a cache and
+//! read-ahead in the playback direction. If a snapshot is not ready yet,
+//! the clock waits instead of jumping.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -20,20 +20,20 @@ use stellar_domain::{ranking, BodyId, BodySet, SimulationState, Vec3};
 
 use crate::recording::{BodyFate, Keyframe, RecordingInfo, RecordingReader};
 
-/// Nombre d'instantanés conservés en mémoire.
+/// Number of snapshots kept in memory.
 const CACHE_FRAMES: usize = 8;
-/// Instantanés lus à l'avance dans le sens de lecture.
+/// Snapshots read ahead in the playback direction.
 const PREFETCH: usize = 3;
 
 // ----------------------------------------------------------------------
-// Horloge
+// Clock
 // ----------------------------------------------------------------------
 
-/// Position de lecture, exprimée en instantanés (réel entre 0 et n − 1).
+/// Playback position, in snapshots (a real number between 0 and n − 1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaybackClock {
     pub position: f64,
-    /// Vitesse en instantanés par seconde (toujours positive).
+    /// Speed in snapshots per second (always positive).
     pub speed: f64,
     pub reverse: bool,
     pub playing: bool,
@@ -55,7 +55,7 @@ impl PlaybackClock {
         self.frame_count.saturating_sub(1) as f64
     }
 
-    /// Avance de `dt` secondes ; s'arrête aux extrémités.
+    /// Advances by `dt` seconds; stops at both ends.
     pub fn advance(&mut self, dt: f64) {
         if !self.playing {
             return;
@@ -72,7 +72,7 @@ impl PlaybackClock {
         self.position = position.clamp(0.0, self.last());
     }
 
-    /// Saute à l'instantané entier suivant (`+1`) ou précédent (`-1`).
+    /// Jumps to the next (`+1`) or previous (`-1`) whole snapshot.
     pub fn step(&mut self, direction: i32) {
         let p = if direction > 0 {
             (self.position + 1e-9).floor() + 1.0
@@ -83,7 +83,7 @@ impl PlaybackClock {
         self.seek(p);
     }
 
-    /// Instantanés encadrants et fraction : (a, b, t), avec b = a + 1.
+    /// Surrounding snapshots and fraction: (a, b, t), with b = a + 1.
     pub fn pair(&self) -> (usize, usize, f64) {
         if self.frame_count < 2 {
             return (0, 0, 0.0);
@@ -97,20 +97,20 @@ impl PlaybackClock {
 // Interpolation
 // ----------------------------------------------------------------------
 
-/// Point d'arrivée d'un corps de A dans B.
+/// Where a body of A ends up in B.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    /// Même corps, à l'indice donné de B.
+    /// The same body, at the given index of B.
     Same(u32),
-    /// Absorbé par le corps à l'indice donné de B.
+    /// Absorbed by the body at the given index of B.
     Merged(u32),
-    /// Éliminé (ou introuvable) : extrapolation rectiligne.
+    /// Removed (or not found): straight-line extrapolation.
     Gone,
 }
 
-/// Associe chaque corps de A à son point d'arrivée dans B. Les corps des deux
-/// instantanés sont triés par identifiant ; les fusions en chaîne entre A et
-/// B sont suivies grâce aux devenirs enregistrés dans B.
+/// Maps each body of A to where it ends up in B. Bodies of both snapshots
+/// are sorted by identifier; chained mergers between A and B are followed
+/// through the fates recorded in B.
 pub fn build_targets(a: &Keyframe, b: &Keyframe) -> Vec<Target> {
     let fates: HashMap<BodyId, BodyFate> = b.fates.iter().copied().collect();
     let index_in_b = |id: BodyId| b.bodies.ids.binary_search(&id).ok().map(|i| i as u32);
@@ -138,8 +138,8 @@ pub fn build_targets(a: &Keyframe, b: &Keyframe) -> Vec<Target> {
         .collect()
 }
 
-/// Interpole entre A et B à la fraction `t` ∈ [0, 1] ; écrit le résultat
-/// dans `out` (mêmes corps que A, masses de A).
+/// Interpolates between A and B at fraction `t` ∈ [0, 1]; writes the result
+/// into `out` (same bodies as A, masses of A).
 pub fn interpolate(a: &Keyframe, b: &Keyframe, targets: &[Target], t: f64, out: &mut BodySet) {
     let n = a.bodies.len();
     let span = (b.time - a.time).max(0.0);
@@ -148,7 +148,7 @@ pub fn interpolate(a: &Keyframe, b: &Keyframe, targets: &[Target], t: f64, out: 
     let h10 = t3 - 2.0 * t2 + t;
     let h01 = -2.0 * t3 + 3.0 * t2;
     let h11 = t3 - t2;
-    // Dérivées (par rapport au temps physique).
+    // Derivatives (with respect to physical time).
     let inv = if span > 0.0 { 1.0 / span } else { 0.0 };
     let d00 = (6.0 * t2 - 6.0 * t) * inv;
     let d10 = 3.0 * t2 - 4.0 * t + 1.0;
@@ -194,7 +194,7 @@ pub fn interpolate(a: &Keyframe, b: &Keyframe, targets: &[Target], t: f64, out: 
 }
 
 // ----------------------------------------------------------------------
-// Chargement en arrière-plan
+// Background loading
 // ----------------------------------------------------------------------
 
 #[derive(Default)]
@@ -220,8 +220,8 @@ impl Loader {
             .name("stellar-replay-loader".into())
             .spawn(move || {
                 while let Ok(first) = rx.recv() {
-                    // Les demandes accumulées sont traitées de la plus récente
-                    // (la plus urgente) à la plus ancienne.
+                    // Accumulated requests are handled from the most recent (the most urgent)
+                    // to the oldest.
                     let mut batch = vec![first];
                     batch.extend(rx.try_iter());
                     for &i in batch.iter().rev() {
@@ -234,7 +234,7 @@ impl Loader {
                         match result {
                             Ok(f) => {
                                 g.frames.insert(i, Arc::new(f));
-                                // Éviction des instantanés les plus éloignés.
+                                // Eviction of the farthest snapshots.
                                 while g.frames.len() > CACHE_FRAMES {
                                     let focus = g.focus;
                                     let far = *g
@@ -258,7 +258,7 @@ impl Loader {
         }
     }
 
-    /// Renvoie l'instantané s'il est prêt ; sinon le demande.
+    /// Returns the snapshot if it is ready; otherwise requests it.
     fn get(&self, i: usize) -> Option<Arc<Keyframe>> {
         let mut g = self.cache.lock().expect("verrou");
         if let Some(f) = g.frames.get(&i) {
@@ -295,7 +295,7 @@ impl Drop for Loader {
 }
 
 // ----------------------------------------------------------------------
-// Lecteur
+// Player
 // ----------------------------------------------------------------------
 
 struct Pair {
@@ -307,7 +307,7 @@ struct Pair {
     top: Vec<(BodyId, f64)>,
 }
 
-/// Lecteur d'enregistrement : horloge, chargement et interpolation.
+/// Recording player: clock, loading and interpolation.
 pub struct ReplayPlayer {
     info: RecordingInfo,
     loader: Loader,
@@ -315,8 +315,8 @@ pub struct ReplayPlayer {
     fates: HashMap<BodyId, BodyFate>,
     pair: Option<Pair>,
     state: SimulationState,
-    /// Position effectivement affichée (peut être en retard sur l'horloge
-    /// si un instantané se fait attendre).
+    /// Position actually displayed (may lag behind the clock while a snapshot
+    /// is awaited).
     shown: Option<f64>,
     fraction: f64,
 }
@@ -345,24 +345,24 @@ impl ReplayPlayer {
         self.info.frames.len()
     }
 
-    /// État interpolé à la position affichée.
+    /// Interpolated state at the displayed position.
     pub fn state(&self) -> &SimulationState {
         &self.state
     }
 
-    /// Échange l'état interpolé contre `replacement` (tampon recyclé) : évite
-    /// une copie complète à chaque image. Le tampon rendu est réécrit en
-    /// entier à la prochaine interpolation.
+    /// Swaps the interpolated state for `replacement` (a recycled buffer):
+    /// avoids a full copy at every frame. The returned buffer is entirely
+    /// rewritten at the next interpolation.
     pub fn swap_state(&mut self, replacement: SimulationState) -> SimulationState {
         std::mem::replace(&mut self.state, replacement)
     }
 
-    /// Les corps les plus massifs de l'instantané courant.
+    /// The most massive bodies of the current snapshot.
     pub fn top(&self) -> &[(BodyId, f64)] {
         self.pair.as_ref().map_or(&[], |p| &p.top)
     }
 
-    /// Poids des particules de poussière de l'instantané courant.
+    /// Weight of the dust particles of the current snapshot.
     pub fn dust_weight(&self) -> f32 {
         self.pair.as_ref().map_or(1.0, |p| {
             p.fa.dust_weight + (p.fb.dust_weight - p.fa.dust_weight) * self.fraction as f32
@@ -373,7 +373,7 @@ impl ReplayPlayer {
         self.shown.is_some()
     }
 
-    /// Vrai si l'affichage attend un instantané.
+    /// True if the display is waiting for a snapshot.
     pub fn is_waiting(&self) -> bool {
         self.shown
             .is_none_or(|s| (s - self.clock.position).abs() > 1e-9)
@@ -383,7 +383,7 @@ impl ReplayPlayer {
         self.loader.error()
     }
 
-    /// Identifiant actuel d'un corps après les fusions déjà relues.
+    /// Current identifier of a body after the mergers already played.
     pub fn resolve(&self, id: BodyId) -> Option<BodyId> {
         let mut cur = id;
         for _ in 0..1_000 {
@@ -425,8 +425,8 @@ impl ReplayPlayer {
         true
     }
 
-    /// Fait avancer la lecture de `dt` secondes. Renvoie vrai si l'état
-    /// affiché a changé.
+    /// Advances playback by `dt` seconds. Returns true if the displayed state
+    /// changed.
     pub fn update(&mut self, dt: f64) -> bool {
         if self.frame_count() == 0 {
             return false;
@@ -436,7 +436,7 @@ impl ReplayPlayer {
         let (a, b, t) = self.clock.pair();
         self.loader.set_focus(a);
 
-        // Lecture anticipée dans le sens de lecture.
+        // Read-ahead in the playback direction.
         let n = self.frame_count();
         for k in 1..=PREFETCH {
             let i = if self.clock.reverse {
@@ -450,7 +450,7 @@ impl ReplayPlayer {
         }
 
         if !self.ensure_pair(a, b) {
-            // Instantané pas encore prêt : l'horloge attend.
+            // Snapshot not ready yet: the clock waits.
             if self.clock.playing {
                 self.clock.position = before;
             }
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn hermite_reproduces_uniform_circular_motion_closely() {
-        // Mouvement circulaire de période 2π, instantanés espacés de 0,5.
+        // Circular motion of period 2π, snapshots 0.5 apart.
         let pos = |t: f64| Vec3::new(t.cos(), t.sin(), 0.0);
         let vel = |t: f64| Vec3::new(-t.sin(), t.cos(), 0.0);
         let a = frame(0, 0.0, &[(1, pos(0.0), vel(0.0))], vec![]);
@@ -536,7 +536,7 @@ mod tests {
             let err = (out.positions[0] - pos(0.5 * t)).length();
             assert!(err < 1e-3, "erreur {err} à t = {t}");
         }
-        // Extrémités exactes.
+        // Exact ends.
         interpolate(&a, &b, &targets, 1.0, &mut out);
         assert!((out.positions[0] - pos(0.5)).length() < 1e-12);
     }
@@ -554,7 +554,7 @@ mod tests {
             ],
             vec![],
         );
-        // 3 → 2 → 1 (chaîne), 4 éliminé.
+        // 3 → 2 → 1 (chain), 4 removed.
         let b = frame(
             1,
             1.0,

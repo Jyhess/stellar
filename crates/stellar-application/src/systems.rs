@@ -1,23 +1,24 @@
-//! Moteur composite : une simulation découpée en sous-systèmes.
+//! Composite engine: a simulation split into subsystems.
 //!
-//! Chaque sous-système est calculé par son propre moteur (créé par la même
-//! fabrique), dans son propre repère : positions relatives à une origine
-//! proche de son barycentre, ce qui préserve la précision d'un amas parti
-//! très loin. Les sous-systèmes avancent au même pas ; chacun ressent les
-//! autres par un champ linéaire (voir [`stellar_domain::systems`]), calculé
-//! sur les barycentres extrapolés à la fin du pas.
+//! Each subsystem is computed by its own engine (created by the same
+//! factory), in its own frame: positions relative to an origin near its
+//! barycenter, which preserves the precision of a cluster gone very far
+//! away. Subsystems advance with the same step; each one feels the others
+//! through a linear field (see [`stellar_domain::systems`]), computed from
+//! the barycenters extrapolated to the end of the step.
 //!
-//! À chaque nettoyage :
-//! - un amas éjecté assez éloigné de son système devient un sous-système ;
-//! - deux sous-systèmes trop proches sont réunis ;
-//! - un sous-système dont le barycentre s'est écarté de son origine est
-//!   recentré ;
-//! - les corps qu'un sous-système secondaire élimine (évadés) ne sont pas
-//!   perdus : ils rejoignent le système principal (le plus massif), dont le
-//!   nettoyage décidera de leur sort.
+//! At each cleanup:
+//! - an ejected cluster far enough from its system becomes a subsystem;
+//! - two subsystems that are too close are merged;
+//! - a subsystem whose barycenter has moved away from its origin is
+//!   recentred;
+//! - bodies removed by a secondary subsystem (escapees) are not lost: they
+//!   join the main system (the most massive one), whose cleanup decides
+//!   their fate.
 //!
-//! Le reste de l'application voit un moteur ordinaire ; avec un seul
-//! sous-système (cas courant), le composite se contente de relayer.
+//! The rest of the application sees an ordinary engine; with a single
+//! subsystem (the usual case), the composite only forwards calls. Details:
+//! `docs/subsystems.md`.
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -32,11 +33,11 @@ use stellar_domain::{
 
 struct Subsystem {
     engine: Box<dyn PhysicsEngine>,
-    /// Origine du repère du moteur (coordonnées globales).
+    /// Origin of the engine's frame (global coordinates).
     origin: Vec3,
     size: f64,
     anchor: BodyId,
-    /// Moments au dernier pas (coordonnées globales).
+    /// Moments at the last step (global coordinates).
     moments: Moments,
 }
 
@@ -53,13 +54,13 @@ impl Subsystem {
     }
 }
 
-/// Moteur composite (voir le module).
+/// Composite engine (see the module).
 pub struct MultiSystem {
     factory: Arc<dyn EngineFactory>,
     params: PhysicsParams,
     initial_mass: Option<f64>,
     systems: Vec<Subsystem>,
-    /// Affichage direct composite, si les moteurs en offrent un.
+    /// Composite live view, if the engines offer one.
     view: Option<Arc<SystemsView>>,
 }
 
@@ -89,8 +90,8 @@ fn moments_of(bodies: &BodySet) -> Moments {
 }
 
 impl MultiSystem {
-    /// Construit les sous-systèmes décrits par `state.systems` (un seul si
-    /// la liste est vide ; son repère est alors celui de l'état).
+    /// Builds the subsystems described by `state.systems` (a single one if the
+    /// list is empty; its frame is then the state's).
     pub fn new(
         factory: Arc<dyn EngineFactory>,
         state: SimulationState,
@@ -138,8 +139,7 @@ impl MultiSystem {
         Ok(this)
     }
 
-    /// Crée le moteur d'un sous-système à partir de corps en coordonnées
-    /// globales.
+    /// Creates the engine of a subsystem from bodies in global coordinates.
     fn build(
         &self,
         mut bodies: BodySet,
@@ -171,7 +171,7 @@ impl MultiSystem {
         })
     }
 
-    /// Corps d'un sous-système, en coordonnées globales.
+    /// Bodies of a subsystem, in global coordinates.
     fn bodies_of(system: &Subsystem) -> (BodySet, u64, f64) {
         let s = system.engine.state();
         let mut bodies = s.bodies;
@@ -179,7 +179,7 @@ impl MultiSystem {
         (bodies, s.step, s.time)
     }
 
-    /// Indice du système principal (le plus massif).
+    /// Index of the main system (the most massive).
     fn root(&self) -> usize {
         (0..self.systems.len())
             .max_by(|&a, &b| {
@@ -207,8 +207,8 @@ impl MultiSystem {
         }
     }
 
-    /// Champs extérieurs valables à la fin du pas : barycentres extrapolés
-    /// (vitesse et attraction mutuelle), sources ponctuelles.
+    /// External fields valid at the end of the step: extrapolated barycenters
+    /// (velocity and mutual attraction), point sources.
     fn apply_fields(&mut self) {
         let g = self.params.g;
         let eps2 = self.params.softening * self.params.softening;
@@ -247,7 +247,7 @@ impl MultiSystem {
         }
     }
 
-    /// Confie des corps (coordonnées globales) au système `target`.
+    /// Hands bodies (global coordinates) over to system `target`.
     fn transfer(&mut self, target: usize, mut bodies: BodySet) {
         if bodies.is_empty() {
             return;
@@ -257,7 +257,7 @@ impl MultiSystem {
         if self.systems[target].engine.insert(&bodies) {
             return;
         }
-        // Capacité atteinte : reconstruction avec les nouveaux venus.
+        // Capacity reached: rebuild with the newcomers.
         shift(&mut bodies, origin);
         let (mut all, step, time) = Self::bodies_of(&self.systems[target]);
         for i in 0..bodies.len() {
@@ -274,8 +274,8 @@ impl MultiSystem {
         }
     }
 
-    /// Détache l'amas `cluster` du système `i` si le critère de séparation
-    /// est rempli ; renvoie `true` si c'est fait.
+    /// Detaches the cluster `cluster` from system `i` if the split criterion is
+    /// met; returns `true` if done.
     fn try_split(&mut self, i: usize, cluster: &EjectedCluster) -> bool {
         let parent = &self.systems[i];
         let m = parent.moments;
@@ -316,8 +316,8 @@ impl MultiSystem {
         true
     }
 
-    /// Réunit deux sous-systèmes trop proches (une réunion par appel) ;
-    /// renvoie `true` si c'est fait.
+    /// Merges two subsystems that are too close (one merge per call); returns
+    /// `true` if done.
     fn try_merge(&mut self) -> bool {
         let n = self.systems.len();
         for a in 0..n {
@@ -356,9 +356,9 @@ impl MultiSystem {
         false
     }
 
-    /// Recentre les sous-systèmes dont le barycentre s'est écarté de leur
-    /// origine de plus de la moitié de leur taille (précision en simple
-    /// précision du moteur GPU) ; renvoie `true` si l'un l'a été.
+    /// Recentres the subsystems whose barycenter has moved away from their
+    /// origin by more than half their size (to preserve the GPU engine's
+    /// single precision); returns `true` if one was.
     fn recenter(&mut self) -> bool {
         let mut changed = false;
         for i in 0..self.systems.len() {
@@ -398,7 +398,7 @@ impl PhysicsEngine for MultiSystem {
             };
             report.merges.extend(r.merges);
             if multi && i != root {
-                // Évadés d'un sous-système secondaire : confiés au principal.
+                // Escapees of a secondary subsystem: handed over to the main one.
                 let mut b = r.removed_bodies;
                 shift(&mut b, system.origin);
                 for k in 0..b.len() {
@@ -429,8 +429,8 @@ impl PhysicsEngine for MultiSystem {
             let mut split: HashSet<usize> = HashSet::new();
             let mut listed = Vec::new();
             for (i, c) in found {
-                // Une séparation par système et par nettoyage (les indices
-                // des corps changent avec la reconstruction).
+                // One split per system and per cleanup (body indices change with the
+                // rebuild).
                 if !split.contains(&i) && self.try_split(i, &c) {
                     split.insert(i);
                     changed = true;
@@ -527,8 +527,8 @@ impl PhysicsEngine for MultiSystem {
         }
     }
 
-    /// Énergies propres des sous-systèmes, plus leurs énergies d'interaction
-    /// (sources ponctuelles).
+    /// Own energies of the subsystems, plus their interaction energies (point
+    /// sources).
     fn diagnostics(&self) -> Diagnostics {
         let mut d = Diagnostics::default();
         for s in &self.systems {
