@@ -14,7 +14,8 @@ Project skills (`.claude/skills/`):
 - Talk to the user in **elaborate French with a rich vocabulary**.
 - Do not try to prolong the discussion; ask a question only if it helps answer the request. Do ask every clarifying question **before** implementing a feature.
 - **Documentation** (`*.md`, skills) is in **English**.
-- **Code comments, error messages of the lower layers, CLI options and help, commit messages** are in **French**.
+- **Code comments** (including doc comments and WGSL shaders), **CLI option names** and **commit messages** are in **English**.
+- **Error messages of the lower layers** (domain, application, engines, persistence) stay in **French**; the CLI help and messages are translated like the interface.
 - The **interface** has French source strings translated into English (`stellar-app/src/i18n.rs`): every displayed text goes through `tr("…")` or `tr!("… {} …", x)` and gets its entry in the `EN` table. Numbers are formatted by language (`format.rs`).
 - Update `README.md` and `SPEC.md` with every feature.
 
@@ -65,7 +66,7 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 
 ## Git
 
-- Commit messages in French: a title, then a list of changes.
+- Commit messages in English: a title, then a list of changes.
 - Line endings: LF in the repository (`.gitattributes`, `eol=lf`). Files may be CRLF in the Windows working copy; Git normalizes them. Never commit a line-ending conversion mixed with a real change.
 - Commit or push only when asked.
 - `*.exe`, `*.stellar`, `*.stellarec` are ignored.

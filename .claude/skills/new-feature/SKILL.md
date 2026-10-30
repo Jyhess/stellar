@@ -30,7 +30,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 | New engine | registration in `crates/stellar-app/src/lib.rs`, `--engine` mapping in `console.rs` |
 | Any feature | `SPEC.md` (rules in force), a line in the current or a new entry of `docs/history.md`, README sections concerned |
 
-Documentation is written in **English**. Code comments, error messages of the lower layers, CLI options and commit messages stay in **French**.
+Documentation, code comments and CLI option names are written in **English**; interface source strings and error messages of the lower layers stay in **French**.
 
 ## 4. Tests
 
@@ -40,4 +40,4 @@ Documentation is written in **English**. Code comments, error messages of the lo
 
 ## 5. Commit (only when asked)
 
-French message: a title, then a list of changes, ending with the attribution line. Never mix a line-ending conversion with a real change.
+English message: a title, then a list of changes, ending with the attribution line. Never mix a line-ending conversion with a real change.

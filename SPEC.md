@@ -7,7 +7,7 @@ The rules currently in force. This document is the reference when the code and t
 - **Rust + wgpu + egui**, Windows only (native executables `stellar.exe` and `stellar-cli.exe`).
 - Two engines: **GPU** (wgpu compute shaders, single precision; the default when a compatible card is present) and **CPU** (rayon, AVX2/FMA, double precision).
 - Target: **1 million particles and more**. GPU limit: 65,535 × 256 ≈ 16.7 M bodies. Creation limit: engine limit, 80 % of main memory, one billion.
-- Interface in French and English; documentation in English; code comments, error messages of the lower layers, command-line options and commit messages in French.
+- Interface in French and English; documentation, code comments, command-line option names and commit messages in English; error messages of the lower layers in French.
 
 ## Architecture
 - **Clean architecture** (domain / use cases / adapters / infrastructure), except inside the engines, which are freely optimized (SoA, SIMD, GPU).
