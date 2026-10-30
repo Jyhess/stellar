@@ -1,28 +1,29 @@
 //! # stellar-persistence
 //!
-//! Implémentation de [`SimulationRepository`] sur le système de fichiers.
+//! Implementation of [`SimulationRepository`] on the file system. Layout and
+//! history of both formats: `docs/formats.md`.
 //!
-//! ## Format `.stellar` (version 6)
+//! ## `.stellar` format (version 6)
 //!
-//! | Octets      | Contenu                                         |
+//! | Bytes       | Content                                         |
 //! |-------------|-------------------------------------------------|
 //! | 8           | signature `STELLAR\0`                           |
-//! | 4 (LE)      | version du format                               |
-//! | 4 (LE)      | taille L de l'en-tête                           |
-//! | L           | en-tête : [`SaveSummary`] encodé en bincode     |
-//! | reste       | [`SaveData`] encodé en bincode, compressé zstd  |
+//! | 4 (LE)      | format version                                  |
+//! | 4 (LE)      | header size L                                   |
+//! | L           | header: [`SaveSummary`] encoded with bincode    |
+//! | rest        | [`SaveData`] encoded with bincode, zstd         |
 //!
-//! L'en-tête permet de lister les sauvegardes sans tout décompresser.
+//! The header allows listing saves without decompressing everything.
 //!
-//! bincode n'étant pas auto-descriptif, tout changement de [`SaveData`] ou
-//! de [`SaveSummary`] impose une nouvelle version. Versions lues :
-//! - 6 : facteur de la vitesse orbitale dans les conditions initiales ;
-//! - 5 : relue par [`legacy`] (facteur 1) ;
-//! - 4 : relue par [`legacy`] (un seul système) ;
-//! - 3 : relue par [`legacy`] (seuils des amas complétés par les valeurs
-//!   suggérées, un seul système).
+//! bincode is not self-describing, so any change to [`SaveData`] or
+//! [`SaveSummary`] requires a new version. Versions read:
+//! - 6: orbital velocity factor in the initial conditions;
+//! - 5: read through [`legacy`] (factor 1);
+//! - 4: read through [`legacy`] (a single system);
+//! - 3: read through [`legacy`] (cluster thresholds filled with the
+//!   suggested values, a single system).
 //!
-//! Les autres versions sont refusées.
+//! Other versions are refused.
 
 pub mod files;
 pub mod legacy;
@@ -39,18 +40,18 @@ use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepo
 
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
-/// Version écrite.
+/// Version written.
 const VERSION: u32 = 6;
-/// Plus ancienne version lue ([`legacy`]).
+/// Oldest version read ([`legacy`]).
 const OLDEST: u32 = 3;
 const MAX_HEADER: u32 = 1 << 20;
 const ZSTD_LEVEL: i32 = 3;
 
-/// Dépôt de sauvegardes rangées dans un dossier.
+/// Repository of saves stored in a folder.
 #[derive(Debug, Clone)]
 pub struct FileRepository {
     dir: PathBuf,
-    /// Suppression vers la corbeille (sinon définitive).
+    /// Deletion to the recycle bin (otherwise permanent).
     trash: bool,
 }
 
@@ -62,7 +63,7 @@ impl FileRepository {
         }
     }
 
-    /// Les suppressions passent par la corbeille de Windows.
+    /// Deletions go through the Windows recycle bin.
     pub fn with_trash(mut self) -> Self {
         self.trash = true;
         self
@@ -100,7 +101,7 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Lit l'en-tête ; renvoie aussi la version du fichier.
+/// Reads the header; also returns the file's version.
 fn read_header(r: &mut impl Read) -> Result<(SaveSummary, u32), RepositoryError> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)
@@ -127,8 +128,8 @@ fn read_header(r: &mut impl Read) -> Result<(SaveSummary, u32), RepositoryError>
 }
 
 impl FileRepository {
-    /// Écrit `data` dans `path` (fichier temporaire puis renommage : jamais
-    /// de sauvegarde à moitié écrite).
+    /// Writes `data` to `path` (temporary file then rename: never a half-written
+    /// save).
     fn write(&self, path: &Path, data: &SaveData, saved_at_unix: i64) -> Result<(), RepositoryError> {
         let summary = SaveSummary {
             path: PathBuf::new(),
@@ -151,8 +152,7 @@ impl FileRepository {
         };
         let header = bincode::serialize(&summary).map_err(fmt)?;
 
-        // Écriture dans un fichier temporaire puis renommage : jamais de
-        // sauvegarde à moitié écrite.
+        // Write to a temporary file then rename: never a half-written save.
         let tmp = path.with_extension(format!("{EXTENSION}.tmp"));
         {
             let mut w = BufWriter::new(File::create(&tmp).map_err(io)?);
@@ -250,9 +250,9 @@ impl SimulationRepository for FileRepository {
             let Ok(file) = File::open(&path) else {
                 continue;
             };
-            // Les fichiers illisibles sont ignorés plutôt que de bloquer la liste.
+            // Unreadable files are skipped rather than blocking the list.
             if let Ok((mut s, _)) = read_header(&mut BufReader::new(file)) {
-                // Le nom est celui du fichier (renommé peut-être depuis).
+                // The name is the file's name (it may have been renamed since).
                 if let Some(stem) = path.file_stem() {
                     s.name = stem.to_string_lossy().into_owned();
                 }
@@ -371,8 +371,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Écrit une sauvegarde d'une version antérieure telle que l'ancien
-    /// programme la produisait.
+    /// Writes a save of an older version, as the former program produced it.
     fn write_old(path: &Path, version: u32, summary: &SaveSummary, data: &impl serde::Serialize) {
         let mut w = Vec::new();
         w.extend_from_slice(MAGIC);
@@ -425,8 +424,8 @@ mod tests {
         write_old(&path, 3, &summary, &old);
         let repo = FileRepository::new(&dir);
         assert_eq!(repo.list().unwrap().len(), 1);
-        // Les seuils absents prennent les valeurs suggérées : on retrouve la
-        // configuration par défaut ; un seul système.
+        // Missing thresholds take the suggested values: the default configuration
+        // is recovered; a single system.
         let mut expected = data.clone();
         expected.state.systems.clear();
         assert_eq!(repo.load(&path).unwrap(), expected);
@@ -446,7 +445,7 @@ mod tests {
         write_old(&path, 4, &summary, &v4);
         assert_eq!(repo.load(&path).unwrap(), expected);
 
-        // Version 5 : sous-systèmes, vitesse orbitale sans facteur (1).
+        // Version 5: subsystems, orbital velocity without factor (1).
         let v5 = legacy::SaveDataV5 {
             config: config_v5,
             state: data.state.clone(),

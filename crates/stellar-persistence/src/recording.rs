@@ -1,32 +1,33 @@
-//! Format d'enregistrement `.stellarec` (version 4 ; versions 1 à 3
-//! relues : en-têtes des versions 1 à 3 dans [`crate::legacy`], instantanés des
-//! versions 1 et 2 sans sous-systèmes ; un enregistrement repris garde la
-//! version de son fichier).
+//! `.stellarec` recording format (version 4; versions 1 to 3 are read:
+//! headers of versions 1 to 3 in [`crate::legacy`], snapshots of versions 1
+//! and 2 without subsystems; a resumed recording keeps the version of its
+//! file). Layout and history: `docs/formats.md`.
 //!
 //! ```text
-//! signature « STELREC\0 » · version (u32) · taille L (u32) · en-tête bincode (L octets)
-//! instantané* :
-//!     « FRAM » (u32) · pas (u64) · temps (f64) · nb de corps (u32)
-//!     taille C (u32) · charge utile compressée zstd (C octets)
-//! index (en fin de fichier, écrit à la clôture) :
-//!     bincode(Vec<(décalage, FrameMeta)>) · décalage de l'index (u64) · « STLRIDX\0 »
+//! signature "STELREC\0" · version (u32) · size L (u32) · bincode header (L bytes)
+//! snapshot*:
+//!     "FRAM" (u32) · step (u64) · time (f64) · body count (u32)
+//!     size C (u32) · zstd-compressed payload (C bytes)
+//! index (at the end of the file, written when closing):
+//!     bincode(Vec<(offset, FrameMeta)>) · index offset (u64) · "STLRIDX\0"
 //! ```
 //!
-//! Si le fichier n'a pas été clos (plantage), l'index est reconstruit en
-//! parcourant les en-têtes d'instantanés, sans décompression.
+//! If the file was not closed (crash), the index is rebuilt by walking the
+//! snapshot headers, without decompression.
 //!
-//! Charge utile d'un instantané (avant compression) :
-//! - poids de la poussière (f32), nombre de corps n (u32) ;
-//! - nombre G de sous-systèmes (u32, version 3), puis G boîtes de
-//!   quantification (min x, y, z, côté, f64) et la vitesse maximale (f64) ;
-//!   versions 1 et 2 : une boîte, puis la vitesse maximale ;
-//! - identifiants croissants, en écarts codés en varint ;
-//! - masses : entières en varint (cas usuel), sinon en f64 ;
-//! - si G > 1 : sous-système de chaque corps (u16, deux plans d'octets) ;
-//! - positions : 21 bits par axe, dans la boîte de leur sous-système,
-//!   rangées par plans d'octets (meilleure compression) ;
-//! - vitesses : 16 bits signés par axe, rapportées à la vitesse maximale, par plans d'octets ;
-//! - devenirs : (absorbé, résultant) ou (éliminé).
+//! Payload of a snapshot (before compression):
+//! - dust weight (f32), body count n (u32);
+//! - number G of subsystems (u32, version 3 and later), then G quantization
+//!   boxes (min x, y, z, side, f64) and the maximum speed (f64); versions 1
+//!   and 2: one box, then the maximum speed;
+//! - increasing identifiers, as gaps encoded as varints;
+//! - masses: integers as varints (the usual case), otherwise f64;
+//! - if G > 1: subsystem of each body (u16, two byte planes);
+//! - positions: 21 bits per axis, within the box of their subsystem, stored
+//!   as byte planes (better compression);
+//! - velocities: 16 signed bits per axis, relative to the maximum speed, as
+//!   byte planes;
+//! - fates: (absorbed, resulting) or (removed).
 
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -42,16 +43,16 @@ pub const EXTENSION: &str = "stellarec";
 const MAGIC: &[u8; 8] = b"STELREC\0";
 const INDEX_MAGIC: &[u8; 8] = b"STLRIDX\0";
 const FRAME_MAGIC: u32 = u32::from_le_bytes(*b"FRAM");
-/// Version écrite ; les versions 1 (paramètres sans les amas éjectés), 2
-/// (instantanés sans sous-systèmes) et 3 (vitesse orbitale sans facteur)
-/// sont lues. Les instantanés des versions 3 et 4 ont la même forme.
+/// Version written; versions 1 (parameters without ejected clusters), 2
+/// (snapshots without subsystems) and 3 (orbital velocity without factor)
+/// are read. Snapshots of versions 3 and 4 have the same layout.
 pub const VERSION: u32 = 4;
 const ZSTD_LEVEL: i32 = 3;
 const POS_BITS: u32 = 21;
 const POS_MAX: f64 = ((1u32 << POS_BITS) - 1) as f64;
 const VEL_MAX: f64 = 32767.0;
 const MAX_HEADER: u32 = 1 << 20;
-/// Taille de l'en-tête d'instantané : signature, pas, temps, nombre, taille.
+/// Size of a snapshot header: signature, step, time, count, size.
 const FRAME_HEAD: u64 = 4 + 8 + 8 + 4 + 4;
 
 fn io(e: std::io::Error) -> RepositoryError {
@@ -63,7 +64,7 @@ fn fmt(e: impl std::fmt::Display) -> RepositoryError {
 }
 
 // ----------------------------------------------------------------------
-// Codage d'un instantané
+// Snapshot encoding
 // ----------------------------------------------------------------------
 
 fn put_varint(out: &mut Vec<u8>, mut v: u64) {
@@ -121,8 +122,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// Encode un instantané (corps triés par identifiant) avant compression.
-/// Boîtes de quantification (coin, côté) des `count` groupes.
+/// Quantization boxes (corner, side) of the `count` groups.
 fn boxes(positions: &[Vec3], group: impl Fn(usize) -> usize, count: usize) -> Vec<(Vec3, f64)> {
     let mut lo = vec![Vec3::splat(f64::INFINITY); count];
     let mut hi = vec![Vec3::splat(f64::NEG_INFINITY); count];
@@ -143,8 +143,9 @@ fn boxes(positions: &[Vec3], group: impl Fn(usize) -> usize, count: usize) -> Ve
         .collect()
 }
 
-/// Code un instantané dans la disposition de la version `version` du
-/// fichier (un enregistrement repris garde la sienne).
+/// Encodes a snapshot (bodies sorted by identifier), before compression, in
+/// the layout of version `version` of the file (a resumed recording keeps
+/// its own).
 pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
     let b = &frame.bodies;
     let n = b.len();
@@ -152,7 +153,7 @@ pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
     out.extend_from_slice(&frame.dust_weight.to_le_bytes());
     out.extend_from_slice(&(n as u32).to_le_bytes());
 
-    // Boîtes de quantification : une par sous-système (version 3).
+    // Quantization boxes: one per subsystem (version 3 and later).
     let grouped = version >= 3 && frame.groups.len() == n && n > 0;
     let count = if grouped {
         frame.groups.iter().copied().max().unwrap_or(0) as usize + 1
@@ -177,7 +178,7 @@ pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
     }
     out.extend_from_slice(&vmax.to_le_bytes());
 
-    // Identifiants (écarts).
+    // Identifiers (gaps).
     let mut prev = 0u64;
     for (k, &id) in b.ids.iter().enumerate() {
         put_varint(&mut out, if k == 0 { id } else { id - prev });
@@ -198,14 +199,14 @@ pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
         }
     }
 
-    // Sous-systèmes : 2 plans d'octets.
+    // Subsystems: 2 byte planes.
     if count > 1 {
         for plane in 0..2 {
             out.extend(frame.groups.iter().map(|g| (g >> (8 * plane)) as u8));
         }
     }
 
-    // Positions : 3 axes × 3 plans d'octets.
+    // Positions: 3 axes × 3 byte planes.
     for axis in 0..3 {
         let q: Vec<u32> = b
             .positions
@@ -223,7 +224,7 @@ pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
         }
     }
 
-    // Vitesses : 3 axes × 2 plans d'octets.
+    // Velocities: 3 axes × 2 byte planes.
     for axis in 0..3 {
         let q: Vec<u16> = b
             .velocities
@@ -239,7 +240,7 @@ pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
         }
     }
 
-    // Devenirs.
+    // Fates.
     out.extend_from_slice(&(frame.fates.len() as u32).to_le_bytes());
     for &(id, fate) in &frame.fates {
         put_varint(&mut out, id);
@@ -254,8 +255,7 @@ pub fn encode_frame(frame: &Keyframe, version: u32) -> Vec<u8> {
     out
 }
 
-/// Décode une charge utile (non compressée) d'un fichier de version
-/// `version`.
+/// Decodes an (uncompressed) payload of a file of version `version`.
 pub fn decode_frame(meta: FrameMeta, buf: &[u8], version: u32) -> Result<Keyframe, RepositoryError> {
     let mut c = Cursor { buf, pos: 0 };
     let dust_weight = c.f32()?;
@@ -346,12 +346,12 @@ pub fn decode_frame(meta: FrameMeta, buf: &[u8], version: u32) -> Result<Keyfram
 }
 
 // ----------------------------------------------------------------------
-// Écriture
+// Writing
 // ----------------------------------------------------------------------
 
 pub struct FileRecordingWriter {
     path: PathBuf,
-    /// Version du fichier (celle d'un enregistrement repris est conservée).
+    /// File version (that of a resumed recording is kept).
     version: u32,
     out: BufWriter<File>,
     offset: u64,
@@ -397,7 +397,7 @@ impl RecordingWriter for FileRecordingWriter {
 }
 
 // ----------------------------------------------------------------------
-// Lecture
+// Reading
 // ----------------------------------------------------------------------
 
 pub struct FileRecordingReader {
@@ -474,8 +474,8 @@ impl FileRecordingReader {
         bincode::deserialize(&buf).ok()
     }
 
-    /// Reconstruit l'index d'un fichier non clos ; le dernier instantané,
-    /// s'il est incomplet, est ignoré.
+    /// Rebuilds the index of a file that was not closed; the last snapshot, if
+    /// incomplete, is ignored.
     fn scan(
         file: &mut BufReader<File>,
         start: u64,
@@ -522,7 +522,7 @@ impl RecordingReader for FileRecordingReader {
         let size = u32::from_le_bytes(read_exact::<4>(&mut self.file)?) as usize;
         let mut payload = vec![0u8; size];
         self.file.read_exact(&mut payload).map_err(io)?;
-        // Taille décompressée bornée : ≈ 30 octets par corps au plus.
+        // Bound on the decompressed size: at most ~35 bytes per body plus the fates.
         let cap = meta.count as usize * 40 + (1 << 20);
         let raw = zstd::bulk::decompress(&payload, cap).map_err(fmt)?;
         decode_frame(meta, &raw, self.version)
@@ -530,14 +530,14 @@ impl RecordingReader for FileRecordingReader {
 }
 
 // ----------------------------------------------------------------------
-// Dépôt
+// Repository
 // ----------------------------------------------------------------------
 
-/// Enregistrements rangés dans un dossier.
+/// Recordings stored in a folder.
 #[derive(Debug, Clone)]
 pub struct FileRecordingRepository {
     dir: PathBuf,
-    /// Suppression vers la corbeille (sinon définitive).
+    /// Deletion to the recycle bin (otherwise permanent).
     trash: bool,
 }
 
@@ -549,7 +549,7 @@ impl FileRecordingRepository {
         }
     }
 
-    /// Les suppressions passent par la corbeille de Windows.
+    /// Deletions go through the Windows recycle bin.
     pub fn with_trash(mut self) -> Self {
         self.trash = true;
         self
@@ -599,15 +599,15 @@ impl RecordingRepository for FileRecordingRepository {
     ) -> Result<Box<dyn RecordingWriter>, RepositoryError> {
         let mut reader = FileRecordingReader::open(path)?;
         let frames = &reader.info.frames;
-        // Instantanés conservés : ceux jusqu'au pas de reprise inclus.
+        // Kept snapshots: those up to the resume step, included.
         let keep = frames.partition_point(|f| f.step <= keep_through_step);
         if keep == 0 || frames[keep - 1].step != keep_through_step {
             return Err(fmt(format!(
                 "l'instantané du pas {keep_through_step} est introuvable dans l'enregistrement"
             )));
         }
-        // Fin du dernier instantané conservé : tout ce qui suit (instantanés
-        // postérieurs, ancien index) est tronqué.
+        // End of the last kept snapshot: everything after it (later snapshots,
+        // old index) is truncated.
         let last = reader.offsets[keep - 1];
         let version = reader.version;
         reader
@@ -703,7 +703,7 @@ mod tests {
         let mut b = BodySet::default();
         for id in 0..5_000u64 {
             if id % 7 == 3 && k > 0 {
-                continue; // absorbés après le premier instantané
+                continue; // absorbed after the first snapshot
             }
             let f = id as f64 * 0.01 + k as f64;
             b.push(
@@ -754,7 +754,7 @@ mod tests {
         assert_eq!(d.bodies.masses, f.bodies.masses);
         assert_eq!(d.fates, f.fates);
         assert_eq!(d.dust_weight, 1.5);
-        let size = 100.0f64; // ordre de grandeur de la boîte
+        let size = 100.0f64; // order of magnitude of the box
         for (a, b) in d.bodies.positions.iter().zip(&f.bodies.positions) {
             assert!((*a - *b).abs().max_element() <= size / POS_MAX);
         }
@@ -771,8 +771,8 @@ mod tests {
 
     #[test]
     fn subsystems_keep_their_own_precision() {
-        // Un amas compact parti très loin : avec une boîte par sous-système,
-        // ni lui ni le système principal ne perdent en précision.
+        // A compact cluster gone very far away: with one box per subsystem,
+        // neither it nor the main system loses precision.
         let mut f = frame(0);
         let n = f.bodies.len();
         f.groups = vec![0; n];
@@ -791,8 +791,7 @@ mod tests {
             let tol = if f.groups[i] == 1 { 0.2 } else { 100.0 } / POS_MAX;
             assert!((*a - *b).abs().max_element() <= tol, "{a} ≠ {b}");
         }
-        // Disposition des versions antérieures : une seule boîte, pas de
-        // sous-systèmes relus.
+        // Layout of older versions: a single box, no subsystems read back.
         let old = decode_frame(meta, &encode_frame(&f, 2), 2).unwrap();
         assert!(old.groups.is_empty());
         assert_eq!(old.bodies.ids, f.bodies.ids);
@@ -825,8 +824,8 @@ mod tests {
     fn reads_version_1() {
         let dir = temp_dir("v1");
         let repo = FileRecordingRepository::new(&dir);
-        // Fichier version 1 : ancien en-tête, instantanés dans l'ancienne
-        // disposition, sans index (reconstruit à l'ouverture).
+        // Version 1 file: old header, snapshots in the old layout, no index
+        // (rebuilt on opening).
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("ancien.stellarec");
         let mut frames = Vec::new();
@@ -877,7 +876,7 @@ mod tests {
         assert_eq!(r.read_frame(2).unwrap().step, 20);
         drop(r);
 
-        // Version 3 : en-tête sans facteur de vitesse orbitale (1).
+        // Version 3: header without orbital velocity factor (1).
         let old = crate::legacy::RecordingHeaderV3 {
             config: crate::legacy::SimulationConfigV5 {
                 initial: h.config.initial.into(),
@@ -907,11 +906,11 @@ mod tests {
         let repo = FileRecordingRepository::new(&dir);
         let mut w = repo.create("suite", &header()).unwrap();
         for k in 0..5 {
-            w.write_frame(&frame(k)).unwrap(); // pas 0, 10, 20, 30, 40
+            w.write_frame(&frame(k)).unwrap(); // steps 0, 10, 20, 30, 40
         }
         let path = w.finish().unwrap();
 
-        // Reprise au pas 20 : les instantanés 30 et 40 disparaissent.
+        // Resume at step 20: snapshots 30 and 40 disappear.
         let mut w = repo.resume(&path, 20).unwrap();
         let mut next = frame(3);
         next.step = 25;
@@ -937,10 +936,10 @@ mod tests {
             f.bodies
         });
 
-        // Reprise à un pas absent : refusée.
+        // Resume at a missing step: refused.
         assert!(repo.resume(&path, 21).is_err());
 
-        // Reprise d'un fichier non clos.
+        // Resume of a file that was not closed.
         let mut w = repo.resume(&path, 25).unwrap();
         let mut more = frame(4);
         more.step = 35;
@@ -960,7 +959,7 @@ mod tests {
         for k in 0..3 {
             w.write_frame(&frame(k)).unwrap();
         }
-        drop(w); // pas de finish : index absent
+        drop(w); // no finish: no index
         let list = repo.list().unwrap();
         assert_eq!(list.len(), 1);
         assert!(!list[0].complete);

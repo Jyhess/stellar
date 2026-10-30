@@ -1,4 +1,4 @@
-//! Poursuite d'un enregistrement depuis une sauvegarde qui n'y est pas liée.
+//! Continuing a recording from a save that is not linked to it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ fn config(seed: u64) -> SimulationConfig {
         velocity: VelocityMode::Rest,
     };
     let mut physics = PhysicsParams::suggested(&initial, 1.0);
-    physics.base_radius *= 25.0; // fusions fréquentes
+    physics.base_radius *= 25.0; // frequent mergers
     SimulationConfig {
         initial,
         physics,
@@ -90,7 +90,7 @@ fn continues_a_recording_from_an_unlinked_save() {
     h.shutdown();
     let rec_path = recordings.list().unwrap()[0].path.clone();
 
-    // Au chargement : l'enregistrement est proposé, avec ses instantanés à supprimer.
+    // On load: the recording is offered, with its snapshots to delete.
     let data = service.read_save(&save).unwrap();
     let options = service.continuable_recordings(&data);
     assert_eq!(options.len(), 1);
@@ -109,13 +109,13 @@ fn continues_a_recording_from_an_unlinked_save() {
     let mut r = recordings.open(&rec_path).unwrap();
     let steps: Vec<u64> = r.info().frames.iter().map(|f| f.step).collect();
     assert!(steps.windows(2).all(|w| w[0] < w[1]), "{steps:?}");
-    // Rien entre le dernier instantané conservé et la sauvegarde, puis un
-    // instantané au pas de la sauvegarde, puis l'intervalle d'origine.
+    // Nothing between the last kept snapshot and the save, then a snapshot at
+    // the save's step, then the original interval.
     let k = steps.iter().position(|&s| s == resume_step).unwrap();
     assert_eq!(steps[k + 1], save_step, "{steps:?}");
     assert_eq!(steps[k + 2], save_step + 5, "{steps:?}");
-    // Les corps disparus entre les deux reçoivent un devenir (fusion connue
-    // par l'instantané suivant de l'ancien enregistrement).
+    // Bodies that disappeared in between get a fate (merger known from the
+    // next snapshot of the old recording).
     let before = r.read_frame(k).unwrap();
     let at_save = r.read_frame(k + 1).unwrap();
     let gone = before.bodies.len() - at_save.bodies.len();

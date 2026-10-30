@@ -1,4 +1,4 @@
-//! Taille et coût d'un instantané d'enregistrement :
+//! Size and cost of a recording snapshot:
 //! `cargo run --release -p stellar-persistence --example frame_size -- 1000000`
 use std::time::Instant;
 

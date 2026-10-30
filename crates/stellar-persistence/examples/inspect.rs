@@ -1,5 +1,5 @@
-//! Inspection d'un enregistrement ou d'une sauvegarde :
-//! `cargo run --release -p stellar-persistence --example inspect -- <fichier>`
+//! Inspection of a recording or a save:
+//! `cargo run --release -p stellar-persistence --example inspect -- <file>`
 use std::path::Path;
 
 use stellar_application::{RecordingRepository, SimulationRepository};

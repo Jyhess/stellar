@@ -1,14 +1,14 @@
-//! Relecture des formes antérieures des fichiers.
+//! Reading of the former shapes of the files.
 //!
-//! bincode n'étant pas auto-descriptif, chaque version garde ici la copie
-//! des structures qu'elle sérialisait, convertie vers la forme courante.
+//! bincode is not self-describing, so each version keeps here a copy of
+//! the structures it serialized, converted to the current shape.
 //!
-//! - Sauvegardes `.stellar` version 3 et enregistrements `.stellarec`
-//!   version 1 : paramètres physiques sans les seuils des amas éjectés
-//!   (complétés par les valeurs suggérées).
-//! - Sauvegardes versions 3 et 4 : état sans sous-systèmes.
-//! - Sauvegardes versions 3 à 5 et enregistrements versions 1 à 3 :
-//!   vitesse orbitale sans facteur (facteur 1).
+//! - `.stellar` saves version 3 and `.stellarec` recordings version 1:
+//!   physical parameters without the thresholds of ejected clusters (filled
+//!   with the suggested values).
+//! - Saves versions 3 and 4: state without subsystems.
+//! - Saves versions 3 to 5 and recordings versions 1 to 3: orbital velocity
+//!   without factor (factor 1).
 
 use std::path::PathBuf;
 
@@ -19,7 +19,7 @@ use stellar_domain::{
     VelocityMode,
 };
 
-/// Vitesses initiales avant le facteur de la vitesse orbitale.
+/// Initial velocities before the orbital velocity factor.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum VelocityModeV5 {
     Rest,
@@ -55,7 +55,7 @@ impl From<VelocityMode> for VelocityModeV5 {
     }
 }
 
-/// Conditions initiales avant le facteur de la vitesse orbitale.
+/// Initial conditions before the orbital velocity factor.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct InitialConditionsV5 {
     pub count: usize,
@@ -89,8 +89,8 @@ impl From<InitialConditions> for InitialConditionsV5 {
     }
 }
 
-/// Configuration des sauvegardes versions 4 et 5 et des enregistrements
-/// versions 2 et 3.
+/// Configuration of saves versions 4 and 5 and of recordings versions 2
+/// and 3.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimulationConfigV5 {
     pub initial: InitialConditionsV5,
@@ -108,7 +108,7 @@ impl From<SimulationConfigV5> for SimulationConfig {
     }
 }
 
-/// Paramètres physiques avant les amas éjectés.
+/// Physical parameters before ejected clusters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsParamsV3 {
     pub g: f64,
@@ -153,7 +153,7 @@ impl From<SimulationConfigV3> for SimulationConfig {
     }
 }
 
-/// État d'une simulation avant les sous-systèmes.
+/// State of a simulation before subsystems.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimulationStateV4 {
     pub bodies: BodySet,
@@ -176,7 +176,7 @@ impl From<SimulationStateV4> for SimulationState {
     }
 }
 
-/// Contenu d'une sauvegarde version 5.
+/// Content of a save version 5.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveDataV5 {
     pub config: SimulationConfigV5,
@@ -198,7 +198,7 @@ impl From<SaveDataV5> for SaveData {
     }
 }
 
-/// Contenu d'une sauvegarde version 4.
+/// Content of a save version 4.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveDataV4 {
     pub config: SimulationConfigV5,
@@ -220,7 +220,7 @@ impl From<SaveDataV4> for SaveData {
     }
 }
 
-/// Contenu d'une sauvegarde version 3.
+/// Content of a save version 3.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveDataV3 {
     pub config: SimulationConfigV3,
@@ -242,7 +242,7 @@ impl From<SaveDataV3> for SaveData {
     }
 }
 
-/// En-tête d'un enregistrement version 1.
+/// Header of a recording version 1.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordingHeaderV1 {
     pub config: SimulationConfigV3,
@@ -264,7 +264,7 @@ impl From<RecordingHeaderV1> for RecordingHeader {
     }
 }
 
-/// En-tête d'un enregistrement versions 2 et 3.
+/// Header of a recording versions 2 and 3.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordingHeaderV3 {
     pub config: SimulationConfigV5,

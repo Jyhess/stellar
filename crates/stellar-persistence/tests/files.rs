@@ -1,4 +1,4 @@
-//! Suppression et renommage des sauvegardes et des enregistrements liés.
+//! Deleting and renaming saves and their linked recordings.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -43,8 +43,7 @@ fn state() -> SimulationState {
     }
 }
 
-/// Un enregistrement « rec_a », sa sauvegarde de reprise liée, et une
-/// sauvegarde sans lien.
+/// A recording "rec_a", its linked resume save, and an unlinked save.
 fn populate(f: &Fixture) -> PathBuf {
     let header = RecordingHeader {
         config: SimulationConfig::default(),
@@ -111,13 +110,13 @@ fn renaming_a_recording_carries_its_saves_along() {
     let link = f.saves.load(&save.path).unwrap().recording.unwrap();
     assert_eq!(link.path.file_name().unwrap(), "orbites.stellarec");
 
-    // Renommer la sauvegarde renomme aussi l'enregistrement lié.
+    // Renaming the save also renames the linked recording.
     f.service.rename_save(&save, "final_reprise").unwrap();
     assert_eq!(
         names(&f),
         (vec!["autre".into(), "final_reprise".into()], vec!["final".into()])
     );
-    // Un nom déjà pris est refusé.
+    // A name already taken is refused.
     let autre = f.saves.list().unwrap().into_iter().find(|s| s.name == "autre").unwrap();
     assert!(f.service.rename_save(&autre, "final_reprise").is_err());
     let _ = std::fs::remove_dir_all(&dir);
@@ -129,10 +128,10 @@ fn deleting_with_or_without_the_linked_file() {
     let f = fixture(&dir);
     populate(&f);
     let save = |name: &str| f.saves.list().unwrap().into_iter().find(|s| s.name == name).unwrap();
-    // Sans le fichier lié : l'enregistrement reste.
+    // Without the linked file: the recording stays.
     f.service.delete_save(&save("autre"), true).unwrap();
     assert_eq!(names(&f), (vec!["rec_a_reprise".into()], vec!["rec_a".into()]));
-    // Avec : la sauvegarde liée part aussi.
+    // With it: the linked save goes too.
     let rec = f.recordings.list().unwrap().remove(0);
     f.service.delete_recording(&rec, true).unwrap();
     assert_eq!(names(&f), (Vec::new(), Vec::new()));
@@ -203,7 +202,7 @@ fn headless_run_stops_at_target_and_saves() {
         interval: 5,
         dust_budget: None,
     };
-    // Reprise en poursuivant l'enregistrement : 20 pas de plus.
+    // Resume while continuing the recording: 20 more steps.
     let rec = outcome.recording.clone().unwrap();
     let (run, continued) = HeadlessRun::resume(
         &service,
@@ -225,7 +224,7 @@ fn headless_run_stops_at_target_and_saves() {
     assert_eq!(steps.last(), Some(&60), "{steps:?}");
     drop(r);
 
-    // Reprise d'une sauvegarde sans lien : nouvel enregistrement.
+    // Resume of an unlinked save: new recording.
     let (run, continued) = HeadlessRun::resume(
         &service,
         &second.save,
