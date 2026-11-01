@@ -64,3 +64,8 @@ Decisions in the order they were made; v1 came from the initial question session
 - English option names (`--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|…`, `--spread`, `--factor`, `--engine`, `--load`, `--continue`, `--resume`, `--name`, `--interval`, `--dust N|all`, `--steps`, `--time`, `--duration`); the former French names are no longer accepted.
 - Code comments in English; error messages of the lower layers translated in the English interface (`MESSAGES`, `tr_msg`, checked by a test); developer-facing text (panics, tests, examples, `STELLAR_STATS`, benchmark with its `disc` argument) in English.
 - Video-memory estimate on the home screen measured: about 300 bytes per body plus 130 MB.
+
+## v1.11 — grain masses, sun and protoplanets
+- Initial conditions: integer grain masses from 1 to N following a power law (`--max-mass`, `--mass-exponent`), drawn on a stream of their own; optional central sun holding a share of the total mass (`--sun`); optional massive bodies on circular orbits in the disc plane, at evenly spaced radii (`--planets`, `--planet-mass`).
+- Orbital velocity and suggested dt account for the sun (dt at most 1/200 of the inner orbital period); characteristic speed and free-fall time use the expected total mass; playback computes the exact initial mass from the initial conditions.
+- Formats: `.stellar` v7, `.stellarec` v5 (older versions read with dust of mass 1, no sun, no planets).

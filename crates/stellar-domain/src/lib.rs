@@ -19,7 +19,8 @@ pub mod systems;
 
 pub use body::{BodyId, BodySet};
 pub use config::{
-    DensityProfile, Distribution, InitialConditions, PhysicsParams, SimulationConfig, VelocityMode,
+    DensityProfile, Distribution, DustMasses, InitialConditions, PhysicsParams, Planets,
+    SimulationConfig, VelocityMode, MAX_DUST_MASS, MAX_MASSIVE_FRACTION, MAX_PLANETS,
 };
 pub use ejection::EjectedCluster;
 pub use engine::{Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, StepReport};

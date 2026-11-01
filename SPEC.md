@@ -3,7 +3,7 @@
 The rules currently in force. This document is the reference when the code and the history of decisions ([`docs/history.md`](docs/history.md)) disagree. User-level details are in [`README.md`](README.md), and technical details are in [`docs/`](docs).
 
 ## Scope
-- **3D** N-body simulator; initial particles of mass 1; bodies merge on contact.
+- **3D** N-body simulator; initial dust grains of integer mass (1 by default), optional central sun and massive bodies; bodies merge on contact.
 - **Rust + wgpu + egui**, Windows only (native executables `stellar.exe` and `stellar-cli.exe`).
 - Two engines: **GPU** (wgpu compute shaders, single precision; the default when a compatible card is present) and **CPU** (rayon, AVX2/FMA, double precision).
 - Target: **1 million particles and more**. GPU limit: 65,535 × 256 ≈ 16.7 M bodies. Creation limit: engine limit, 80 % of main memory, one billion.
@@ -26,13 +26,17 @@ The rules currently in force. This document is the reference when the code and t
 - **Sub-simulations**: split when (cluster size + system size) < 0.3 × distance, merge when (sum of sizes) > 0.6 × distance, recentre when the barycenter moves more than half a size from the origin. Coupling through a linear tidal field from point sources, extrapolated to the end of the step. Escapees of a secondary subsystem go to the main subsystem.
 
 ## Defaults
-- dt = free-fall time / 500; ε = 0.3 × mean distance between neighbours; r₀ = 1 % of that distance; cluster link length = that distance; a cluster is kept from 10 bodies or 0.1 % of the initial mass; θ = 0.7; cleanup every 100 steps at k = 10 × the initial radius.
+- dt = free-fall time / 500 (expected total mass), and with a sun at most 1/200 of the orbital period around it at max(its radius, mean distance between neighbours); ε = 0.3 × mean distance between neighbours; r₀ = 1 % of that distance; cluster link length = that distance; a cluster is kept from 10 bodies or 0.1 % of the initial mass; θ = 0.7; cleanup every 100 steps at k = 10 × the initial radius.
 - Initial velocity: orbital circular, factor 1 (0.5 to 1.5), rotation around Oz, counter-clockwise.
 
 ## Creation of a simulation
 - Name (default `date_count_distribution_velocity`, with the time added if the name exists), particle count (1-2-5 slider and exact input), cloud radius, seed.
 - Distribution: **sphere** or **disc** (thickness, uniform or exponential density profile).
 - Initial velocity, **mutually exclusive modes**: rest / random (isotropic, range) / imposed circular (± range) / orbital circular × factor ± spread / radial towards the center (range).
+- Grain masses: integers from 1 to N (1 to 10,000; 1 by default), power law of density ∝ m^A (A = −2 by default), drawn on a stream of their own (positions independent of the masses).
+- Central sun (optional): at rest at the center, share of the total mass sun included (50 % by default).
+- Massive bodies (optional, 1 to 100, 5 by default): share of the total mass each (1 % by default), circular orbits in the (x, y) plane at radii evenly spaced between two bounds (0.2 to 0.9 R), random angles, whatever the velocity mode of the grains. Sun and massive bodies hold at most 99.9 % of the total mass. Identifiers: grains 0 to n − 1, then the sun, then the massive bodies.
+- Orbital velocity (grains in that mode, massive bodies always): enclosed mass including the sun and the massive bodies.
 - Advanced panel: G, dt, ε, θ, r₀, cleanup factor k and period, ejected cluster thresholds, engine.
 - Estimated memory and estimated duration of the first step.
 - During a run, only **pause / resume / single step / speed multiplier** (a cap on steps per second).
@@ -47,8 +51,8 @@ The rules currently in force. This document is the reference when the code and t
 - Traces (T, R): 10 most massive visible bodies, history or tail, reference frame of the selected body, the barycenter or the local cluster; not saved.
 
 ## Files
-- **Save** (F5, `.stellar` version 6): full state, parameters, camera, links to recordings.
-- **Recording** (F9, `.stellarec` version 4): snapshot every N steps, quantized and compressed, optional dust budget, index rebuilt after a crash; playback by Hermite interpolation; suspend / resume / continue from a save.
+- **Save** (F5, `.stellar` version 7): full state, parameters, camera, links to recordings.
+- **Recording** (F9, `.stellarec` version 5): snapshot every N steps, quantized and compressed, optional dust budget, index rebuilt after a crash; playback by Hermite interpolation; suspend / resume / continue from a save.
 - Every change to a serialized structure creates a new version, and older versions remain readable. Layout and history: [`docs/formats.md`](docs/formats.md).
 
 ## Simulation without display

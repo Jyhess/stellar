@@ -1,5 +1,5 @@
-//! `.stellarec` recording format (version 4; versions 1 to 3 are read:
-//! headers of versions 1 to 3 in [`crate::legacy`], snapshots of versions 1
+//! `.stellarec` recording format (version 5; versions 1 to 4 are read:
+//! headers of versions 1 to 4 in [`crate::legacy`], snapshots of versions 1
 //! and 2 without subsystems; a resumed recording keeps the version of its
 //! file). Layout and history: `docs/formats.md`.
 //!
@@ -44,9 +44,10 @@ const MAGIC: &[u8; 8] = b"STELREC\0";
 const INDEX_MAGIC: &[u8; 8] = b"STLRIDX\0";
 const FRAME_MAGIC: u32 = u32::from_le_bytes(*b"FRAM");
 /// Version written; versions 1 (parameters without ejected clusters), 2
-/// (snapshots without subsystems) and 3 (orbital velocity without factor)
-/// are read. Snapshots of versions 3 and 4 have the same layout.
-pub const VERSION: u32 = 4;
+/// (snapshots without subsystems), 3 (orbital velocity without factor) and
+/// 4 (dust of mass 1, no sun, no planets) are read. Snapshots of versions 3
+/// to 5 have the same layout.
+pub const VERSION: u32 = 5;
 const ZSTD_LEVEL: i32 = 3;
 const POS_BITS: u32 = 21;
 const POS_MAX: f64 = ((1u32 << POS_BITS) - 1) as f64;
@@ -436,6 +437,10 @@ impl FileRecordingReader {
                 .into()
         } else if version <= 3 {
             bincode::deserialize::<crate::legacy::RecordingHeaderV3>(&hb)
+                .map_err(fmt)?
+                .into()
+        } else if version == 4 {
+            bincode::deserialize::<crate::legacy::RecordingHeaderV4>(&hb)
                 .map_err(fmt)?
                 .into()
         } else {
@@ -895,6 +900,29 @@ mod tests {
         v3.extend_from_slice(&(hb.len() as u32).to_le_bytes());
         v3.extend_from_slice(&hb);
         fs::write(&path, v3).unwrap();
+        let r = repo.open(&path).unwrap();
+        assert_eq!(r.info().header, header());
+        drop(r);
+
+        // Version 4: dust of mass 1, no sun, no planets.
+        let old = crate::legacy::RecordingHeaderV4 {
+            config: crate::legacy::SimulationConfigV6 {
+                initial: h.config.initial.into(),
+                physics: h.config.physics,
+                engine: h.config.engine.clone(),
+            },
+            interval: h.interval,
+            start_step: h.start_step,
+            created_at_unix: h.created_at_unix,
+            dust_budget: h.dust_budget,
+        };
+        let hb = bincode::serialize(&old).unwrap();
+        let mut v4 = Vec::new();
+        v4.extend_from_slice(MAGIC);
+        v4.extend_from_slice(&4u32.to_le_bytes());
+        v4.extend_from_slice(&(hb.len() as u32).to_le_bytes());
+        v4.extend_from_slice(&hb);
+        fs::write(&path, v4).unwrap();
         let r = repo.open(&path).unwrap();
         assert_eq!(r.info().header, header());
         let _ = fs::remove_dir_all(&dir);

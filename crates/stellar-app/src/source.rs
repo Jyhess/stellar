@@ -26,10 +26,15 @@ pub struct Replay {
     trace_reference: Option<TraceReference>,
     trace_tick: u64,
     last_position: f64,
+    /// Mass at the start of the simulation (drawn again from the initial
+    /// conditions).
+    initial_mass: f64,
 }
 
 impl Replay {
     pub fn new(player: ReplayPlayer) -> Self {
+        let initial_mass =
+            stellar_application::generator::initial_total_mass(&player.info().header.config.initial);
         Self {
             player,
             snapshot: Arc::new(empty_snapshot()),
@@ -41,6 +46,7 @@ impl Replay {
             trace_reference: None,
             trace_tick: 0,
             last_position: 0.0,
+            initial_mass,
         }
     }
 
@@ -62,8 +68,7 @@ impl Replay {
             .player
             .swap_state(self.spare.take().unwrap_or_default());
         state.initial_energy = None;
-        // Initial mass: particles of mass 1 at the start of the simulation.
-        state.initial_mass = Some(self.player.info().header.config.initial.count as f64);
+        state.initial_mass = Some(self.initial_mass);
         // Present mass: subsampled dust counts for its weight.
         let w = self.player.dust_weight() as f64;
         let total_mass: f64 = state

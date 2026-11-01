@@ -8,7 +8,8 @@ use stellar_application::{
     SaveSummary, SimulatorService,
 };
 use stellar_domain::{
-    DensityProfile, Distribution, InitialConditions, PhysicsParams, SimulationConfig, VelocityMode,
+    DensityProfile, Distribution, DustMasses, InitialConditions, PhysicsParams, Planets,
+    SimulationConfig, VelocityMode, MAX_DUST_MASS, MAX_MASSIVE_FRACTION, MAX_PLANETS,
 };
 
 use crate::format;
@@ -83,6 +84,12 @@ pub struct HomeScreen {
     vel_spread: f64,
     /// Multiple of the orbital equilibrium speed.
     vel_factor: f64,
+    dust: DustMasses,
+    sun: bool,
+    /// Share of the sun in the total mass.
+    sun_share: f64,
+    planets_enabled: bool,
+    planets: Planets,
     g: f64,
     auto_physics: bool,
     physics: PhysicsParams,
@@ -189,6 +196,14 @@ impl HomeScreen {
             vel_max: 10.0,
             vel_spread: 0.05,
             vel_factor: 1.0,
+            dust: ic.dust,
+            sun: false,
+            sun_share: 0.5,
+            planets_enabled: false,
+            planets: Planets {
+                count: 5,
+                ..ic.planets
+            },
             g: 1.0,
             auto_physics: true,
             physics: PhysicsParams::suggested(&ic, 1.0),
@@ -259,6 +274,77 @@ impl HomeScreen {
             seed: self.seed,
             distribution,
             velocity,
+            dust: self.dust,
+            sun: self.sun.then_some(self.sun_share),
+            planets: Planets {
+                count: if self.planets_enabled { self.planets.count } else { 0 },
+                ..self.planets
+            },
+        }
+    }
+
+    /// Rows of the creation grid: dust mass spectrum, sun, massive bodies.
+    fn massive_bodies_rows(&mut self, ui: &mut egui::Ui) {
+        param(ui, tr("Masse des grains"), tr("Masse maximale des grains de poussière : leurs masses sont des entiers de 1 à ce maximum (1 : tous de masse 1)."));
+        ui.add(
+            egui::DragValue::new(&mut self.dust.max)
+                .range(1..=MAX_DUST_MASS)
+                .speed(0.2)
+                .prefix(tr("de 1 à ")),
+        );
+        ui.end_row();
+        if self.dust.max > 1 {
+            param(ui, tr("   Exposant"), tr("Loi de puissance des masses : densité ∝ m^exposant. −2 : beaucoup de petits grains et peu de gros ; 0 : masses équiprobables."));
+            ui.add(
+                egui::DragValue::new(&mut self.dust.exponent)
+                    .range(-4.0..=2.0)
+                    .speed(0.02)
+                    .fixed_decimals(2),
+            );
+            ui.end_row();
+        }
+
+        param(ui, tr("Soleil central"), tr("Corps au repos au centre du nuage, dont la masse est une part de la masse totale (soleil compris)."));
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.sun, "");
+            if self.sun {
+                share_input(ui, &mut self.sun_share, 0.01, MAX_MASSIVE_FRACTION, tr(" % de la masse totale"));
+            }
+        });
+        ui.end_row();
+
+        param(ui, tr("Corps massifs"), tr("Protoplanètes en orbite circulaire dans le plan (x, y), quel que soit le mode de vitesse des grains, à des rayons régulièrement espacés et à des angles aléatoires."));
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.planets_enabled, "");
+            if self.planets_enabled {
+                ui.add(
+                    egui::DragValue::new(&mut self.planets.count)
+                        .range(1..=MAX_PLANETS)
+                        .speed(0.1),
+                );
+            }
+        });
+        ui.end_row();
+        if self.planets_enabled {
+            param(ui, tr("   Masse de chacun"), tr("Masse de chaque corps massif, en part de la masse totale."));
+            share_input(ui, &mut self.planets.mass_fraction, 1e-5, 0.5, tr(" % de la masse totale"));
+            ui.end_row();
+            param(ui, tr("   Orbites (× rayon)"), tr("Rayons de la première et de la dernière orbite, en fraction du rayon du nuage ; les autres sont régulièrement espacées entre les deux."));
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut self.planets.inner)
+                        .range(0.01..=self.planets.outer)
+                        .speed(0.005)
+                        .prefix(tr("de ")),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut self.planets.outer)
+                        .range(self.planets.inner..=2.0)
+                        .speed(0.005)
+                        .prefix(tr("à ")),
+                );
+            });
+            ui.end_row();
         }
     }
 
@@ -578,7 +664,7 @@ impl HomeScreen {
                 });
                 ui.end_row();
 
-                param(ui, tr("Nombre de particules"), tr("Nombre de corps au départ, tous de masse 1. Le coût d'un pas croît à peu près comme n·log n ; le maximum proposé dépend du moteur et de la mémoire de la machine."));
+                param(ui, tr("Nombre de particules"), tr("Nombre de grains de poussière au départ (leur masse est réglée plus bas). Le coût d'un pas croît à peu près comme n·log n ; le maximum proposé dépend du moteur et de la mémoire de la machine."));
                 let max = max_bodies(service, &self.engine);
                 count_picker(ui, &mut self.count, max);
                 ui.end_row();
@@ -695,11 +781,25 @@ impl HomeScreen {
                         ui.end_row();
                     }
                 }
+
+                self.massive_bodies_rows(ui);
             });
+        if !ic.masses_are_valid() {
+            ui.colored_label(
+                egui::Color32::from_rgb(255, 120, 90),
+                tr!("Le soleil et les corps massifs dépassent {} de la masse totale.", share_text(MAX_MASSIVE_FRACTION)),
+            );
+        }
         ui.label(
             RichText::new(tr!("Vitesse caractéristique √(GM/R) ≈ {} · temps de chute libre ≈ {}", format::real(ic.characteristic_speed(self.g)), format::real(ic.free_fall_time(self.g))))
             .weak(),
         );
+        if ic.dust.max > 1 || ic.sun.is_some() || ic.planets.count > 0 {
+            ui.label(
+                RichText::new(tr!("Masse totale ≈ {} (masse moyenne d'un grain ≈ {})", format::real(ic.expected_total_mass()), format::real(ic.dust.mean())))
+                .weak(),
+            );
+        }
 
         ui.add_space(6.0);
         egui::CollapsingHeader::new(tr("Paramètres avancés"))
@@ -821,17 +921,20 @@ impl HomeScreen {
             );
         });
         if ui
-            .add_sized(
-                [260.0, 36.0],
-                egui::Button::new(
-                    RichText::new(if self.headless {
-                        tr("▶ Lancer sans affichage")
-                    } else {
-                        tr("▶ Lancer la simulation")
-                    })
-                    .size(17.0),
-                ),
-            )
+            .add_enabled_ui(ic.masses_are_valid(), |ui| {
+                ui.add_sized(
+                    [260.0, 36.0],
+                    egui::Button::new(
+                        RichText::new(if self.headless {
+                            tr("▶ Lancer sans affichage")
+                        } else {
+                            tr("▶ Lancer la simulation")
+                        })
+                        .size(17.0),
+                    ),
+                )
+            })
+            .inner
             .clicked()
         {
             let record = self.record.then_some(RecordOptions {
@@ -1294,6 +1397,30 @@ fn abbreviate(n: usize) -> String {
         text
     };
     format!("{}{unit}", text.replace('.', crate::format::decimal_sep()))
+}
+
+/// Share as a percentage, without sign (99,9 %).
+fn share_text(share: f64) -> String {
+    let text = format!("{:.3}", 100.0 * share);
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{} %", text.replace('.', crate::format::decimal_sep()))
+}
+
+/// Input of a share of the total mass, as a percentage.
+fn share_input(ui: &mut egui::Ui, share: &mut f64, min: f64, max: f64, suffix: &str) {
+    let mut pct = *share * 100.0;
+    if ui
+        .add(
+            egui::DragValue::new(&mut pct)
+                .range(min * 100.0..=max * 100.0)
+                .speed(0.1)
+                .max_decimals(3)
+                .suffix(suffix),
+        )
+        .changed()
+    {
+        *share = pct / 100.0;
+    }
 }
 
 /// Default name of a simulation: date, abbreviated particle count,

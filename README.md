@@ -1,6 +1,6 @@
 # Stellar
 
-A 3D gravitational N-body simulator for Windows. A cloud of particles of mass 1 collapses under gravity, and two bodies that touch merge. The computation runs **on the graphics card** (GPU engine, the default: wgpu compute shaders) or **on the CPU** (multithreaded Barnes-Hut). Rendering goes through wgpu in both cases. The interface is available in French and English.
+A 3D gravitational N-body simulator for Windows. A cloud of particles (dust grains, optionally around a central sun and protoplanets) collapses under gravity, and two bodies that touch merge. The computation runs **on the graphics card** (GPU engine, the default: wgpu compute shaders) or **on the CPU** (multithreaded Barnes-Hut). Rendering goes through wgpu in both cases. The interface is available in French and English.
 
 | Document | Content |
 |---|---|
@@ -52,9 +52,12 @@ The first build takes a few minutes while the dependencies are downloaded and co
 - **New simulation**: name, number of particles, cloud radius, random seed, distribution (sphere or disc, with thickness and density profile), initial velocity. The velocity modes are rest, random, imposed circular, orbital circular × factor ± spread (the default) and radial. The factor ranges from 0.5 to 1.5: 1 gives circular orbits, less gives a collapse, more an expansion. Each parameter has a "?" badge that explains it.
   - **Name**: used for the simulation's saves (F5) and recordings. By default it combines the date, the abbreviated particle count, the distribution and the initial velocity (`2026-10-28_1M_sph_orb`), plus the time if that name already exists. It follows the parameters until you type one; the "Auto" button restores this behaviour. A loaded simulation takes the name of its save, without "_reprise" or a number.
   - **Number of particles**: a 1-2-5 stepped slider (1,000, 2,000, 5,000, 10,000…) up to the machine's maximum, plus an exact input field. The maximum is the engine limit, 80 % of main memory, or one billion, whichever is lowest.
+  - **Grain mass**: the dust grains have integer masses from 1 to a maximum (1 by default: all of mass 1), drawn from a power law of density ∝ m^exponent (−2 by default: many small grains, few big ones). The masses are drawn on a random stream of their own, so the positions do not depend on them.
+  - **Central sun** (off by default): a body at rest at the center, holding a share of the total mass, sun included (50 % by default, 1 to 99.9 %).
+  - **Massive bodies** (off by default; 5 when enabled, up to 100): protoplanets on circular orbits in the (x, y) plane whatever the velocity mode of the grains, at radii evenly spaced between two bounds (0.2 to 0.9 × the cloud radius by default) and at random angles. Each one holds a share of the total mass (1 % by default). The sun and the massive bodies together hold at most 99.9 % of the total mass; beyond that, creation is refused. The orbital velocity of the grains and of the massive bodies accounts for the sun and for every body inside their orbit.
   - Below the form: the estimated memory and the **estimated duration of the first step**, based on the benchmark.
 - **Advanced parameters**: G, dt, softening ε, radius r₀ of a particle of mass 1, accuracy θ, cleanup period and distance, thresholds of ejected clusters (link length, number of bodies, share of the mass), computation engine. By default, dt, ε, r₀ and the link length are derived from the initial conditions:
-  - dt = free-fall time / 500;
+  - dt = free-fall time / 500 (computed on the expected total mass); with a sun, at most 1/200 of the orbital period around it at the larger of its radius and the mean distance between neighbours;
   - ε = 0.3 × mean distance between neighbours;
   - r₀ = 1 % of that distance;
   - cluster link length = mean distance between neighbours. A cluster is kept from 10 bodies or 0.1 % of the initial mass.
@@ -75,7 +78,7 @@ For long computations: no rendering of the bodies, the whole graphics card for t
   .\stellar-cli.exe --resume recordings\galaxy.stellarec --duration 120
   ```
 
-  - **New simulation**: `--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|circ|orb|rad`, `--spread`, `--factor` (multiple of the orbital velocity), `--vmin`/`--vmax`, `--engine gpu|cpu`.
+  - **New simulation**: `--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|circ|orb|rad`, `--spread`, `--factor` (multiple of the orbital velocity), `--vmin`/`--vmax`, `--max-mass N` and `--mass-exponent A` (grain masses), `--sun P` (central sun of P % of the total mass), `--planets N` and `--planet-mass P` (N massive bodies of P % each, 1 by default, on orbits from 0.2 to 0.9 × the radius), `--engine gpu|cpu`.
   - **Resume a save**: `--load FILE`. The recording linked to the save is continued; otherwise a new recording starts. `--continue FILE` instead extends a compatible recording from the save's step, deleting the later snapshots.
   - **Resume a recording**: `--resume FILE` loads the latest save linked to the recording (the resume save, or an F5 save made during the recording) and continues it.
   - **In every case**: `--name`, `--interval` (snapshot interval), `--dust N|all` (dust budget), and a target: `--steps N` or `--time T` (simulated time), both counted from the save's step when resuming, or `--duration minutes` (real duration). Without a target, it runs until Ctrl+C. Progress is printed every five seconds. On stop, the recording is closed and the final state is saved.

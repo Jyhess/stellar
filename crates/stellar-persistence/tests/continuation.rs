@@ -36,6 +36,7 @@ fn config(seed: u64) -> SimulationConfig {
         seed,
         distribution: Distribution::Sphere,
         velocity: VelocityMode::Rest,
+        ..Default::default()
     };
     let mut physics = PhysicsParams::suggested(&initial, 1.0);
     physics.base_radius *= 25.0; // frequent mergers

@@ -14,6 +14,7 @@ use stellar_application::{
 };
 use stellar_domain::{
     DensityProfile, Distribution, InitialConditions, PhysicsParams, SimulationConfig, VelocityMode,
+    MAX_DUST_MASS, MAX_MASSIVE_FRACTION, MAX_PLANETS,
 };
 use stellar_engine_cpu::CpuEngineFactory;
 use stellar_engine_gpu::GpuEngineFactory;
@@ -41,6 +42,11 @@ Nouvelle simulation :
   --factor F         multiple de la vitesse orbitale : < 1 effondrement,
                      > 1 expansion (défaut : 1)
   --vmin A --vmax B  plage de vitesse (random, circ, rad)
+  --max-mass N       masses des grains : entiers de 1 à N (défaut : 1)
+  --mass-exponent A  loi de puissance des masses, densité ∝ m^A (défaut : -2)
+  --sun P            soleil central de P % de la masse totale
+  --planets N        N corps massifs en orbite circulaire (de 0,2 à 0,9 × rayon)
+  --planet-mass P    masse de chacun en % de la masse totale (défaut : 1)
   --engine M         gpu | cpu (défaut : gpu si une carte convient)
 
 Reprise :
@@ -123,7 +129,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
         let new_option = matches!(
             a.as_str(),
             "--bodies" | "--radius" | "--seed" | "--disc" | "--velocity" | "--spread"
-                | "--factor" | "--vmin" | "--vmax" | "--engine"
+                | "--factor" | "--vmin" | "--vmax" | "--engine" | "--max-mass"
+                | "--mass-exponent" | "--sun" | "--planets" | "--planet-mass"
         );
         if new_option {
             o.new_options.push(a.clone());
@@ -143,6 +150,13 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--factor" => factor = num(&value(&mut it, a)?, a)?,
             "--vmin" => vmin = num(&value(&mut it, a)?, a)?,
             "--vmax" => vmax = num(&value(&mut it, a)?, a)?,
+            "--max-mass" => o.initial.dust.max = num(&value(&mut it, a)?, a)?,
+            "--mass-exponent" => o.initial.dust.exponent = num(&value(&mut it, a)?, a)?,
+            "--sun" => o.initial.sun = Some(num::<f64>(&value(&mut it, a)?, a)? / 100.0),
+            "--planets" => o.initial.planets.count = num(&value(&mut it, a)?, a)?,
+            "--planet-mass" => {
+                o.initial.planets.mass_fraction = num::<f64>(&value(&mut it, a)?, a)? / 100.0
+            }
             "--engine" => o.engine = Some(value(&mut it, a)?),
             "--load" => load = Some(PathBuf::from(value(&mut it, a)?)),
             "--continue" => follow = Some(PathBuf::from(value(&mut it, a)?)),
@@ -185,6 +199,20 @@ fn parse(args: &[String]) -> Result<Options, String> {
         v => return Err(tr!("vitesse inconnue : {}", v)),
     };
     o.initial.count = o.initial.count.max(2);
+    let ic = &o.initial;
+    if !(1..=MAX_DUST_MASS).contains(&ic.dust.max) {
+        return Err(tr!("--max-mass doit être compris entre 1 et {}", MAX_DUST_MASS));
+    }
+    if ic.planets.count > MAX_PLANETS {
+        return Err(tr!("--planets doit être compris entre 0 et {}", MAX_PLANETS));
+    }
+    let mut shares = ic.sun.into_iter().chain([ic.planets.mass_fraction]);
+    if shares.any(|s| s.is_nan() || s <= 0.0) || !ic.masses_are_valid() {
+        return Err(tr!(
+            "le soleil et les corps massifs doivent avoir une masse positive et ne pas dépasser {} % de la masse totale",
+            format!("{:.1}", MAX_MASSIVE_FRACTION * 100.0).replace('.', format::decimal_sep())
+        ));
+    }
     Ok(o)
 }
 
@@ -278,7 +306,7 @@ pub fn run(args: &[String]) -> i32 {
                 tr!(
                     "Nouvelle simulation « {} » : {} corps, moteur {}.",
                     name,
-                    format::count(config.initial.count as u64),
+                    format::count(config.initial.body_count() as u64),
                     config.engine
                 )
             );
@@ -397,6 +425,28 @@ mod tests {
             o.initial.velocity,
             VelocityMode::CircularOrbital { spread: 0.1, factor: 0.8 }
         );
+    }
+
+    #[test]
+    fn parses_mass_options() {
+        let o = parse(&args(
+            "--max-mass 50 --mass-exponent -1,5 --sun 60 --planets 3 --planet-mass 2",
+        ))
+        .unwrap();
+        assert_eq!(o.initial.dust.max, 50);
+        assert_eq!(o.initial.dust.exponent, -1.5);
+        assert_eq!(o.initial.sun, Some(0.6));
+        assert_eq!(o.initial.planets.count, 3);
+        assert!((o.initial.planets.mass_fraction - 0.02).abs() < 1e-12);
+        let o = parse(&args("--steps 10")).unwrap();
+        assert_eq!(o.initial.sun, None);
+        assert_eq!(o.initial.planets.count, 0);
+        assert!(parse(&args("--sun 95 --planets 10 --planet-mass 1")).is_err());
+        assert!(parse(&args("--sun 0")).is_err());
+        assert!(parse(&args("--max-mass 0")).is_err());
+        assert!(parse(&args("--planets 1000")).is_err());
+        let e = parse(&args("--load a --sun 50")).unwrap_err();
+        assert!(e.contains("--sun"), "{e}");
     }
 
     #[test]

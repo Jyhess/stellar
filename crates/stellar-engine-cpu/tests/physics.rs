@@ -39,6 +39,7 @@ fn barnes_hut_matches_direct_sum() {
         seed: 1,
         distribution: Distribution::Sphere,
         velocity: VelocityMode::Rest,
+        ..Default::default()
     };
     let s = generate_state(&ic, 1.0);
     let bodies = s.bodies.clone();
@@ -216,6 +217,7 @@ fn collapse_conserves_mass_through_merges() {
         seed: 5,
         distribution: Distribution::Sphere,
         velocity: VelocityMode::Rest,
+        ..Default::default()
     };
     let initial = generate_state(&ic, 1.0);
     let mut p = PhysicsParams::suggested(&ic, 1.0);

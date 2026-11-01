@@ -55,6 +55,7 @@ fn sphere(count: usize, seed: u64) -> SimulationState {
         seed,
         distribution: Distribution::Sphere,
         velocity: VelocityMode::Rest,
+        ..Default::default()
     };
     generate_state(&ic, 1.0)
 }
@@ -107,6 +108,7 @@ fn agrees_with_cpu_engine_over_steps() {
         seed: 3,
         distribution: Distribution::Sphere,
         velocity: VelocityMode::Random { min: 0.0, max: 2.0 },
+        ..Default::default()
     };
     let s = generate_state(&ic, 1.0);
     let mut p = PhysicsParams::suggested(&ic, 1.0);
@@ -296,6 +298,7 @@ fn collapse_conserves_mass_and_ids() {
         seed: 5,
         distribution: Distribution::Sphere,
         velocity: VelocityMode::Rest,
+        ..Default::default()
     };
     let mut p = PhysicsParams::suggested(&ic, 1.0);
     p.base_radius *= 20.0;
@@ -415,6 +418,7 @@ fn shared_device_exposes_current_bodies() {
         seed: 11,
         distribution: Distribution::Sphere,
         velocity: VelocityMode::Rest,
+        ..Default::default()
     };
     let mut p = PhysicsParams::suggested(&ic, 1.0);
     p.base_radius *= 20.0;

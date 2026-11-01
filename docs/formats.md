@@ -13,7 +13,7 @@ All integers are little-endian. Structures marked *bincode* use the standard `bi
 
 ---
 
-## Saves (`.stellar`, version 6)
+## Saves (`.stellar`, version 7)
 
 | Bytes | Content |
 |---|---|
@@ -40,13 +40,14 @@ The home screen lists saves by reading the header alone, without decompressing a
 | 3 | camera roll, barycenter tracking, recording continuation | thresholds of ejected clusters filled with the suggested values; a single system |
 | 4 | thresholds of ejected clusters (`cluster_link_length`, `cluster_min_bodies`, `cluster_min_mass`) | a single system |
 | 5 | subsystems in the state (`SystemSpan`) | orbital velocity factor = 1 |
-| 6 | orbital velocity factor (`VelocityMode::CircularOrbital { spread, factor }`) | current version |
+| 6 | orbital velocity factor (`VelocityMode::CircularOrbital { spread, factor }`) | dust of mass 1, no sun, no planets |
+| 7 | dust mass spectrum, sun and planets in the initial conditions (`InitialConditions::{dust, sun, planets}`) | current version |
 
 Versions 1 and 2 are refused.
 
 ---
 
-## Recordings (`.stellarec`, version 4)
+## Recordings (`.stellarec`, version 5)
 
 ```text
 signature "STELREC\0" · version (u32) · header size L (u32) · header, bincode (L bytes)
@@ -81,8 +82,9 @@ A snapshot weighs about 12 bytes per recorded body once compressed. With a dust 
 | 2 | thresholds of ejected clusters in the header (`PhysicsParams`) |
 | 3 | one quantization box per subsystem in each snapshot |
 | 4 | orbital velocity factor in the header (initial conditions) |
+| 5 | dust mass spectrum, sun and planets in the header (initial conditions) |
 
-The headers of versions 1 to 3 are in `legacy.rs`. Snapshots of versions 1 and 2 hold a single box. Those of versions 3 and 4 have the same layout. **A resumed recording keeps the version of its file.** `PhysicsParams` and `SimulationConfig` appear in the headers of both formats, so changing them changes both.
+The headers of versions 1 to 4 are in `legacy.rs`. Snapshots of versions 1 and 2 hold a single box. Those of versions 3 to 5 have the same layout. **A resumed recording keeps the version of its file.** `PhysicsParams` and `SimulationConfig` appear in the headers of both formats, so changing them changes both.
 
 ### Playback
 

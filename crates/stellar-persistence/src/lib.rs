@@ -3,7 +3,7 @@
 //! Implementation of [`SimulationRepository`] on the file system. Layout and
 //! history of both formats: `docs/formats.md`.
 //!
-//! ## `.stellar` format (version 6)
+//! ## `.stellar` format (version 7)
 //!
 //! | Bytes       | Content                                         |
 //! |-------------|-------------------------------------------------|
@@ -17,7 +17,8 @@
 //!
 //! bincode is not self-describing, so any change to [`SaveData`] or
 //! [`SaveSummary`] requires a new version. Versions read:
-//! - 6: orbital velocity factor in the initial conditions;
+//! - 7: dust mass spectrum, sun and planets in the initial conditions;
+//! - 6: read through [`legacy`] (dust of mass 1, no sun, no planets);
 //! - 5: read through [`legacy`] (factor 1);
 //! - 4: read through [`legacy`] (a single system);
 //! - 3: read through [`legacy`] (cluster thresholds filled with the
@@ -41,7 +42,7 @@ use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepo
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
 /// Version written.
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 /// Oldest version read ([`legacy`]).
 const OLDEST: u32 = 3;
 const MAX_HEADER: u32 = 1 << 20;
@@ -226,6 +227,10 @@ impl SimulationRepository for FileRepository {
             bincode::deserialize_from::<_, legacy::SaveDataV5>(dec)
                 .map_err(fmt)?
                 .into()
+        } else if version == 6 {
+            bincode::deserialize_from::<_, legacy::SaveDataV6>(dec)
+                .map_err(fmt)?
+                .into()
         } else {
             bincode::deserialize_from(dec).map_err(fmt)?
         };
@@ -385,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_versions_3_to_5() {
+    fn reads_versions_3_to_6() {
         let dir = temp_dir("v3");
         fs::create_dir_all(&dir).unwrap();
         let data = sample();
@@ -454,6 +459,21 @@ mod tests {
             continue_recording: None,
         };
         write_old(&path, 5, &summary, &v5);
+        assert_eq!(repo.load(&path).unwrap(), data);
+
+        // Version 6: dust of mass 1, no sun, no planets.
+        let v6 = legacy::SaveDataV6 {
+            config: legacy::SimulationConfigV6 {
+                initial: data.config.initial.into(),
+                physics: data.config.physics,
+                engine: data.config.engine.clone(),
+            },
+            state: data.state.clone(),
+            view: data.view,
+            recording: data.recording.clone(),
+            continue_recording: None,
+        };
+        write_old(&path, 6, &summary, &v6);
         assert_eq!(repo.load(&path).unwrap(), data);
         let _ = fs::remove_dir_all(&dir);
     }

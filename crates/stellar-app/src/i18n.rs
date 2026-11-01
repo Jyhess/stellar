@@ -254,7 +254,25 @@ const EN: &[(&str, &str)] = &[
     ("Nom des sauvegardes (F5) et des enregistrements de cette simulation. Par défaut : date, nombre de particules, répartition et vitesse initiale.", "Name of this simulation's saves (F5) and recordings. Default: date, particle count, distribution and initial velocity."),
     ("Revenir au nom tiré des paramètres", "Go back to the name derived from the parameters"),
     ("Nombre de particules", "Number of particles"),
-    ("Nombre de corps au départ, tous de masse 1. Le coût d'un pas croît à peu près comme n·log n ; le maximum proposé dépend du moteur et de la mémoire de la machine.", "Number of bodies at the start, all of mass 1. The cost of a step grows roughly as n·log n; the maximum offered depends on the engine and on the machine's memory."),
+    ("Nombre de grains de poussière au départ (leur masse est réglée plus bas). Le coût d'un pas croît à peu près comme n·log n ; le maximum proposé dépend du moteur et de la mémoire de la machine.", "Number of dust grains at the start (their mass is set below). The cost of a step grows roughly as n·log n; the maximum offered depends on the engine and on the machine's memory."),
+    ("Masse des grains", "Grain mass"),
+    ("Masse maximale des grains de poussière : leurs masses sont des entiers de 1 à ce maximum (1 : tous de masse 1).", "Maximum mass of the dust grains: their masses are integers from 1 to this maximum (1: all of mass 1)."),
+    ("de 1 à ", "from 1 to "),
+    ("   Exposant", "   Exponent"),
+    ("Loi de puissance des masses : densité ∝ m^exposant. −2 : beaucoup de petits grains et peu de gros ; 0 : masses équiprobables.", "Power law of the masses: density ∝ m^exponent. −2: many small grains and few big ones; 0: equally likely masses."),
+    ("Soleil central", "Central sun"),
+    ("Corps au repos au centre du nuage, dont la masse est une part de la masse totale (soleil compris).", "Body at rest at the center of the cloud, whose mass is a share of the total mass (sun included)."),
+    (" % de la masse totale", " % of the total mass"),
+    ("Corps massifs", "Massive bodies"),
+    ("Protoplanètes en orbite circulaire dans le plan (x, y), quel que soit le mode de vitesse des grains, à des rayons régulièrement espacés et à des angles aléatoires.", "Protoplanets on circular orbits in the (x, y) plane, whatever the velocity mode of the grains, at evenly spaced radii and random angles."),
+    ("   Masse de chacun", "   Mass of each"),
+    ("Masse de chaque corps massif, en part de la masse totale.", "Mass of each massive body, as a share of the total mass."),
+    ("   Orbites (× rayon)", "   Orbits (× radius)"),
+    ("Rayons de la première et de la dernière orbite, en fraction du rayon du nuage ; les autres sont régulièrement espacées entre les deux.", "Radii of the first and last orbits, as a fraction of the cloud radius; the others are evenly spaced in between."),
+    ("de ", "from "),
+    ("à ", "to "),
+    ("Le soleil et les corps massifs dépassent {} de la masse totale.", "The sun and the massive bodies exceed {} of the total mass."),
+    ("Masse totale ≈ {} (masse moyenne d'un grain ≈ {})", "Total mass ≈ {} (mean grain mass ≈ {})"),
     ("Rayon du nuage", "Cloud radius"),
     ("Rayon de la sphère ou du disque initial (unité de longueur libre). C'est aussi le rayon de référence du nettoyage.", "Radius of the initial sphere or disc (free length unit). It is also the reference radius of the clean-up."),
     ("Graine aléatoire", "Random seed"),
@@ -537,6 +555,11 @@ Nouvelle simulation :
   --factor F         multiple de la vitesse orbitale : < 1 effondrement,
                      > 1 expansion (défaut : 1)
   --vmin A --vmax B  plage de vitesse (random, circ, rad)
+  --max-mass N       masses des grains : entiers de 1 à N (défaut : 1)
+  --mass-exponent A  loi de puissance des masses, densité ∝ m^A (défaut : -2)
+  --sun P            soleil central de P % de la masse totale
+  --planets N        N corps massifs en orbite circulaire (de 0,2 à 0,9 × rayon)
+  --planet-mass P    masse de chacun en % de la masse totale (défaut : 1)
   --engine M         gpu | cpu (défaut : gpu si une carte convient)
 
 Reprise :
@@ -554,7 +577,7 @@ Dans tous les cas :
   --time T           s'arrêter après un temps simulé T (de plus, en reprise)
   --duration M       s'arrêter après M minutes de calcul
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
-sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --load FILE           resume a save (.stellar)\n       stellar-cli --resume FILE         resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --bodies N         number of particles (default: 1000000)\n  --radius R         cloud radius (default: 100)\n  --seed S           random seed (default: 42)\n  --disc             rotating disc (otherwise a sphere)\n  --velocity V       rest | random | circ | orb | rad (default: orb)\n  --spread D         spread of the orbital speed (default: 0.05)\n  --factor F         multiple of the orbital speed: < 1 collapse,\n                     > 1 expansion (default: 1)\n  --vmin A --vmax B  speed range (random, circ, rad)\n  --engine M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --load F           save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --continue F       with --load: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --resume F         recording to continue from its latest linked save\n\nIn all cases:\n  --name NAME        simulation name (default: date and parameters, or file name)\n  --interval N       one snapshot every N steps (default: 10)\n  --dust N           dust recorded per snapshot, or “all” (default: 1000000)\n  --steps N          stop after N steps (more, when resuming)\n  --time T           stop after a simulated time T (more, when resuming)\n  --duration M       stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”).\nThe former French option names (--corps, --pas…) are still accepted."),
+sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --load FILE           resume a save (.stellar)\n       stellar-cli --resume FILE         resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --bodies N         number of particles (default: 1000000)\n  --radius R         cloud radius (default: 100)\n  --seed S           random seed (default: 42)\n  --disc             rotating disc (otherwise a sphere)\n  --velocity V       rest | random | circ | orb | rad (default: orb)\n  --spread D         spread of the orbital speed (default: 0.05)\n  --factor F         multiple of the orbital speed: < 1 collapse,\n                     > 1 expansion (default: 1)\n  --vmin A --vmax B  speed range (random, circ, rad)\n  --max-mass N       grain masses: integers from 1 to N (default: 1)\n  --mass-exponent A  power law of the masses, density ∝ m^A (default: -2)\n  --sun P            central sun of P % of the total mass\n  --planets N        N massive bodies on circular orbits (from 0.2 to 0.9 × radius)\n  --planet-mass P    mass of each one in % of the total mass (default: 1)\n  --engine M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --load F           save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --continue F       with --load: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --resume F         recording to continue from its latest linked save\n\nIn all cases:\n  --name NAME        simulation name (default: date and parameters, or file name)\n  --interval N       one snapshot every N steps (default: 10)\n  --dust N           dust recorded per snapshot, or “all” (default: 1000000)\n  --steps N          stop after N steps (more, when resuming)\n  --time T           stop after a simulated time T (more, when resuming)\n  --duration M       stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
     ("valeur manquante après {}", "missing value after {}"),
     ("valeur invalide pour {} : {}", "invalid value for {}: {}"),
     ("argument inconnu : {}", "unknown argument: {}"),
@@ -562,6 +585,9 @@ sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]    
     ("--load et --resume s'excluent", "--load and --resume are mutually exclusive"),
     ("{} ne s'applique qu'à une nouvelle simulation", "{} only applies to a new simulation"),
     ("vitesse inconnue : {}", "unknown velocity: {}"),
+    ("--max-mass doit être compris entre 1 et {}", "--max-mass must be between 1 and {}"),
+    ("--planets doit être compris entre 0 et {}", "--planets must be between 0 and {}"),
+    ("le soleil et les corps massifs doivent avoir une masse positive et ne pas dépasser {} % de la masse totale", "the sun and the massive bodies must have a positive mass and not exceed {} % of the total mass"),
     ("stellar.exe est l'interface graphique et ne prend pas d'argument. Ligne de commande : stellar-cli.exe (stellar-cli --help).", "stellar.exe is the graphical interface and takes no argument. Command line: stellar-cli.exe (stellar-cli --help)."),
     ("Erreur : {}", "Error: {}"),
     ("Voir stellar-cli --help pour la liste des options.", "See stellar-cli --help for the list of options."),

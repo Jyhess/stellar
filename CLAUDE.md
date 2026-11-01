@@ -59,7 +59,7 @@ The crate table is in the README. Rules:
 
 ## File formats
 
-`.stellar` version 6 (5, 4, 3 read) and `.stellarec` version 4 (3, 2, 1 read; a resumed recording keeps its file's version). bincode is not self-describing: **any field change requires a new version**, a copy of the old form in `legacy.rs` and a reading test. **Use the `file-format` skill.** `PhysicsParams` and `SimulationConfig` are also in the recording header. Layout: `docs/formats.md`.
+`.stellar` version 7 (6, 5, 4, 3 read) and `.stellarec` version 5 (4, 3, 2, 1 read; a resumed recording keeps its file's version). bincode is not self-describing: **any field change requires a new version**, a copy of the old form in `legacy.rs` and a reading test. **Use the `file-format` skill.** `PhysicsParams` and `SimulationConfig` are also in the recording header. Layout: `docs/formats.md`.
 
 ## Verification
 

@@ -9,14 +9,16 @@
 //! - Saves versions 3 and 4: state without subsystems.
 //! - Saves versions 3 to 5 and recordings versions 1 to 3: orbital velocity
 //!   without factor (factor 1).
+//! - Saves versions 3 to 6 and recordings versions 1 to 4: dust of mass 1,
+//!   no sun, no planets.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use stellar_application::{RecordingHeader, RecordingLink, SaveData, ViewState};
 use stellar_domain::{
-    BodySet, Distribution, InitialConditions, PhysicsParams, SimulationConfig, SimulationState,
-    VelocityMode,
+    BodySet, Distribution, DustMasses, InitialConditions, PhysicsParams, Planets,
+    SimulationConfig, SimulationState, VelocityMode,
 };
 
 /// Initial velocities before the orbital velocity factor.
@@ -67,13 +69,14 @@ pub struct InitialConditionsV5 {
 
 impl From<InitialConditionsV5> for InitialConditions {
     fn from(c: InitialConditionsV5) -> Self {
-        Self {
+        InitialConditionsV6 {
             count: c.count,
             radius: c.radius,
             seed: c.seed,
             distribution: c.distribution,
             velocity: c.velocity.into(),
         }
+        .into()
     }
 }
 
@@ -85,6 +88,61 @@ impl From<InitialConditions> for InitialConditionsV5 {
             seed: c.seed,
             distribution: c.distribution,
             velocity: c.velocity.into(),
+        }
+    }
+}
+
+/// Initial conditions before the dust mass spectrum, the sun and the planets.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct InitialConditionsV6 {
+    pub count: usize,
+    pub radius: f64,
+    pub seed: u64,
+    pub distribution: Distribution,
+    pub velocity: VelocityMode,
+}
+
+impl From<InitialConditionsV6> for InitialConditions {
+    fn from(c: InitialConditionsV6) -> Self {
+        Self {
+            count: c.count,
+            radius: c.radius,
+            seed: c.seed,
+            distribution: c.distribution,
+            velocity: c.velocity,
+            dust: DustMasses::default(),
+            sun: None,
+            planets: Planets::default(),
+        }
+    }
+}
+
+impl From<InitialConditions> for InitialConditionsV6 {
+    fn from(c: InitialConditions) -> Self {
+        Self {
+            count: c.count,
+            radius: c.radius,
+            seed: c.seed,
+            distribution: c.distribution,
+            velocity: c.velocity,
+        }
+    }
+}
+
+/// Configuration of saves version 6 and of recordings version 4.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimulationConfigV6 {
+    pub initial: InitialConditionsV6,
+    pub physics: PhysicsParams,
+    pub engine: String,
+}
+
+impl From<SimulationConfigV6> for SimulationConfig {
+    fn from(c: SimulationConfigV6) -> Self {
+        Self {
+            initial: c.initial.into(),
+            physics: c.physics,
+            engine: c.engine,
         }
     }
 }
@@ -172,6 +230,28 @@ impl From<SimulationStateV4> for SimulationState {
             initial_energy: s.initial_energy,
             initial_mass: s.initial_mass,
             systems: Vec::new(),
+        }
+    }
+}
+
+/// Content of a save version 6.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SaveDataV6 {
+    pub config: SimulationConfigV6,
+    pub state: SimulationState,
+    pub view: Option<ViewState>,
+    pub recording: Option<RecordingLink>,
+    pub continue_recording: Option<PathBuf>,
+}
+
+impl From<SaveDataV6> for SaveData {
+    fn from(d: SaveDataV6) -> Self {
+        Self {
+            config: d.config.into(),
+            state: d.state,
+            view: d.view,
+            recording: d.recording,
+            continue_recording: d.continue_recording,
         }
     }
 }
@@ -276,6 +356,28 @@ pub struct RecordingHeaderV3 {
 
 impl From<RecordingHeaderV3> for RecordingHeader {
     fn from(h: RecordingHeaderV3) -> Self {
+        Self {
+            config: h.config.into(),
+            interval: h.interval,
+            start_step: h.start_step,
+            created_at_unix: h.created_at_unix,
+            dust_budget: h.dust_budget,
+        }
+    }
+}
+
+/// Header of a recording version 4.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecordingHeaderV4 {
+    pub config: SimulationConfigV6,
+    pub interval: u32,
+    pub start_step: u64,
+    pub created_at_unix: i64,
+    pub dust_budget: Option<u64>,
+}
+
+impl From<RecordingHeaderV4> for RecordingHeader {
+    fn from(h: RecordingHeaderV4) -> Self {
         Self {
             config: h.config.into(),
             interval: h.interval,

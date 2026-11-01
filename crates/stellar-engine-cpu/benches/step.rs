@@ -13,6 +13,7 @@ fn bench_step(c: &mut Criterion) {
             seed: 1,
             distribution: Distribution::Sphere,
             velocity: VelocityMode::Rest,
+            ..Default::default()
         };
         let params = PhysicsParams::suggested(&ic, 1.0);
         let mut engine = CpuEngine::new(generate_state(&ic, 1.0), params);
