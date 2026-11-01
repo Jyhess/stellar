@@ -46,7 +46,7 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current().name().unwrap_or("?").to_owned();
         let backtrace = std::backtrace::Backtrace::force_capture();
-        let report = tr!("[{}] Plantage dans le thread « {} »\n{}\n\n{}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), thread, info, backtrace);
+        let report = tr!("[{}] Crash in thread “{}”\n{}\n\n{}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), thread, info, backtrace);
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -57,8 +57,8 @@ pub fn install_panic_hook() {
         }
         let _ = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title(tr("Stellar — erreur fatale"))
-            .set_description(tr!("{}\n\nDétails enregistrés dans {}.", info, CRASH_LOG))
+            .set_title(tr("Stellar — fatal error"))
+            .set_description(tr!("{}\n\nDetails written to {}.", info, CRASH_LOG))
             .show();
         default(info);
     }));
@@ -84,8 +84,8 @@ pub fn run_gui() -> eframe::Result {
     let recordings = Arc::new(FileRecordingRepository::new(RECORDINGS_DIR).with_trash());
     let mut service = SimulatorService::new(registry, repository, recordings);
     service.set_engine_note(match gpu {
-        Ok(name) => tr!("Carte graphique : {}", name),
-        Err(e) => tr!("Moteur GPU indisponible : {}", e.localized()),
+        Ok(name) => tr!("Graphics card: {}", name),
+        Err(e) => tr!("GPU engine unavailable: {}", e.localized()),
     });
 
     let options = eframe::NativeOptions {

@@ -20,7 +20,7 @@ Project skills (`.claude/skills/`):
 - **Code comments** (including doc comments and WGSL shaders), **CLI option names** and **commit messages** are in **English**.
 - **Errors of the lower layers** (domain, application, engines, persistence) are **typed enums**, never display text: each variant carries its context as fields, text from outside (`io::Error`, wgpu, bincode) stays an untranslated payload, and `Display` is in English (logs, `STELLAR_STATS`). The interface translates each variant in `errors.rs` (`Localized`, exhaustive `match`) through `tr` / `tr!`; pass `e.localized()`, not `e`, to `tr!`. The CLI help and messages are translated like the interface.
 - **Developer-facing text** (`expect` / `panic!` messages, test messages and data, examples, `STELLAR_STATS` output) is in **English**.
-- The **interface** has French source strings translated into English (`stellar-app/src/i18n.rs`): every displayed text goes through `tr("…")` or `tr!("… {} …", x)` and gets its entry in the `EN` table. Numbers are formatted by language (`format.rs`).
+- The **interface** has English source strings translated into French (`stellar-app/src/i18n.rs`): every displayed text goes through `tr("…")` or `tr!("… {} …", x)` and gets its entry in the `FR` table (a test fails otherwise; engine labels and descriptions included). Numbers are formatted by language (`format.rs`).
 - Update `README.md` and `SPEC.md` with every feature.
 
 ## Commands

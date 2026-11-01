@@ -140,10 +140,10 @@ impl StellarApp {
             return None;
         };
         sim.suspend_recording().map(|r| match r {
-            Ok(path) => tr!("Enregistrement suspendu. Il reprendra en rechargeant la sauvegarde « {} ».", path.file_stem()
+            Ok(path) => tr!("Recording suspended. It will resume when the save “{}” is reloaded.", path.file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default()),
-            Err(e) => tr!("La suspension de l'enregistrement a échoué : {}", e.localized()),
+            Err(e) => tr!("Suspending the recording failed: {}", e.localized()),
         })
     }
 
@@ -217,7 +217,7 @@ impl eframe::App for StellarApp {
                                 r.interval,
                                 r.dust_budget,
                             ) {
-                                home.message = Some(tr!("Enregistrement impossible : {}", e.localized()));
+                                home.message = Some(tr!("Recording failed: {}", e.localized()));
                             }
                         }
                         handle.resume();
@@ -245,13 +245,13 @@ impl eframe::App for StellarApp {
                             loaded.view,
                         );
                         match loaded.recording {
-                            Some(Ok(p)) => sim.notify(tr!("Enregistrement « {} » poursuivi : il reprend dès la relance du calcul (Espace).", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())),
-                            Some(Err(e)) => sim.notify(tr!("Reprise de l'enregistrement impossible : {}", e.localized())),
+                            Some(Ok(p)) => sim.notify(tr!("Recording “{}” continued: it resumes as soon as the computation restarts (Space).", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())),
+                            Some(Err(e)) => sim.notify(tr!("Could not resume the recording: {}", e.localized())),
                             None => {}
                         }
                         self.screen = Screen::sim(sim);
                     }
-                    Err(e) => home.message = Some(tr!("Chargement impossible : {}", e.localized())),
+                    Err(e) => home.message = Some(tr!("Loading failed: {}", e.localized())),
                 },
                 HomeAction::Replay(path) => match self.service.open_replay(&path) {
                     Ok(player) => {
@@ -259,7 +259,7 @@ impl eframe::App for StellarApp {
                         self.screen =
                             Screen::sim(SimScreen::new(source, self.service.clone(), None));
                     }
-                    Err(e) => home.message = Some(tr!("Relecture impossible : {}", e.localized())),
+                    Err(e) => home.message = Some(tr!("Playback failed: {}", e.localized())),
                 },
             },
             Screen::Sim(sim) => match sim.show(ctx) {

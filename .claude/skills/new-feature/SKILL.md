@@ -1,6 +1,6 @@
 ---
 name: new-feature
-description: End-to-end checklist for adding or changing a user-visible feature in Stellar — clarifying questions, French source strings with English translations, keyboard help, command-line help, README / SPEC updates, tests and the two-stage verification. Use whenever a request adds or changes behaviour the user can see (UI, controls, CLI options, simulation options).
+description: End-to-end checklist for adding or changing a user-visible feature in Stellar — clarifying questions, English source strings with French translations, keyboard help, command-line help, README / SPEC updates, tests and the two-stage verification. Use whenever a request adds or changes behaviour the user can see (UI, controls, CLI options, simulation options).
 ---
 
 # Adding a feature
@@ -13,8 +13,8 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 
 ## 2. Implementation rules
 
-- **Interface text**: source strings are in French. Any displayed text goes through `tr("…")` or `tr!("… {} …", x)` (only `{}` placeholders) and gets its English translation in the `EN` table of `crates/stellar-app/src/i18n.rs`. A test checks duplicates and placeholders.
-- **New error in a lower crate**: a variant of that layer's error enum (context as typed fields, English `Display`), never a `String`. Its French text goes in the `Localized` impl of `stellar-app/src/errors.rs` (the exhaustive `match` does not compile without it) with its `EN` entry; display it with `e.localized()`.
+- **Interface text**: source strings are in English. Any displayed text goes through `tr("…")` or `tr!("… {} …", x)` (only `{}` placeholders) and gets its French translation in the `FR` table of `crates/stellar-app/src/i18n.rs`. Tests check duplicates, placeholders, and that every `tr` / `tr!` literal and engine label has its entry.
+- **New error in a lower crate**: a variant of that layer's error enum (context as typed fields, English `Display`), never a `String`. Its text goes in the `Localized` impl of `stellar-app/src/errors.rs` (the exhaustive `match` does not compile without it) with its `FR` entry; display it with `e.localized()`.
 - **Numbers**: use `format.rs` (`count`, `real`, `decimal_sep()`); never hard-code `.replace('.', ",")`.
 - **Symbols**: some characters are missing from egui's fonts (●, ✦, U+202F). Check that a symbol is displayed before using it.
 - **Layers**: no egui or wgpu in `stellar-domain` / `stellar-application`; engines are reached only through the domain traits.
@@ -33,7 +33,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 | Any feature | `SPEC.md` (rules in force), a line in the current or a new entry of `docs/history.md`, README sections concerned |
 | New file, type, panel or change path | `docs/code-map.md` (`code-map` skill) |
 
-Documentation, code comments and CLI option names are written in **English**; interface source strings and messages of the lower layers are written in **French** and translated; developer-facing text (panics, tests, examples) is in **English**.
+Documentation, code comments and CLI option names are written in **English**; interface source strings are in **English** and translated into French; lower-layer errors are typed enums translated by the interface; developer-facing text (panics, tests, examples) is in **English**.
 
 ## 4. Tests
 

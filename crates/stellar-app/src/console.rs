@@ -27,47 +27,7 @@ use crate::{format, RECORDINGS_DIR, SAVES_DIR};
 static STOP: AtomicBool = AtomicBool::new(false);
 
 fn usage() -> String {
-    tr!("Usage : stellar-cli [options]        nouvelle simulation sans fenêtre
-        stellar-cli --load FICHIER        reprendre une sauvegarde (.stellar)
-        stellar-cli --resume FICHIER      reprendre un enregistrement (.stellarec)
-        stellar-cli --help                cette aide
-L'interface graphique est stellar.exe (sans argument).
-
-Nouvelle simulation :
-  --bodies N         nombre de particules (défaut : 1000000)
-  --radius R         rayon du nuage (défaut : 100)
-  --seed S           graine aléatoire (défaut : 42)
-  --disc             disque en rotation (sinon sphère)
-  --velocity V       rest | random | circ | orb | rad (défaut : orb)
-  --spread D         dispersion de la vitesse orbitale (défaut : 0,05)
-  --factor F         multiple de la vitesse orbitale : < 1 effondrement,
-                     > 1 expansion (défaut : 1)
-  --vmin A --vmax B  plage de vitesse (random, circ, rad)
-  --max-mass N       masses des grains : entiers de 1 à N (défaut : 1)
-  --mass-exponent A  loi de puissance des masses, densité ∝ m^A (défaut : -2)
-  --sun P            soleil central de P % de la masse totale
-  --planets N        N corps massifs en orbite circulaire (de 0,2 à 0,9 × rayon)
-  --planet-mass P    masse de chacun en % de la masse totale (défaut : 1)
-  --engine M         gpu | cpu (défaut : gpu si une carte convient)
-
-Reprise :
-  --load F           sauvegarde à reprendre ; son enregistrement lié est poursuivi,
-                     sinon un nouvel enregistrement commence
-  --continue F       avec --load : enregistrement compatible à prolonger depuis
-                     le pas de la sauvegarde (instantanés postérieurs supprimés)
-  --resume F         enregistrement à poursuivre depuis sa dernière sauvegarde liée
-
-Dans tous les cas :
-  --name NOM         nom de la simulation (défaut : date et paramètres, ou nom du fichier)
-  --interval N       un instantané tous les N pas (défaut : 10)
-  --dust N           poussière enregistrée par instantané, ou « all » (défaut : 1000000)
-  --steps N          s'arrêter après N pas (de plus, en reprise)
-  --time T           s'arrêter après un temps simulé T (de plus, en reprise)
-  --duration M       s'arrêter après M minutes de calcul
-  --prune            supprimer automatiquement les corps isolés négligeables
-                     (sous-simulations d'un seul corps qui s'échappe)
-Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
-sauvegardé (dossiers « {} » et « {} »).", SAVES_DIR, RECORDINGS_DIR)
+    tr!("Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --load FILE           resume a save (.stellar)\n       stellar-cli --resume FILE         resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --bodies N         number of particles (default: 1000000)\n  --radius R         cloud radius (default: 100)\n  --seed S           random seed (default: 42)\n  --disc             rotating disc (otherwise a sphere)\n  --velocity V       rest | random | circ | orb | rad (default: orb)\n  --spread D         spread of the orbital speed (default: 0.05)\n  --factor F         multiple of the orbital speed: < 1 collapse,\n                     > 1 expansion (default: 1)\n  --vmin A --vmax B  speed range (random, circ, rad)\n  --max-mass N       grain masses: integers from 1 to N (default: 1)\n  --mass-exponent A  power law of the masses, density ∝ m^A (default: -2)\n  --sun P            central sun of P % of the total mass\n  --planets N        N massive bodies on circular orbits (from 0.2 to 0.9 × radius)\n  --planet-mass P    mass of each one in % of the total mass (default: 1)\n  --engine M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --load F           save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --continue F       with --load: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --resume F         recording to continue from its latest linked save\n\nIn all cases:\n  --name NAME        simulation name (default: date and parameters, or file name)\n  --interval N       one snapshot every N steps (default: 10)\n  --dust N           dust recorded per snapshot, or “all” (default: 1000000)\n  --steps N          stop after N steps (more, when resuming)\n  --time T           stop after a simulated time T (more, when resuming)\n  --duration M       stop after M minutes of computation\n  --prune            automatically remove the negligible lone bodies\n                     (single-body sub-simulations escaping)\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”).", SAVES_DIR, RECORDINGS_DIR)
 }
 
 /// Starting point of the simulation.
@@ -123,13 +83,13 @@ fn parse(args: &[String]) -> Result<Options, String> {
     let value = |it: &mut std::slice::Iter<String>, flag: &str| {
         it.next()
             .cloned()
-            .ok_or_else(|| tr!("valeur manquante après {}", flag))
+            .ok_or_else(|| tr!("missing value after {}", flag))
     };
     fn num<T: std::str::FromStr>(v: &str, flag: &str) -> Result<T, String> {
         v.replace(',', ".")
             .replace(['\u{00A0}', ' ', '_'], "")
             .parse()
-            .map_err(|_| tr!("valeur invalide pour {} : {}", flag, v))
+            .map_err(|_| tr!("invalid value for {}: {}", flag, v))
     }
     while let Some(a) = it.next() {
         let new_option = matches!(
@@ -180,21 +140,21 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let m: f64 = num(&value(&mut it, a)?, a)?;
                 o.target = RunTarget::WallTime(Duration::from_secs_f64(m.max(0.0) * 60.0));
             }
-            _ => return Err(tr!("argument inconnu : {}", a)),
+            _ => return Err(tr!("unknown argument: {}", a)),
         }
     }
     o.start = match (load, follow, resume) {
         (None, None, None) => Start::New,
         (Some(save), follow, None) => Start::Save(save, follow),
         (None, None, Some(rec)) => Start::Recording(rec),
-        (None, Some(_), _) => return Err(crate::i18n::tr("--continue s'emploie avec --load").to_owned()),
+        (None, Some(_), _) => return Err(crate::i18n::tr("--continue is used with --load").to_owned()),
         (Some(_), _, Some(_)) => {
-            return Err(crate::i18n::tr("--load et --resume s'excluent").to_owned())
+            return Err(crate::i18n::tr("--load and --resume are mutually exclusive").to_owned())
         }
     };
     if o.start != Start::New {
         if let Some(opt) = o.new_options.first() {
-            return Err(tr!("{} ne s'applique qu'à une nouvelle simulation", opt));
+            return Err(tr!("{} only applies to a new simulation", opt));
         }
     }
     o.initial.velocity = match velocity.as_str() {
@@ -203,20 +163,20 @@ fn parse(args: &[String]) -> Result<Options, String> {
         "circ" => VelocityMode::CircularFixed { min: vmin, max: vmax },
         "orb" => VelocityMode::CircularOrbital { spread, factor },
         "rad" => VelocityMode::Radial { min: vmin, max: vmax },
-        v => return Err(tr!("vitesse inconnue : {}", v)),
+        v => return Err(tr!("unknown velocity: {}", v)),
     };
     o.initial.count = o.initial.count.max(2);
     let ic = &o.initial;
     if !(1..=MAX_DUST_MASS).contains(&ic.dust.max) {
-        return Err(tr!("--max-mass doit être compris entre 1 et {}", MAX_DUST_MASS));
+        return Err(tr!("--max-mass must be between 1 and {}", MAX_DUST_MASS));
     }
     if ic.planets.count > MAX_PLANETS {
-        return Err(tr!("--planets doit être compris entre 0 et {}", MAX_PLANETS));
+        return Err(tr!("--planets must be between 0 and {}", MAX_PLANETS));
     }
     let mut shares = ic.sun.into_iter().chain([ic.planets.mass_fraction]);
     if shares.any(|s| s.is_nan() || s <= 0.0) || !ic.masses_are_valid() {
         return Err(tr!(
-            "le soleil et les corps massifs doivent avoir une masse positive et ne pas dépasser {} % de la masse totale",
+            "the sun and the massive bodies must have a positive mass and not exceed {} % of the total mass",
             format!("{:.1}", MAX_MASSIVE_FRACTION * 100.0).replace('.', format::decimal_sep())
         ));
     }
@@ -254,7 +214,7 @@ pub fn redirect() -> i32 {
     eprintln!(
         "{}",
         crate::i18n::tr(
-            "stellar.exe est l'interface graphique et ne prend pas d'argument. Ligne de commande : stellar-cli.exe (stellar-cli --help)."
+            "stellar.exe is the graphical interface and takes no argument. Command line: stellar-cli.exe (stellar-cli --help)."
         )
     );
     2
@@ -270,10 +230,10 @@ pub fn run(args: &[String]) -> i32 {
             return 0;
         }
         Err(e) => {
-            eprintln!("{}", tr!("Erreur : {}", e));
+            eprintln!("{}", tr!("Error: {}", e));
             eprintln!(
                 "{}",
-                crate::i18n::tr("Voir stellar-cli --help pour la liste des options.")
+                crate::i18n::tr("See stellar-cli --help for the list of options.")
             );
             return 2;
         }
@@ -296,7 +256,7 @@ pub fn run(args: &[String]) -> i32 {
         Arc::new(FileRecordingRepository::new(RECORDINGS_DIR)),
     );
     if let Err(e) = &gpu {
-        println!("{}", tr!("Moteur GPU indisponible : {}", e.localized()));
+        println!("{}", tr!("GPU engine unavailable: {}", e.localized()));
     }
     let started = match &o.start {
         Start::New => {
@@ -311,7 +271,7 @@ pub fn run(args: &[String]) -> i32 {
             println!(
                 "{}",
                 tr!(
-                    "Nouvelle simulation « {} » : {} corps, moteur {}.",
+                    "New simulation “{}”: {} bodies, engine {}.",
                     name,
                     format::count(config.initial.body_count() as u64),
                     config.engine
@@ -320,7 +280,7 @@ pub fn run(args: &[String]) -> i32 {
             HeadlessRun::start(&service, config, &name, o.record, o.target).map(|r| (r, None))
         }
         Start::Save(save, follow) => {
-            println!("{}", tr!("Reprise de la sauvegarde {}.", save.display()));
+            println!("{}", tr!("Resuming the save {}.", save.display()));
             HeadlessRun::resume(&service, save, follow.as_deref(), o.name.as_deref(), o.record, o.target)
         }
         Start::Recording(rec) => {
@@ -334,7 +294,7 @@ pub fn run(args: &[String]) -> i32 {
                 Some(save) => {
                     println!(
                         "{}",
-                        tr!("Reprise de l'enregistrement {} depuis la sauvegarde {}.", rec.display(), save.display())
+                        tr!("Resuming the recording {} from the save {}.", rec.display(), save.display())
                     );
                     HeadlessRun::resume(&service, &save, Some(rec), o.name.as_deref(), o.record, o.target)
                 }
@@ -342,7 +302,7 @@ pub fn run(args: &[String]) -> i32 {
                     eprintln!(
                         "{}",
                         tr!(
-                            "Erreur : aucune sauvegarde du dossier « {} » n'est liée à {} ; utiliser --load SAUVEGARDE --continue ENREGISTREMENT.",
+                            "Error: no save in the “{}” folder is linked to {}; use --load SAVE --continue RECORDING.",
                             SAVES_DIR,
                             rec.display()
                         )
@@ -356,12 +316,12 @@ pub fn run(args: &[String]) -> i32 {
         Ok((run, continued)) => {
             run.handle().set_auto_prune(o.prune);
             if let Some(p) = continued {
-                println!("{}", tr!("Enregistrement poursuivi : {}", p.display()));
+                println!("{}", tr!("Recording continued: {}", p.display()));
             }
             run
         }
         Err(e) => {
-            eprintln!("{}", tr!("Erreur : {}", e.localized()));
+            eprintln!("{}", tr!("Error: {}", e.localized()));
             return 1;
         }
     };
@@ -374,7 +334,7 @@ pub fn run(args: &[String]) -> i32 {
             last_report = Instant::now();
             let p = run.poll();
             let mut line = tr!(
-                "pas {} · t = {} · {} corps · {} pas/s · {} instantanés · {}",
+                "step {} · t = {} · {} bodies · {} steps/s · {} snapshots · {}",
                 format::count(p.step),
                 format::real(p.time),
                 format::count(p.bodies as u64),
@@ -389,18 +349,18 @@ pub fn run(args: &[String]) -> i32 {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    println!("{}", crate::i18n::tr("Arrêt : clôture de l'enregistrement et sauvegarde…"));
+    println!("{}", crate::i18n::tr("Stopping: closing the recording and saving…"));
     match run.finish(&service) {
         Ok(out) => {
-            println!("{}", tr!("Terminé au pas {}.", format::count(out.step)));
-            println!("{}", tr!("Sauvegarde : {}", out.save.display()));
+            println!("{}", tr!("Finished at step {}.", format::count(out.step)));
+            println!("{}", tr!("Save: {}", out.save.display()));
             if let Some(r) = out.recording {
-                println!("{}", tr!("Enregistrement : {}", r.display()));
+                println!("{}", tr!("Recording: {}", r.display()));
             }
             0
         }
         Err(e) => {
-            eprintln!("{}", tr!("Échec : {}", e.localized()));
+            eprintln!("{}", tr!("Failure: {}", e.localized()));
             1
         }
     }

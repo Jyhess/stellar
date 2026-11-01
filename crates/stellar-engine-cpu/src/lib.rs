@@ -42,9 +42,9 @@ impl EngineFactory for CpuEngineFactory {
     fn descriptor(&self) -> EngineDescriptor {
         EngineDescriptor {
             id: ENGINE_ID,
-            label: "CPU — Barnes-Hut multithread",
+            label: "CPU — multithreaded Barnes-Hut",
             description:
-                "Octree de Barnes-Hut sur tous les cœurs (sauf un, réservé à l'affichage).",
+                "Barnes-Hut octree on all cores (but one, kept for the display).",
         }
     }
 

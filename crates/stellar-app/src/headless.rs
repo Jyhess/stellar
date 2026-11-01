@@ -98,7 +98,7 @@ impl HeadlessScreen {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(24.0);
-                ui.heading(RichText::new(tr("Simulation sans affichage")).size(28.0));
+                ui.heading(RichText::new(tr("Simulation without display")).size(28.0));
                 ui.label(RichText::new(&self.name).strong());
                 ui.add_space(16.0);
             });
@@ -114,7 +114,7 @@ impl HeadlessScreen {
                             .then(|| p.elapsed.mul_f64((1.0 - f) / f));
                         let pct = format!("{:.1}", 100.0 * f).replace('.', format::decimal_sep());
                         let text = match eta {
-                            Some(eta) => tr!("{} % · reste ≈ {}", pct, hms(eta)),
+                            Some(eta) => tr!("{}% · ≈ {} left", pct, hms(eta)),
                             None => format!("{pct} %"),
                         };
                         ui.add(egui::ProgressBar::new(f as f32).text(text));
@@ -129,73 +129,73 @@ impl HeadlessScreen {
                                 ui.end_row();
                             };
                             row(
-                                tr("État"),
-                                if p.ready { tr("en cours") } else { tr("préparation…") }.to_owned(),
+                                tr("State"),
+                                if p.ready { tr("running") } else { tr("preparing…") }.to_owned(),
                             );
                             row(
-                                tr("Cible"),
+                                tr("Target"),
                                 match target {
-                                    RunTarget::Manual => tr("arrêt manuel").to_owned(),
-                                    RunTarget::Steps(n) => tr!("{} pas", format::count(n)),
-                                    RunTarget::SimTime(t) => tr!("temps simulé {}", format::real(t)),
-                                    RunTarget::WallTime(d) => tr!("durée {}", hms(d)),
+                                    RunTarget::Manual => tr("manual stop").to_owned(),
+                                    RunTarget::Steps(n) => tr!("{} steps", format::count(n)),
+                                    RunTarget::SimTime(t) => tr!("simulated time {}", format::real(t)),
+                                    RunTarget::WallTime(d) => tr!("duration {}", hms(d)),
                                 },
                             );
-                            row(tr("Pas"), format::count(p.step));
-                            row(tr("Temps simulé"), format::real(p.time));
-                            row(tr("Corps"), format::count(p.bodies as u64));
+                            row(tr("Step"), format::count(p.step));
+                            row(tr("Simulated time"), format::real(p.time));
+                            row(tr("Bodies"), format::count(p.bodies as u64));
                             row(
-                                tr("Pas / s"),
+                                tr("Steps / s"),
                                 format!("{:.1}", p.steps_per_second).replace('.', format::decimal_sep()),
                             );
-                            row(tr("Durée écoulée"), hms(p.elapsed));
+                            row(tr("Elapsed time"), hms(p.elapsed));
                             row(
-                                tr("Enregistrement"),
+                                tr("Recording"),
                                 if run.handle().is_recording() || p.frames > 0 {
                                     tr!(
-                                        "{} instantanés · {}",
+                                        "{} snapshots · {}",
                                         format::count(p.frames),
                                         crate::sim::format_bytes(p.bytes)
                                     )
                                 } else {
-                                    tr("aucun").to_owned()
+                                    tr("none").to_owned()
                                 },
                             );
                         });
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        stop = ui.button(tr("■ Arrêter et sauvegarder")).clicked();
+                        stop = ui.button(tr("■ Stop and save")).clicked();
                         show = ui
-                            .button(tr("Afficher la simulation"))
-                            .on_hover_text(tr("Le calcul et l'enregistrement continuent ; la cible n'est plus surveillée."))
+                            .button(tr("Show the simulation"))
+                            .on_hover_text(tr("The computation and the recording go on; the target is no longer watched."))
                             .clicked();
                     });
                     ui.label(
-                        RichText::new(tr("À l'arrêt, l'enregistrement est clos et l'état final sauvegardé sous le nom de la simulation."))
+                        RichText::new(tr("When stopped, the recording is closed and the final state saved under the simulation's name."))
                             .weak(),
                     );
                 }
                 Some(State::Finishing(_)) => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(tr("Clôture de l'enregistrement et sauvegarde…"));
+                        ui.label(tr("Closing the recording and saving…"));
                     });
                 }
                 Some(State::Done(r)) => {
                     match r {
                         Ok(o) => {
-                            ui.label(tr!("Terminé au pas {}.", format::count(o.step)));
-                            ui.label(tr!("Sauvegarde : {}", o.save.display()));
+                            ui.label(tr!("Finished at step {}.", format::count(o.step)));
+                            ui.label(tr!("Save: {}", o.save.display()));
                             if let Some(rec) = &o.recording {
-                                ui.label(tr!("Enregistrement : {}", rec.display()));
+                                ui.label(tr!("Recording: {}", rec.display()));
                             }
                         }
                         Err(e) => {
-                            ui.colored_label(egui::Color32::LIGHT_RED, tr!("Échec : {}", e));
+                            ui.colored_label(egui::Color32::LIGHT_RED, tr!("Failure: {}", e));
                         }
                     }
                     ui.add_space(8.0);
-                    if ui.button(tr("Retour à l'accueil")).clicked() {
+                    if ui.button(tr("Back to the home screen")).clicked() {
                         action = HeadlessAction::BackHome;
                     }
                 }

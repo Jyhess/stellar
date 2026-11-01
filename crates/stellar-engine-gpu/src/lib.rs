@@ -248,8 +248,8 @@ impl EngineFactory for GpuEngineFactory {
     fn descriptor(&self) -> EngineDescriptor {
         EngineDescriptor {
             id: ENGINE_ID,
-            label: "GPU — Barnes-Hut (carte graphique)",
-            description: "Arbre de Barnes-Hut construit et parcouru sur la carte graphique (simple précision).",
+            label: "GPU — Barnes-Hut (graphics card)",
+            description: "Barnes-Hut tree built and traversed on the graphics card (single precision).",
         }
     }
 

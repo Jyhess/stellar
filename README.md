@@ -314,4 +314,4 @@ To start a simulation directly without going through the home screen: `$env:STEL
 - **ejected clusters** (`stellar-domain/tests/ejection.rs`): friends of friends, pruning of unbound members, thresholds, spherical approximation for large clusters, local cluster of a body;
 - **sub-simulations** (`stellar-application/tests/systems.rs`): split, merge, escapees, removal of negligible lone bodies, agreement with the full computation;
 - **files** (`stellar-persistence`): reading older versions (saves 3 to 5, recordings 1, in the internal tests of `lib.rs` and `recording.rs`), continuing a recording, renaming and deleting linked files, simulation without display (`tests/continuation.rs`, `tests/files.rs`);
-- **interface** (`stellar-app`): command-line parsing, the translation table (duplicates, placeholders) and the translation of nested errors (`errors.rs`).
+- **interface** (`stellar-app`): command-line parsing, the translation table (duplicates, placeholders, every interface text translated into French) and the translation of nested errors (`errors.rs`).

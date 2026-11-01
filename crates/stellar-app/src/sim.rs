@@ -66,9 +66,9 @@ fn format_share(f: f64) -> String {
 pub fn format_bytes(b: u64) -> String {
     let b = b as f64;
     if b >= 1e9 {
-        tr!("{} Go", format!("{:.2}", b / 1e9))
+        tr!("{} GB", format!("{:.2}", b / 1e9))
     } else {
-        tr!("{} Mo", format!("{:.0}", b / 1e6))
+        tr!("{} MB", format!("{:.0}", b / 1e6))
     }
     .replace('.', crate::format::decimal_sep())
 }
@@ -381,7 +381,7 @@ impl SimScreen {
                     None => {
                         self.selected = None;
                         self.camera.mode = Mode::Free;
-                        self.notify(tr("Le corps suivi a été éjecté et éliminé."));
+                        self.notify(tr("The followed body was ejected and removed."));
                     }
                 }
             }
@@ -475,11 +475,11 @@ impl SimScreen {
         if self.traces_active {
             self.traces_active = false;
             self.source.stop_traces();
-            self.notify(tr("Traces effacées."));
+            self.notify(tr("Traces cleared."));
             return;
         }
         if self.snapshot.phase != Phase::Ready {
-            self.notify(tr("La simulation n'est pas encore prête."));
+            self.notify(tr("The simulation is not ready yet."));
             return;
         }
         // The 10 most massive bodies among those visible on screen.
@@ -490,7 +490,7 @@ impl SimScreen {
             TRACE_COUNT,
         );
         if ids.is_empty() {
-            self.notify(tr("Aucun corps visible à l'écran : rien à tracer."));
+            self.notify(tr("No body visible on screen: nothing to trace."));
             return;
         }
         let n = ids.len();
@@ -498,7 +498,7 @@ impl SimScreen {
         self.traces_active = true;
         self.sent_reference = None; // the reference will be sent again
         self.sync_trace_reference();
-        self.notify(tr!("Traces activées sur les {} corps visibles les plus massifs.", n));
+        self.notify(tr!("Traces enabled on the {} most massive visible bodies.", n));
     }
 
     /// Sends the traces' reference frame to the computation thread (see
@@ -549,9 +549,9 @@ impl SimScreen {
             TraceFrame::Barycenter => TraceFrame::Cluster,
             TraceFrame::Cluster => TraceFrame::Body,
         };
-        let mut text = tr!("Référentiel des traces : {}", self.trace_frame.label());
+        let mut text = tr!("Trace reference frame: {}", self.trace_frame.label());
         if self.trace_frame != TraceFrame::Barycenter && self.trace_reference() == Some(TraceReference::Barycenter) {
-            text.push_str(tr(" — sélectionnez un corps (barycentre en attendant)"));
+            text.push_str(tr(" — select a body (barycentre meanwhile)"));
         }
         self.notify(text);
     }
@@ -592,9 +592,9 @@ impl SimScreen {
         self.disk_normal = axis;
         self.disk_normal_at = Some(Instant::now());
         self.notify(match axis {
-            Some(a) => tr!("Barycentre vu de face au disque (axe incliné de {}° sur Oz).", format!("{:.1}", a.angle_between(DVec3::Z).to_degrees()))
+            Some(a) => tr!("Barycentre seen face-on to the disc (axis tilted {}° from Oz).", format!("{:.1}", a.angle_between(DVec3::Z).to_degrees()))
             .replace('.', crate::format::decimal_sep()),
-            None => tr("Barycentre : aucune rotation d'ensemble, vue selon l'axe Oz.").to_owned(),
+            None => tr("Barycentre: no overall rotation, view along the Oz axis.").to_owned(),
         });
     }
 
@@ -667,7 +667,7 @@ impl SimScreen {
         self.camera.look_towards(c - self.camera.position);
         self.camera.mode = Mode::Barycenter { distance };
         self.camera.place_in_orbit(c);
-        self.notify(tr!("Barycentre de la sous-simulation #{} sélectionné.", anchor));
+        self.notify(tr!("Barycentre of sub-simulation #{} selected.", anchor));
     }
 
     /// Follows the selected sub-simulation through merges: if its marker body
@@ -698,11 +698,11 @@ impl SimScreen {
             Some((a, c)) => {
                 self.bary_system = Some(a);
                 self.bary_system_center = c;
-                self.notify(tr!("Sous-simulation réunie : suivi de l'ensemble #{}.", a));
+                self.notify(tr!("Sub-simulation merged: following the combined set #{}.", a));
             }
             None => {
                 self.bary_system = None;
-                self.notify(tr("Sous-simulation réunie à la simulation : suivi du barycentre global."));
+                self.notify(tr("Sub-simulation merged back into the simulation: following the overall barycentre."));
             }
         }
         if self.bary_selected {
@@ -745,7 +745,7 @@ impl SimScreen {
         if self.camera.roll_to(self.reference_up()).is_some() {
             self.leveling = true;
         } else {
-            self.notify(tr("Visée selon la normale au disque : rien à redresser."));
+            self.notify(tr("Looking along the disc normal: nothing to level."));
         }
     }
 
@@ -778,7 +778,7 @@ impl SimScreen {
     fn toggle_follow(&mut self) {
         if self.camera.is_orbiting() {
             self.camera.mode = Mode::Free;
-            self.notify(tr("Suivi interrompu : vol libre."));
+            self.notify(tr("Following stopped: free flight."));
             return;
         }
         if self.bary_selected {
@@ -787,13 +787,13 @@ impl SimScreen {
             self.camera.look_towards(c - self.camera.position);
             self.camera.mode = Mode::Barycenter { distance };
             self.camera.place_in_orbit(c);
-            self.notify(tr("Suivi du barycentre."));
+            self.notify(tr("Following the barycentre."));
         } else if let Some(i) = self.cache.selected_index {
             self.select_index(i);
-            self.notify(tr("Suivi du corps sélectionné."));
+            self.notify(tr("Following the selected body."));
         } else {
             self.notify(
-                tr("Rien à suivre : sélectionnez un corps (clic, Origine) ou le barycentre (B)."),
+                tr("Nothing to follow: select a body (click, Home) or the barycentre (B)."),
             );
         }
     }
@@ -813,7 +813,7 @@ impl SimScreen {
         let d = OVERVIEW_MARGIN * r90 / half.sin();
         self.camera.mode = Mode::Free;
         self.camera.position = c - self.camera.forward() * d;
-        self.notify(tr!("Vue d'ensemble : 90 % de la masse dans un rayon de {}", format::real(r90)));
+        self.notify(tr!("Overview: 90% of the mass within a radius of {}", format::real(r90)));
     }
 
     fn select_heaviest(&mut self) {
@@ -834,9 +834,9 @@ impl SimScreen {
             self.select_index(i);
         } else {
             self.notify(if lighter {
-                tr("C'est déjà le corps le plus léger.")
+                tr("This is already the lightest body.")
             } else {
-                tr("C'est déjà le corps le plus massif.")
+                tr("This is already the most massive body.")
             });
         }
     }
@@ -997,7 +997,7 @@ impl SimScreen {
 
     fn toggle_recording(&mut self) {
         let Source::Live(h) = &self.source else {
-            self.notify(tr("Enregistrement indisponible pendant une relecture."));
+            self.notify(tr("Recording is unavailable during playback."));
             return;
         };
         if h.recording_status()
@@ -1005,11 +1005,11 @@ impl SimScreen {
             .load(std::sync::atomic::Ordering::Acquire)
         {
             h.stop_recording();
-            self.notify(tr("Enregistrement arrêté."));
+            self.notify(tr("Recording stopped."));
             return;
         }
         if self.snapshot.phase != Phase::Ready {
-            self.notify(tr("La simulation n'est pas encore prête."));
+            self.notify(tr("The simulation is not ready yet."));
             return;
         }
         let name = h.name();
@@ -1018,8 +1018,8 @@ impl SimScreen {
             .service
             .start_recording(&name, h, self.record_interval, budget)
         {
-            Ok(()) => self.notify(tr!("Enregistrement démarré : un instantané tous les {} pas.", self.record_interval)),
-            Err(e) => self.notify(tr!("Enregistrement impossible : {}", e.localized())),
+            Ok(()) => self.notify(tr!("Recording started: one snapshot every {} steps.", self.record_interval)),
+            Err(e) => self.notify(tr!("Recording failed: {}", e.localized())),
         }
     }
 
@@ -1186,11 +1186,11 @@ impl SimScreen {
             return;
         }
         if self.source.live().is_none() {
-            self.notify(tr("Sauvegarde indisponible pendant une relecture."));
+            self.notify(tr("Saving is unavailable during playback."));
             return;
         }
         if self.snapshot.phase != Phase::Ready {
-            self.notify(tr("La simulation n'est pas encore prête."));
+            self.notify(tr("The simulation is not ready yet."));
             return;
         }
         let (tx, rx) = mpsc::channel();
@@ -1217,7 +1217,7 @@ impl SimScreen {
             let _ = tx.send(r);
         });
         self.save_job = Some(rx);
-        self.notify(tr("Sauvegarde en cours…"));
+        self.notify(tr("Saving…"));
     }
 
     fn poll_save(&mut self) {
@@ -1225,8 +1225,8 @@ impl SimScreen {
         if let Ok(r) = rx.try_recv() {
             self.save_job = None;
             match r {
-                Ok(p) => self.notify(tr!("Sauvegardé : {}", p.display())),
-                Err(e) => self.notify(tr!("Échec de la sauvegarde : {}", e)),
+                Ok(p) => self.notify(tr!("Saved: {}", p.display())),
+                Err(e) => self.notify(tr!("Save failed: {}", e)),
             }
         }
     }
@@ -1513,7 +1513,7 @@ impl SimScreen {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                tr!("Génération de {} particules et premier calcul des forces…", format::count(self.source.config().initial.count as u64)),
+                tr!("Generating {} particles and computing the first forces…", format::count(self.source.config().initial.count as u64)),
                 egui::FontId::proportional(22.0),
                 Color32::from_gray(220),
             );
@@ -1522,7 +1522,7 @@ impl SimScreen {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                tr!("Le moteur de calcul n'a pas pu démarrer :\n{}\n\nÉchap → Retour à l'accueil, puis choisir un autre moteur dans les paramètres avancés.", self.snapshot.error.as_ref().map_or_else(|| tr("erreur inconnue").to_owned(), |e| e.localized())),
+                tr!("The computation engine could not start:\n{}\n\nEsc → Back to the home screen, then choose another engine in the advanced parameters.", self.snapshot.error.as_ref().map_or_else(|| tr("unknown error").to_owned(), |e| e.localized())),
                 egui::FontId::proportional(18.0),
                 Color32::from_rgb(255, 140, 120),
             );
@@ -1541,9 +1541,9 @@ impl SimScreen {
         }
 
         let hint = if self.captured {
-            tr("Tab : libérer la souris · Échap : menu · F : suivre / cesser · A / E : bascule · H : horizon · C : barycentre · V : vue d'ensemble · T : traces")
+            tr("Tab: release the mouse · Esc: menu · F: follow / stop · A / E: roll · H: horizon · C: barycentre · V: overview · T: traces")
         } else {
-            tr("Souris libre — clic gauche : suivre un corps · clic droit ou Tab : reprendre la visée · Échap : menu")
+            tr("Mouse released — left click: follow a body · right click or Tab: resume aiming · Esc: menu")
         };
         painter.text(
             rect.center_bottom() - egui::vec2(0.0, 14.0),
@@ -1669,7 +1669,7 @@ impl SimScreen {
     fn hud(&mut self, ctx: &egui::Context) {
         let snap = Arc::clone(&self.snapshot);
         let title = if self.source.replay().is_some() {
-            tr("Relecture")
+            tr("Playback")
         } else {
             tr("Simulation")
         };
@@ -1690,7 +1690,7 @@ impl SimScreen {
 
         let mut clicked_id: Option<BodyId> = None;
         let mut clicked_system: Option<BodyId> = None;
-        egui::Window::new(tr("Corps"))
+        egui::Window::new(tr("Bodies"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .resizable(false)
             .default_width(240.0)
@@ -1698,8 +1698,8 @@ impl SimScreen {
                 if self.bary_selected {
                     let summary = self.bary_summary().cloned();
                     let title = match &summary {
-                        Some(s) => tr!("Barycentre de la sous-simulation #{}", s.anchor),
-                        None => tr("Barycentre sélectionné").to_owned(),
+                        Some(s) => tr!("Barycentre of sub-simulation #{}", s.anchor),
+                        None => tr("Barycentre selected").to_owned(),
                     };
                     ui.label(RichText::new(title).strong());
                     egui::Grid::new("bary")
@@ -1715,43 +1715,43 @@ impl SimScreen {
                             row(ui, tr("Position"), format!("{} ; {} ; {}", format::real(c.x), format::real(c.y), format::real(c.z)));
                             match &summary {
                                 Some(s) => {
-                                    row(ui, tr("Corps"), format::count(s.bodies as u64));
-                                    row(ui, tr("Masse"), format::real(s.mass));
-                                    row(ui, tr("Vitesse"), format::real(s.velocity.length()));
-                                    row(ui, tr("Taille"), format::real(s.size));
-                                    row(ui, tr("Distance au barycentre global"), format::real((c - self.cache.barycenter).length()));
+                                    row(ui, tr("Bodies"), format::count(s.bodies as u64));
+                                    row(ui, tr("Mass"), format::real(s.mass));
+                                    row(ui, tr("Velocity"), format::real(s.velocity.length()));
+                                    row(ui, tr("Size"), format::real(s.size));
+                                    row(ui, tr("Distance to the overall barycentre"), format::real((c - self.cache.barycenter).length()));
                                 }
                                 None => {
-                                    row(ui, tr("Masse présente"), format::real(snap.total_mass));
-                                    row(ui, tr("Vitesse"), format::real(self.cache.barycenter_velocity.length()));
+                                    row(ui, tr("Mass present"), format::real(snap.total_mass));
+                                    row(ui, tr("Velocity"), format::real(self.cache.barycenter_velocity.length()));
                                 }
                             }
-                            row(ui, tr("Distance caméra"), format::real((c - self.camera.position).length()));
+                            row(ui, tr("Camera distance"), format::real((c - self.camera.position).length()));
                             match self.cache.rotation_axis {
                                 Some(a) => row(
                                     ui,
-                                    tr("Axe de rotation"),
-                                    tr!("{}° sur Oz", format!("{:.1}", a.angle_between(DVec3::Z).to_degrees())).replace('.', crate::format::decimal_sep()),
+                                    tr("Rotation axis"),
+                                    tr!("{}° from Oz", format!("{:.1}", a.angle_between(DVec3::Z).to_degrees())).replace('.', crate::format::decimal_sep()),
                                 ),
-                                None => row(ui, tr("Axe de rotation"), tr("aucune rotation").to_owned()),
+                                None => row(ui, tr("Rotation axis"), tr("no rotation").to_owned()),
                             }
                         });
                     ui.horizontal(|ui| {
-                        if ui.button(tr("Vue de face (B)")).clicked() {
+                        if ui.button(tr("Face-on view (B)")).clicked() {
                             self.view_barycenter_from_axis();
                         }
-                        let label = if self.camera.is_orbiting() { tr("Cesser le suivi (F)") } else { tr("Suivre (F)") };
+                        let label = if self.camera.is_orbiting() { tr("Stop following (F)") } else { tr("Follow (F)") };
                         if ui.button(label).clicked() {
                             self.toggle_follow();
                         }
-                        if ui.button(tr("Désélectionner")).clicked() {
+                        if ui.button(tr("Deselect")).clicked() {
                             self.bary_selected = false;
                             self.bary_system = None;
                             self.camera.mode = Mode::Free;
                         }
                     });
                 } else {
-                ui.label(RichText::new(tr("Corps sélectionné")).strong());
+                ui.label(RichText::new(tr("Selected body")).strong());
                 match self.cache.selected_index {
                     Some(i) => {
                         let b = &snap.state.bodies;
@@ -1766,11 +1766,11 @@ impl SimScreen {
                                     ui.label(RichText::new(v).monospace());
                                     ui.end_row();
                                 };
-                                row(ui, tr("Identifiant"), b.ids[i].to_string());
+                                row(ui, tr("Identifier"), b.ids[i].to_string());
                                 if let Some(r) = self.cache.selected_rank {
                                     row(
                                         ui,
-                                        tr("Rang (masse)"),
+                                        tr("Rank (mass)"),
                                         format!(
                                             "{} / {}",
                                             format::count(r as u64),
@@ -1778,25 +1778,25 @@ impl SimScreen {
                                         ),
                                     );
                                 }
-                                row(ui, tr("Masse"), format::real(m));
+                                row(ui, tr("Mass"), format::real(m));
                                 row(
                                     ui,
-                                    tr("Rayon"),
+                                    tr("Radius"),
                                     format::real(body_radius(m, self.base_radius())),
                                 );
-                                row(ui, tr("Vitesse"), format::real(b.velocities[i].length()));
+                                row(ui, tr("Velocity"), format::real(b.velocities[i].length()));
                                 row(
                                     ui,
-                                    tr("Dist. barycentre"),
+                                    tr("Dist. to barycentre"),
                                     format::real((p - self.cache.barycenter).length()),
                                 );
                             });
                         ui.horizontal(|ui| {
-                            let label = if self.camera.is_orbiting() { tr("Cesser le suivi (F)") } else { tr("Suivre (F)") };
+                            let label = if self.camera.is_orbiting() { tr("Stop following (F)") } else { tr("Follow (F)") };
                             if ui.button(label).clicked() {
                                 self.toggle_follow();
                             }
-                            if ui.button(tr("Désélectionner")).clicked() {
+                            if ui.button(tr("Deselect")).clicked() {
                                 self.selected = None;
                                 self.camera.mode = Mode::Free;
                                 self.cache.selected_index = None;
@@ -1805,7 +1805,7 @@ impl SimScreen {
                     }
                     None => {
                         ui.label(
-                            RichText::new(tr("Aucun — visez et cliquez, ou touches Origine ou B (barycentre).")).weak(),
+                            RichText::new(tr("None — aim and click, or press Home or B (barycentre).")).weak(),
                         );
                     }
                 }
@@ -1813,7 +1813,7 @@ impl SimScreen {
                 ui.separator();
                 self.traces_panel(ui);
                 ui.separator();
-                ui.label(RichText::new(tr("Les plus massifs")).strong());
+                ui.label(RichText::new(tr("Most massive")).strong());
                 egui::Grid::new("top")
                     .num_columns(4)
                     .spacing([10.0, 2.0])
@@ -1863,7 +1863,7 @@ impl SimScreen {
                             if let Some(h) = self.source.live() {
                                 h.prune_negligible();
                             }
-                            self.notify(tr("Corps isolés négligeables supprimés."));
+                            self.notify(tr("Negligible lone bodies removed."));
                         }
                         Some(PanelClick::AutoPrune(on)) => {
                             if let Some(h) = self.source.live() {
@@ -1893,25 +1893,23 @@ impl SimScreen {
         let mut clicked = None;
         let chosen = self.chosen_system().map(|s| s.anchor);
         if snap.systems.len() > 1 {
-            ui.label(RichText::new(tr("Sous-simulations")).strong()).on_hover_text(
-                tr("Amas éjectés détachés : chacun est calculé à part, dans son propre repère, et ressent les autres par leur champ de marée. Deux sous-simulations qui se rapprochent sont réunies."),
+            ui.label(RichText::new(tr("Sub-simulations")).strong()).on_hover_text(
+                tr("Detached ejected clusters: each is computed separately, in its own frame, and feels the others through their tidal field. Two sub-simulations that come close are merged."),
             );
             egui::Grid::new("systems")
                 .num_columns(4)
                 .spacing([10.0, 2.0])
                 .show(ui, |ui| {
-                    ui.label(RichText::new(tr("Repère")).weak());
-                    ui.label(RichText::new(tr("Corps")).weak());
-                    ui.label(RichText::new(tr("Masse")).weak());
+                    ui.label(RichText::new(tr("Anchor")).weak());
+                    ui.label(RichText::new(tr("Bodies")).weak());
+                    ui.label(RichText::new(tr("Mass")).weak());
                     ui.label(RichText::new(tr("Distance")).weak());
                     ui.end_row();
                     for s in &snap.systems {
                         let sel = chosen == Some(s.anchor);
                         if ui
                             .selectable_label(sel, format!("#{}", s.anchor))
-                            .on_hover_text(tr!("Taille : {}
-Vitesse : {}
-Cliquer pour centrer la caméra sur son barycentre.", format::real(s.size), format::real(s.velocity.length())))
+                            .on_hover_text(tr!("Size: {}\nSpeed: {}\nClick to centre the camera on its barycentre.", format::real(s.size), format::real(s.velocity.length())))
                             .clicked()
                         {
                             clicked = Some(PanelClick::System(s.anchor));
@@ -1926,7 +1924,7 @@ Cliquer pour centrer la caméra sur son barycentre.", format::real(s.size), form
                     }
                 });
             if ui
-                .button(tr("Supprimer les corps isolés négligeables"))
+                .button(tr("Remove the negligible lone bodies"))
                 .on_hover_text(prune_help())
                 .clicked()
             {
@@ -1936,45 +1934,44 @@ Cliquer pour centrer la caméra sur son barycentre.", format::real(s.size), form
         }
         let mut auto = self.auto_prune;
         if ui
-            .checkbox(&mut auto, tr("Supprimer automatiquement les corps isolés négligeables"))
+            .checkbox(&mut auto, tr("Automatically remove the negligible lone bodies"))
             .on_hover_text(prune_help())
             .changed()
         {
             clicked = Some(PanelClick::AutoPrune(auto));
         }
-        ui.label(RichText::new(tr("Amas éjectés")).strong())
+        ui.label(RichText::new(tr("Ejected clusters")).strong())
             .on_hover_text(
-                tr("Groupes liés de corps lointains, conservés par le nettoyage (seuils dans les paramètres avancés). Cliquer sur un amas sélectionne son corps le plus massif."),
+                tr("Bound groups of distant bodies, kept by the clean-up (thresholds in the advanced parameters). Clicking a cluster selects its most massive body."),
             );
         let Some(step) = snap.clusters_step else {
-            ui.label(RichText::new(tr("Aucun nettoyage effectué pour l'instant.")).weak());
+            ui.label(RichText::new(tr("No clean-up performed yet.")).weak());
             return clicked;
         };
         if snap.clusters.is_empty() {
             ui.label(
-                RichText::new(tr!("Aucun au dernier nettoyage (pas {}).", format::count(step)))
+                RichText::new(tr!("None at the last clean-up (step {}).", format::count(step)))
                     .weak(),
             );
             return clicked;
         }
         ui.label(
-            RichText::new(tr!("Au dernier nettoyage (pas {}) :", format::count(step))).weak(),
+            RichText::new(tr!("At the last clean-up (step {}):", format::count(step))).weak(),
         );
         egui::Grid::new("clusters")
             .num_columns(4)
             .spacing([10.0, 2.0])
             .show(ui, |ui| {
-                ui.label(RichText::new(tr("Repère")).weak());
-                ui.label(RichText::new(tr("Corps")).weak());
-                ui.label(RichText::new(tr("Masse")).weak());
+                ui.label(RichText::new(tr("Anchor")).weak());
+                ui.label(RichText::new(tr("Bodies")).weak());
+                ui.label(RichText::new(tr("Mass")).weak());
                 ui.label(RichText::new(tr("Distance")).weak());
                 ui.end_row();
                 for c in snap.clusters.iter().take(SHOWN) {
                     let sel = self.selected == Some(c.anchor);
                     if ui
                         .selectable_label(sel, format!("#{}", c.anchor))
-                        .on_hover_text(tr!("Rayon de demi-masse : {}
-Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length())))
+                        .on_hover_text(tr!("Half-mass radius: {}\nVelocity: {}", format::real(c.half_mass_radius), format::real(c.velocity.length())))
                         .clicked()
                     {
                         clicked = Some(PanelClick::Body(c.anchor));
@@ -1990,7 +1987,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
             });
         let hidden = snap.clusters.len().saturating_sub(SHOWN);
         if hidden > 0 {
-            ui.label(RichText::new(tr!("… et {} autres", format::count(hidden as u64))).weak());
+            ui.label(RichText::new(tr!("… and {} more", format::count(hidden as u64))).weak());
         }
         clicked
     }
@@ -2020,9 +2017,9 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         ui.horizontal(|ui| {
             ui.label(RichText::new(tr("Traces (T)")).strong());
             let label = if self.traces_active {
-                tr("Effacer")
+                tr("Clear")
             } else {
-                tr("Tracer les 10 plus gros visibles")
+                tr("Trace the 10 largest visible")
             };
             if ui.small_button(label).clicked() {
                 self.toggle_traces();
@@ -2032,36 +2029,36 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
             return;
         }
         ui.horizontal(|ui| {
-            ui.radio_value(&mut self.trace_tail_only, false, tr("Historique"));
-            ui.radio_value(&mut self.trace_tail_only, true, tr("Queue"));
+            ui.radio_value(&mut self.trace_tail_only, false, tr("History"));
+            ui.radio_value(&mut self.trace_tail_only, true, tr("Tail"));
         });
         ui.horizontal(|ui| {
-            ui.label(tr("Référentiel (R)"));
+            ui.label(tr("Reference frame (R)"));
             for frame in [TraceFrame::Body, TraceFrame::Barycenter, TraceFrame::Cluster] {
                 ui.radio_value(&mut self.trace_frame, frame, frame.label());
             }
         });
         let reference = self.trace_reference();
         let hint = match (self.trace_frame, reference) {
-            (TraceFrame::Barycenter, _) => tr("Orbites vues depuis le centre de gravité de la simulation.").to_owned(),
+            (TraceFrame::Barycenter, _) => tr("Orbits seen from the simulation's centre of mass.").to_owned(),
             (_, Some(TraceReference::System(anchor))) => {
-                tr!("Orbites vues depuis le centre de gravité de la sous-simulation #{}.", anchor)
+                tr!("Orbits seen from the centre of mass of sub-simulation #{}.", anchor)
             }
             (_, Some(TraceReference::Barycenter)) => {
-                tr("Aucun corps sélectionné : traces relatives au barycentre en attendant.").to_owned()
+                tr("No body selected: traces relative to the barycentre meanwhile.").to_owned()
             }
             (TraceFrame::Cluster, _) => {
                 let n = self.source.with_traces(|set| set.map_or(0, |s| s.cluster_size()));
-                tr!("Centre de gravité de l'amas lié du corps sélectionné ({} corps suivis).", format::count(n as u64))
+                tr!("Centre of mass of the selected body's bound cluster ({} bodies tracked).", format::count(n as u64))
             }
-            _ => tr("Orbites vues depuis le corps sélectionné.").to_owned(),
+            _ => tr("Orbits seen from the selected body.").to_owned(),
         };
         ui.label(RichText::new(hint).weak());
         if self.trace_tail_only {
             ui.add(
                 egui::Slider::new(&mut self.trace_tail_len, 10..=MAX_TAIL)
                     .logarithmic(true)
-                    .text(tr("pas")),
+                    .text(tr("steps")),
             );
         }
         let rows: Vec<(BodyId, Option<BodyId>)> = self.source.with_traces(|set| match set {
@@ -2084,7 +2081,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                     let text = match current {
                         Some(c) if c == origin => format!("#{c}"),
                         Some(c) => tr!("#{} → #{}", origin, c),
-                        None => tr!("#{} (éliminé)", origin),
+                        None => tr!("#{} (removed)", origin),
                     };
                     ui.label(RichText::new(text).monospace());
                     match current.and_then(|c| self.cache.trace_masses.get(&c)) {
@@ -2120,44 +2117,44 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                     ui.end_row();
                 };
                 let state = if snap.phase == Phase::Failed {
-                    tr("échec du moteur")
+                    tr("engine failure")
                 } else if snap.phase == Phase::Initialising {
                     "initialisation"
                 } else if self.paused {
-                    tr("en pause")
+                    tr("paused")
                 } else {
-                    tr("en cours")
+                    tr("running")
                 };
-                row(ui, tr("État"), state.to_owned());
-                row(ui, tr("Moteur"), engine.to_owned());
-                row(ui, tr("Corps"), format::count(snap.body_count as u64));
-                row(ui, tr("Pas"), format::count(snap.step));
-                row(ui, tr("Temps simulé"), format::real(snap.time));
+                row(ui, tr("State"), state.to_owned());
+                row(ui, tr("Engine"), engine.to_owned());
+                row(ui, tr("Bodies"), format::count(snap.body_count as u64));
+                row(ui, tr("Step"), format::count(snap.step));
+                row(ui, tr("Simulated time"), format::real(snap.time));
                 row(
                     ui,
-                    tr("Pas / s"),
+                    tr("Steps / s"),
                     format!("{:.2}", snap.steps_per_second).replace('.', crate::format::decimal_sep()),
                 );
                 row(
                     ui,
-                    tr("Durée d'un pas"),
+                    tr("Step duration"),
                     format!("{:.1} ms", snap.last_step_ms).replace('.', crate::format::decimal_sep()),
                 );
-                row(ui, tr("Images / s"), format!("{:.0}", self.fps));
+                row(ui, tr("Frames / s"), format!("{:.0}", self.fps));
                 row(
                     ui,
-                    tr("Énergie totale"),
+                    tr("Total energy"),
                     format::real(snap.diagnostics.total_energy()),
                 );
                 if let Some(d) = snap.energy_drift() {
                     row(ui, tr("ΔE / E₀"), format::percent(d));
                 }
-                row(ui, tr("Masse présente"), format::real(snap.total_mass));
+                row(ui, tr("Mass present"), format::real(snap.total_mass));
                 if let Some(e) = snap.ejected_mass() {
                     let m0 = snap.state.initial_mass.unwrap_or(0.0);
                     row(
                         ui,
-                        tr("Masse éjectée"),
+                        tr("Ejected mass"),
                         format!(
                             "{} ({})",
                             format::real(e),
@@ -2167,26 +2164,26 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                 }
             });
         ui.label(
-            RichText::new(tr("ΔE inclut les pertes par fusion et éjection."))
+            RichText::new(tr("ΔE includes the losses through mergers and ejections."))
                 .small()
                 .weak(),
         );
         ui.separator();
         ui.horizontal(|ui| {
             let label = if self.paused {
-                tr("▶ Reprendre")
+                tr("▶ Resume")
             } else {
                 tr("⏸ Pause")
             };
             if ui.button(label).clicked() {
                 self.toggle_pause();
             }
-            if ui.button(tr("Pas à pas")).clicked() {
+            if ui.button(tr("Single step")).clicked() {
                 self.step_once();
             }
             if self.source.live().is_some()
                 && ui
-                    .button(tr("Sans affichage"))
+                    .button(tr("Without display"))
                     .on_hover_text(background_help())
                     .clicked()
             {
@@ -2194,14 +2191,14 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
             }
         });
         ui.horizontal(|ui| {
-            let mut changed = ui.checkbox(&mut self.limit_rate, tr("Limiter à")).changed();
+            let mut changed = ui.checkbox(&mut self.limit_rate, tr("Limit to")).changed();
             changed |= ui
                 .add_enabled(
                     self.limit_rate,
                     egui::DragValue::new(&mut self.max_rate)
                         .range(0.1..=10_000.0)
                         .speed(0.5)
-                        .suffix(tr(" pas/s")),
+                        .suffix(tr(" steps/s")),
                 )
                 .changed();
             if changed {
@@ -2216,15 +2213,15 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
 
     fn view_settings(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(tr("Luminosité"));
+            ui.label(tr("Brightness"));
             ui.add(egui::Slider::new(&mut self.brightness, 0.02..=3.0).logarithmic(true));
         });
         ui.horizontal(|ui| {
-            ui.label(tr("Poussières"));
+            ui.label(tr("Dust brightness"));
             ui.add(egui::Slider::new(&mut self.dust_floor, 0.0..=1.0));
         });
         ui.horizontal(|ui| {
-            ui.label(tr("Vitesse caméra"));
+            ui.label(tr("Camera speed"));
             let sp = self.camera.speed * 0.02;
             ui.add(
                 egui::DragValue::new(&mut self.camera.speed)
@@ -2233,9 +2230,9 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                     .suffix(tr(" × dist./s")),
             )
             .on_hover_text(
-                tr("Fraction de la distance au corps sélectionné (ou au barycentre) parcourue chaque seconde."),
+                tr("Fraction of the distance to the selected body (or to the barycentre) travelled each second."),
             );
-            ui.label(RichText::new(tr("(+/−, Maj, Ctrl)")).weak());
+            ui.label(RichText::new(tr("(+/−, Shift, Ctrl)")).weak());
         });
     }
 
@@ -2245,7 +2242,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         let st = h.recording_status();
         let active = st.active.load(Ordering::Acquire);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("Enregistrement (F9)")).strong());
+            ui.label(RichText::new(tr("Recording (F9)")).strong());
             if active {
                 ui.colored_label(
                     Color32::from_rgb(255, 80, 80),
@@ -2256,16 +2253,16 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         let toggle = if active {
             let frames = st.frames.load(Ordering::Relaxed);
             let bytes = st.bytes.load(Ordering::Relaxed);
-            ui.label(tr!("{} instantanés · {} · 1 tous les {} pas", format::count(frames), format_bytes(bytes), st.interval.load(Ordering::Relaxed)));
-            ui.button(tr("■ Arrêter")).clicked()
+            ui.label(tr!("{} snapshots · {} · 1 every {} steps", format::count(frames), format_bytes(bytes), st.interval.load(Ordering::Relaxed)));
+            ui.button(tr("■ Stop")).clicked()
         } else {
             ui.horizontal(|ui| {
-                ui.label(tr("Un instantané tous les"));
+                ui.label(tr("One snapshot every"));
                 ui.add(egui::DragValue::new(&mut self.record_interval).range(1..=100_000));
-                ui.label(tr("pas"));
+                ui.label(tr("steps"));
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.record_budget_enabled, tr("Poussière limitée à"));
+                ui.checkbox(&mut self.record_budget_enabled, tr("Dust limited to"));
                 ui.add_enabled(
                     self.record_budget_enabled,
                     egui::DragValue::new(&mut self.record_budget)
@@ -2277,12 +2274,12 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                 ui.colored_label(Color32::LIGHT_RED, e.localized());
             } else if let Some(p) = st.last_path.lock().ok().and_then(|g| g.clone()) {
                 ui.label(
-                    RichText::new(tr!("Dernier : {}", p.display()))
+                    RichText::new(tr!("Last: {}", p.display()))
                         .small()
                         .weak(),
                 );
             }
-            ui.button(tr("Enregistrer")).clicked()
+            ui.button(tr("Record")).clicked()
         };
         if toggle {
             self.toggle_recording();
@@ -2312,30 +2309,30 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                     ui.end_row();
                 };
                 let state = if waiting && c.playing {
-                    tr("chargement…")
+                    tr("loading…")
                 } else if c.playing {
                     if c.reverse {
-                        tr("lecture arrière")
+                        tr("playing backwards")
                     } else {
                         "lecture"
                     }
                 } else {
-                    tr("en pause")
+                    tr("paused")
                 };
-                row(ui, tr("État"), state.to_owned());
+                row(ui, tr("State"), state.to_owned());
                 row(
                     ui,
-                    tr("Instantané"),
+                    tr("Snapshot"),
                     format!("{:.1} / {}", c.position + 1.0, n).replace('.', crate::format::decimal_sep()),
                 );
-                row(ui, tr("Pas"), format::count(snap.step));
-                row(ui, tr("Temps simulé"), format::real(snap.time));
-                row(ui, tr("Corps affichés"), format::count(snap.body_count as u64));
+                row(ui, tr("Step"), format::count(snap.step));
+                row(ui, tr("Simulated time"), format::real(snap.time));
+                row(ui, tr("Bodies shown"), format::count(snap.body_count as u64));
                 if let Some(e) = snap.ejected_mass() {
                     let m0 = snap.state.initial_mass.unwrap_or(0.0);
                     row(
                         ui,
-                        tr("Masse éjectée"),
+                        tr("Ejected mass"),
                         format!(
                             "{} ({})",
                             format::real(e),
@@ -2346,14 +2343,14 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                 if weight > 1.0 {
                     row(
                         ui,
-                        tr("Poussière"),
-                        tr!("1 sur {}", format!("{:.1}", weight)).replace('.', crate::format::decimal_sep()),
+                        tr("Dust"),
+                        tr!("1 in {}", format!("{:.1}", weight)).replace('.', crate::format::decimal_sep()),
                     );
                 }
-                row(ui, tr("Images / s"), format!("{fps:.0}"));
-                row(ui, tr("Intervalle"), format!("{info_interval} pas"));
+                row(ui, tr("Frames / s"), format!("{fps:.0}"));
+                row(ui, tr("Interval"), tr!("{} steps", info_interval));
                 if let Some(b) = budget {
-                    row(ui, tr("Budget poussière"), format::count(b));
+                    row(ui, tr("Dust budget"), format::count(b));
                 }
             });
         if let Some(e) = error {
@@ -2364,19 +2361,19 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         let slider = ui.add(
             egui::Slider::new(&mut pos, 0.0..=last.max(1e-9))
                 .show_value(false)
-                .text(tr("temps")),
+                .text(tr("time")),
         );
         if slider.changed() {
             c.seek(pos);
         }
         let mut toggle = false;
         ui.horizontal(|ui| {
-            if ui.button("⏮").on_hover_text(tr("Début")).clicked() {
+            if ui.button("⏮").on_hover_text(tr("Start")).clicked() {
                 c.seek(0.0);
             }
             if ui
                 .button("◀|")
-                .on_hover_text(tr("Instantané précédent (←)"))
+                .on_hover_text(tr("Previous snapshot (←)"))
                 .clicked()
             {
                 c.step(-1);
@@ -2384,34 +2381,34 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
             let label = if c.playing { "⏸" } else { "▶" };
             if ui
                 .button(label)
-                .on_hover_text(tr("Lecture / pause (Espace)"))
+                .on_hover_text(tr("Play / pause (Space)"))
                 .clicked()
             {
                 toggle = true;
             }
             if ui
                 .button("|▶")
-                .on_hover_text(tr("Instantané suivant (→)"))
+                .on_hover_text(tr("Next snapshot (→)"))
                 .clicked()
             {
                 c.step(1);
             }
-            if ui.button("⏭").on_hover_text(tr("Fin")).clicked() {
+            if ui.button("⏭").on_hover_text(tr("End")).clicked() {
                 c.seek(last);
             }
-            ui.checkbox(&mut c.reverse, tr("Arrière"))
-                .on_hover_text(tr("Retour arrière (⌫)"));
+            ui.checkbox(&mut c.reverse, tr("Backwards"))
+                .on_hover_text(tr("Reverse (⌫)"));
         });
         ui.horizontal(|ui| {
-            ui.label(tr("Vitesse"));
+            ui.label(tr("Velocity"));
             ui.add(
                 egui::Slider::new(&mut c.speed, 0.05..=1000.0)
                     .logarithmic(true)
-                    .suffix(tr(" inst./s")),
+                    .suffix(tr(" snap./s")),
             );
         });
         ui.label(
-            RichText::new(tr("↑ / ↓ : vitesse · ← / → : instantané · ⌫ : sens"))
+            RichText::new(tr("↑ / ↓: speed · ← / →: snapshot · ⌫: direction"))
                 .small()
                 .weak(),
         );
@@ -2432,34 +2429,34 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
             .show(ctx, |ui| {
                 ui.set_min_width(320.0);
                 ui.vertical_centered_justified(|ui| {
-                    if ui.button(tr("Reprendre")).clicked() {
+                    if ui.button(tr("Resume")).clicked() {
                         self.menu_open = false;
                         self.captured = true;
                     }
-                    if ui.button(tr("Sauvegarder (F5)")).clicked() {
+                    if ui.button(tr("Save (F5)")).clicked() {
                         self.start_save();
                     }
                     if self.source.live().is_some()
                         && ui
-                            .button(tr("Passer en arrière-plan"))
+                            .button(tr("Send to the background"))
                             .on_hover_text(background_help())
                             .clicked()
                     {
                         action = SimAction::Background;
                     }
-                    if ui.button(tr("Retour à l'accueil")).clicked() {
+                    if ui.button(tr("Back to the home screen")).clicked() {
                         action = SimAction::BackHome;
                     }
-                    if ui.button(tr("Quitter")).clicked() {
+                    if ui.button(tr("Quit")).clicked() {
                         action = SimAction::Quit;
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(tr("Langue"));
+                    ui.label(tr("Language"));
                     crate::i18n::picker(ui);
                 });
                 ui.separator();
-                ui.label(RichText::new(tr("Commandes")).strong());
+                ui.label(RichText::new(tr("Controls")).strong());
                 egui::Grid::new("keys")
                     .num_columns(2)
                     .spacing([16.0, 2.0])
@@ -2467,42 +2464,42 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                         for (k, v) in [
                             (
                                 tr("Z / S"),
-                                tr("avancer / reculer (en suivi : distance à la cible)"),
+                                tr("forward / back (when following: distance to the target)"),
                             ),
-                            (tr("Q / D"), tr("gauche / droite (sans effet en suivi)")),
-                            (tr("A / E"), tr("basculer la vue autour de l'axe de visée")),
-                            ("H", tr("redresser l'horizon sur le plan du disque")),
-                            (tr("Maj / Ctrl"), tr("accélérer / ralentir")),
+                            (tr("Q / D"), tr("left / right (no effect when following)")),
+                            (tr("A / E"), tr("roll the view around the line of sight")),
+                            ("H", tr("level the horizon on the disc plane")),
+                            (tr("Shift / Ctrl"), tr("speed up / slow down")),
                             (
                                 "+ / −",
-                                tr("vitesse (proportionnelle à la distance à la sélection)"),
+                                tr("speed (proportional to the distance to the selection)"),
                             ),
                             (
-                                tr("Souris"),
-                                tr("orientation (en suivi : tourner autour de la cible)"),
+                                tr("Mouse"),
+                                tr("orientation (when following: orbit the target)"),
                             ),
-                            (tr("Molette"), tr("avancer / reculer (en suivi : distance à la cible)")),
-                            (tr("Ctrl + molette"), tr("zoom optique")),
-                            (tr("Clic gauche"), tr("suivre le corps visé")),
-                            ("F", tr("suivre la sélection / cesser le suivi")),
-                            (tr("Origine"), tr("corps le plus massif")),
-                            (tr("PgDn / PgUp"), tr("corps suivant / précédent par masse")),
-                            ("B", tr("barycentre : sous-simulation choisie, puis global (vue de face au disque)")),
-                            ("C", tr("viser le centre de gravité")),
-                            ("V", tr("vue d'ensemble (90 % de la masse)")),
-                            ("T", tr("tracer les 10 plus massifs visibles / effacer")),
-                            ("R", tr("traces : référentiel corps sélectionné / barycentre / amas local")),
-                            (tr("Espace / P"), tr("pause / pas à pas")),
-                            (tr("Tab"), tr("libérer / capturer la souris")),
-                            (tr("Clic droit"), tr("reprendre la visée (souris libre)")),
-                            ("F5", tr("sauvegarder")),
-                            ("F9", tr("démarrer / arrêter l'enregistrement")),
-                            ("F10", tr("quitter")),
-                            (tr("Espace"), tr("relecture : lecture / pause")),
-                            ("← / →", tr("relecture : instantané précédent / suivant")),
-                            ("↑ / ↓", tr("relecture : vitesse")),
-                            ("⌫", tr("relecture : sens de lecture")),
-                            (tr("Échap"), tr("ce menu")),
+                            (tr("Wheel"), tr("forward / back (when following: distance to the target)")),
+                            (tr("Ctrl + wheel"), tr("optical zoom")),
+                            (tr("Left click"), tr("follow the body aimed at")),
+                            ("F", tr("follow the selection / stop following")),
+                            (tr("Home"), tr("most massive body")),
+                            (tr("PgDn / PgUp"), tr("next / previous body by mass")),
+                            ("B", tr("barycentre: chosen sub-simulation, then global (face-on view of the disc)")),
+                            ("C", tr("aim at the centre of mass")),
+                            ("V", tr("overview (90% of the mass)")),
+                            ("T", tr("trace the 10 most massive visible / clear")),
+                            ("R", tr("traces: reference frame selected body / barycentre / local cluster")),
+                            (tr("Space / P"), tr("pause / single step")),
+                            (tr("Tab"), tr("release / capture the mouse")),
+                            (tr("Right click"), tr("resume aiming (mouse released)")),
+                            ("F5", tr("save")),
+                            ("F9", tr("start / stop recording")),
+                            ("F10", tr("quit")),
+                            (tr("Space"), tr("playback: play / pause")),
+                            ("← / →", tr("playback: previous / next snapshot")),
+                            ("↑ / ↓", tr("playback: speed")),
+                            ("⌫", tr("playback: direction")),
+                            (tr("Esc"), tr("this menu")),
                         ] {
                             ui.label(RichText::new(k).monospace());
                             ui.label(v);
@@ -2620,12 +2617,12 @@ enum PanelClick {
 
 /// Explanation of the switch to computation without display.
 fn background_help() -> &'static str {
-    tr("Le calcul (et l'enregistrement en cours) continue sans affichage, avec toute la carte graphique ; la simulation peut être réaffichée ensuite.")
+    tr("The computation (and the running recording) goes on without display, with the whole graphics card; the simulation can be shown again later.")
 }
 
 /// Explanation of the removal of negligible lone bodies.
 pub fn prune_help() -> &'static str {
-    tr("Sous-simulations réduites à un seul corps qui s'échappe et dont l'influence sur le reste est négligeable : (m / M) · (R / d)² < 10⁻⁶, où m est sa masse, M et R la masse et la taille du reste, d sa distance au barycentre du reste. Elles sont retirées comme des corps éjectés.")
+    tr("Sub-simulations reduced to a single escaping body whose influence on the rest is negligible: (m / M) · (R / d)² < 10⁻⁶, where m is its mass, M and R the mass and size of the rest, d its distance to the rest's barycenter. They are removed like ejected bodies.")
 }
 
 /// Reference frame for displaying the traces.
@@ -2642,9 +2639,9 @@ enum TraceFrame {
 impl TraceFrame {
     fn label(self) -> &'static str {
         match self {
-            TraceFrame::Body => tr("Corps sélectionné"),
+            TraceFrame::Body => tr("Selected body"),
             TraceFrame::Barycenter => tr("Barycentre"),
-            TraceFrame::Cluster => tr("Amas local"),
+            TraceFrame::Cluster => tr("Local cluster"),
         }
     }
 }

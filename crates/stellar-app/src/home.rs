@@ -59,11 +59,11 @@ impl VelKind {
 
     fn label(self) -> &'static str {
         match self {
-            VelKind::Rest => tr("Repos"),
-            VelKind::Random => tr("Aléatoire (isotrope)"),
-            VelKind::CircularFixed => tr("Circulaire — vitesse imposée"),
-            VelKind::CircularOrbital => tr("Circulaire — vitesse orbitale"),
-            VelKind::Radial => tr("Radiale, vers le centre"),
+            VelKind::Rest => tr("At rest"),
+            VelKind::Random => tr("Random (isotropic)"),
+            VelKind::CircularFixed => tr("Circular — set speed"),
+            VelKind::CircularOrbital => tr("Circular — orbital speed"),
+            VelKind::Radial => tr("Radial, towards the centre"),
         }
     }
 }
@@ -167,10 +167,10 @@ impl TargetKind {
 
     fn label(self) -> &'static str {
         match self {
-            TargetKind::Manual => tr("manuel (bouton d'arrêt)"),
-            TargetKind::Steps => tr("après un nombre de pas"),
-            TargetKind::SimTime => tr("après un temps simulé"),
-            TargetKind::WallTime => tr("après une durée réelle"),
+            TargetKind::Manual => tr("manual (stop button)"),
+            TargetKind::Steps => tr("after a number of steps"),
+            TargetKind::SimTime => tr("after a simulated time"),
+            TargetKind::WallTime => tr("after a real duration"),
         }
     }
 }
@@ -290,16 +290,16 @@ impl HomeScreen {
 
     /// Rows of the creation grid: dust mass spectrum, sun, massive bodies.
     fn massive_bodies_rows(&mut self, ui: &mut egui::Ui) {
-        param(ui, tr("Masse des grains"), tr("Masse maximale des grains de poussière : leurs masses sont des entiers de 1 à ce maximum (1 : tous de masse 1)."));
+        param(ui, tr("Grain mass"), tr("Maximum mass of the dust grains: their masses are integers from 1 to this maximum (1: all of mass 1)."));
         ui.add(
             egui::DragValue::new(&mut self.dust.max)
                 .range(1..=MAX_DUST_MASS)
                 .speed(0.2)
-                .prefix(tr("de 1 à ")),
+                .prefix(tr("from 1 to ")),
         );
         ui.end_row();
         if self.dust.max > 1 {
-            param(ui, tr("   Exposant"), tr("Loi de puissance des masses : densité ∝ m^exposant. −2 : beaucoup de petits grains et peu de gros ; 0 : masses équiprobables."));
+            param(ui, tr("   Exponent"), tr("Power law of the masses: density ∝ m^exponent. −2: many small grains and few big ones; 0: equally likely masses."));
             ui.add(
                 egui::DragValue::new(&mut self.dust.exponent)
                     .range(-4.0..=2.0)
@@ -309,16 +309,16 @@ impl HomeScreen {
             ui.end_row();
         }
 
-        param(ui, tr("Soleil central"), tr("Corps au repos au centre du nuage, dont la masse est une part de la masse totale (soleil compris)."));
+        param(ui, tr("Central sun"), tr("Body at rest at the center of the cloud, whose mass is a share of the total mass (sun included)."));
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.sun, "");
             if self.sun {
-                share_input(ui, &mut self.sun_share, 0.01, MAX_MASSIVE_FRACTION, tr(" % de la masse totale"));
+                share_input(ui, &mut self.sun_share, 0.01, MAX_MASSIVE_FRACTION, tr(" % of the total mass"));
             }
         });
         ui.end_row();
 
-        param(ui, tr("Corps massifs"), tr("Protoplanètes en orbite circulaire dans le plan (x, y), quel que soit le mode de vitesse des grains, à des rayons régulièrement espacés et à des angles aléatoires."));
+        param(ui, tr("Massive bodies"), tr("Protoplanets on circular orbits in the (x, y) plane, whatever the velocity mode of the grains, at evenly spaced radii and random angles."));
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.planets_enabled, "");
             if self.planets_enabled {
@@ -331,22 +331,22 @@ impl HomeScreen {
         });
         ui.end_row();
         if self.planets_enabled {
-            param(ui, tr("   Masse de chacun"), tr("Masse de chaque corps massif, en part de la masse totale."));
-            share_input(ui, &mut self.planets.mass_fraction, 1e-5, 0.5, tr(" % de la masse totale"));
+            param(ui, tr("   Mass of each"), tr("Mass of each massive body, as a share of the total mass."));
+            share_input(ui, &mut self.planets.mass_fraction, 1e-5, 0.5, tr(" % of the total mass"));
             ui.end_row();
-            param(ui, tr("   Orbites (× rayon)"), tr("Rayons de la première et de la dernière orbite, en fraction du rayon du nuage ; les autres sont régulièrement espacées entre les deux."));
+            param(ui, tr("   Orbits (× radius)"), tr("Radii of the first and last orbits, as a fraction of the cloud radius; the others are evenly spaced in between."));
             ui.horizontal(|ui| {
                 ui.add(
                     egui::DragValue::new(&mut self.planets.inner)
                         .range(0.01..=self.planets.outer)
                         .speed(0.005)
-                        .prefix(tr("de ")),
+                        .prefix(tr("from ")),
                 );
                 ui.add(
                     egui::DragValue::new(&mut self.planets.outer)
                         .range(self.planets.inner..=2.0)
                         .speed(0.005)
-                        .prefix(tr("à ")),
+                        .prefix(tr("to ")),
                 );
             });
             ui.end_row();
@@ -362,16 +362,16 @@ impl HomeScreen {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(
-                        tr("Stellar — simulateur gravitationnel N-corps (calcul CPU ou GPU, rendu GPU)"),
+                        tr("Stellar — gravitational N-body simulator (CPU or GPU computation, GPU rendering)"),
                     )
                     .weak(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(tr("Quitter")).clicked() {
+                    if ui.button(tr("Quit")).clicked() {
                         action = HomeAction::Quit;
                     }
                     crate::i18n::picker(ui);
-                    ui.label(tr("Langue"));
+                    ui.label(tr("Language"));
                 });
             });
         });
@@ -381,7 +381,7 @@ impl HomeScreen {
                 ui.add_space(8.0);
                 ui.heading(RichText::new("STELLAR").size(34.0).strong());
                 ui.label(
-                    RichText::new(tr("Effondrement gravitationnel et fusion de particules")).italics(),
+                    RichText::new(tr("Gravitational collapse and particle mergers")).italics(),
                 );
                 ui.add_space(8.0);
             });
@@ -420,13 +420,13 @@ impl HomeScreen {
         match target {
             FileTarget::Save(s) => service
                 .linked_recording(s)
-                .map(|r| tr!("enregistrement « {} »", r.name))
+                .map(|r| tr!("recording “{}”", r.name))
                 .into_iter()
                 .collect(),
             FileTarget::Recording(r) => service
                 .linked_saves(&r.path)
                 .into_iter()
-                .map(|s| tr!("sauvegarde « {} »", s.name))
+                .map(|s| tr!("save “{}”", s.name))
                 .collect(),
         }
     }
@@ -456,8 +456,8 @@ impl HomeScreen {
         };
         let (mut confirmed, mut cancelled) = (false, false);
         let title = match dialog {
-            FileDialog::Delete { .. } => tr("Supprimer"),
-            FileDialog::Rename { .. } => tr("Renommer"),
+            FileDialog::Delete { .. } => tr("Delete"),
+            FileDialog::Rename { .. } => tr("Rename"),
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -471,15 +471,15 @@ impl HomeScreen {
                         with_linked,
                     } => {
                         let what = match target {
-                            FileTarget::Save(_) => tr("la sauvegarde"),
-                            FileTarget::Recording(_) => tr("l'enregistrement"),
+                            FileTarget::Save(_) => tr("the save"),
+                            FileTarget::Recording(_) => tr("the recording"),
                         };
-                        ui.label(tr!("Supprimer {} « {} » ?", what, target.name()));
-                        ui.label(RichText::new(tr("Le fichier part dans la corbeille de Windows.")).weak());
+                        ui.label(tr!("Delete {} “{}”?", what, target.name()));
+                        ui.label(RichText::new(tr("The file goes to the Windows Recycle Bin.")).weak());
                         if !linked.is_empty() {
                             ui.checkbox(
                                 with_linked,
-                                tr!("Supprimer aussi : {}", linked.join(", ")),
+                                tr!("Also delete: {}", linked.join(", ")),
                             );
                         }
                     }
@@ -492,7 +492,7 @@ impl HomeScreen {
                         }
                         if !linked.is_empty() {
                             ui.label(
-                                RichText::new(tr!("Renommés avec lui : {}.", linked.join(", ")))
+                                RichText::new(tr!("Renamed along with it: {}.", linked.join(", ")))
                                     .weak(),
                             );
                         }
@@ -501,11 +501,11 @@ impl HomeScreen {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     let ok = match dialog {
-                        FileDialog::Delete { .. } => tr("Supprimer"),
-                        FileDialog::Rename { .. } => tr("Renommer"),
+                        FileDialog::Delete { .. } => tr("Delete"),
+                        FileDialog::Rename { .. } => tr("Rename"),
                     };
                     confirmed |= ui.button(ok).clicked();
-                    cancelled |= ui.button(tr("Annuler")).clicked();
+                    cancelled |= ui.button(tr("Cancel")).clicked();
                 });
             });
         if cancelled || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -539,7 +539,7 @@ impl HomeScreen {
             None => Ok(()),
         };
         if let Err(e) = result {
-            self.message = Some(tr!("Opération impossible : {}", e.localized()));
+            self.message = Some(tr!("Operation failed: {}", e.localized()));
         } else {
             self.message = None;
         }
@@ -551,17 +551,17 @@ impl HomeScreen {
         let dialog = self.continue_dialog.as_ref()?;
         let mut chosen = None;
         let mut close = false;
-        egui::Window::new(tr("Poursuivre un enregistrement"))
+        egui::Window::new(tr("Continue a recording"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.set_max_width(560.0);
-                ui.label(tr!("Sauvegarde « {} » (pas {}). L'enregistrement choisi reprend à ce pas ; ses instantanés postérieurs sont supprimés.", dialog.save_name, format::count(dialog.data.state.step)));
+                ui.label(tr!("Save “{}” (step {}). The chosen recording resumes at this step; its later snapshots are deleted.", dialog.save_name, format::count(dialog.data.state.step)));
                 ui.add_space(6.0);
                 if dialog.options.is_empty() {
                     ui.label(
-                        RichText::new(tr("Aucun enregistrement compatible : il faut les mêmes conditions initiales et un instantané antérieur à la sauvegarde."))
+                        RichText::new(tr("No compatible recording: it needs the same initial conditions and a snapshot earlier than the save."))
                             .weak(),
                     );
                 }
@@ -576,22 +576,22 @@ impl HomeScreen {
                                 }
                                 ui.label(title);
                                 let date = chrono::DateTime::from_timestamp(c.summary.created_at_unix, 0)
-                                    .map(|d| d.with_timezone(&chrono::Local).format(tr("%d/%m/%Y %H:%M")).to_string())
+                                    .map(|d| d.with_timezone(&chrono::Local).format(tr("%Y-%m-%d %H:%M")).to_string())
                                     .unwrap_or_default();
                                 ui.label(
-                                    RichText::new(tr!("{} · {} instantanés{} · reprise après le pas {}", date, format::count(c.summary.frame_count as u64), if c.summary.complete { "" } else { " · non clos" }, format::count(c.resume_step)))
+                                    RichText::new(tr!("{} · {} snapshots{} · resumes after step {}", date, format::count(c.summary.frame_count as u64), if c.summary.complete { "" } else { tr(" · unfinished") }, format::count(c.resume_step)))
                                     .weak(),
                                 );
                                 if c.dropped_frames > 0 {
                                     ui.label(
-                                        RichText::new(tr!("{} instantanés postérieurs seront supprimés", format::count(c.dropped_frames as u64)))
+                                        RichText::new(tr!("{} later snapshots will be deleted", format::count(c.dropped_frames as u64)))
                                         .small()
                                         .color(egui::Color32::from_rgb(255, 120, 120)),
                                     );
                                 }
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button(tr("Poursuivre")).clicked() {
+                                if ui.button(tr("Continue")).clicked() {
                                     chosen = Some(c.summary.path.clone());
                                 }
                             });
@@ -600,7 +600,7 @@ impl HomeScreen {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button(tr("Annuler")).clicked() {
+                    if ui.button(tr("Cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -625,7 +625,7 @@ impl HomeScreen {
                     options,
                 });
             }
-            Err(e) => self.message = Some(tr!("Lecture de la sauvegarde impossible : {}", e.localized())),
+            Err(e) => self.message = Some(tr!("Could not read the save: {}", e.localized())),
         }
     }
 
@@ -636,14 +636,14 @@ impl HomeScreen {
         ic: &InitialConditions,
     ) -> Option<HomeAction> {
         let mut action = None;
-        ui.heading(tr("Nouvelle simulation"));
+        ui.heading(tr("New simulation"));
         ui.add_space(4.0);
 
         egui::Grid::new("ic-grid")
             .num_columns(2)
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
-                param(ui, tr("Nom"), tr("Nom des sauvegardes (F5) et des enregistrements de cette simulation. Par défaut : date, nombre de particules, répartition et vitesse initiale."));
+                param(ui, tr("Name"), tr("Name of this simulation's saves (F5) and recordings. Default: date, particle count, distribution and initial velocity."));
                 ui.horizontal(|ui| {
                     if !self.name_edited {
                         let taken = |n: &str| {
@@ -661,7 +661,7 @@ impl HomeScreen {
                     if self.name_edited
                         && ui
                             .small_button(tr("Auto"))
-                            .on_hover_text(tr("Revenir au nom tiré des paramètres"))
+                            .on_hover_text(tr("Go back to the name derived from the parameters"))
                             .clicked()
                     {
                         self.name_edited = false;
@@ -669,14 +669,14 @@ impl HomeScreen {
                 });
                 ui.end_row();
 
-                param(ui, tr("Nombre de particules"), tr("Nombre de grains de poussière au départ (leur masse est réglée plus bas). Le coût d'un pas croît à peu près comme n·log n ; le maximum proposé dépend du moteur et de la mémoire de la machine."));
+                param(ui, tr("Number of particles"), tr("Number of dust grains at the start (their mass is set below). The cost of a step grows roughly as n·log n; the maximum offered depends on the engine and on the machine's memory."));
                 // The sun and the massive bodies count in the engine's limit.
                 let massive = usize::from(self.sun) + if self.planets_enabled { self.planets.count as usize } else { 0 };
                 let max = max_bodies(service, &self.engine).saturating_sub(massive).max(1_000);
                 count_picker(ui, &mut self.count, max);
                 ui.end_row();
 
-                param(ui, tr("Rayon du nuage"), tr("Rayon de la sphère ou du disque initial (unité de longueur libre). C'est aussi le rayon de référence du nettoyage."));
+                param(ui, tr("Cloud radius"), tr("Radius of the initial sphere or disc (free length unit). It is also the reference radius of the clean-up."));
                 ui.add(
                     egui::DragValue::new(&mut self.radius)
                         .range(1e-3..=1e9)
@@ -684,10 +684,10 @@ impl HomeScreen {
                 );
                 ui.end_row();
 
-                param(ui, tr("Graine aléatoire"), tr("Mêmes paramètres et même graine : même nuage initial."));
+                param(ui, tr("Random seed"), tr("Same parameters and same seed: same initial cloud."));
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut self.seed).speed(1.0));
-                    if ui.button("🎲").on_hover_text(tr("Nouvelle graine")).clicked() {
+                    if ui.button("🎲").on_hover_text(tr("New seed")).clicked() {
                         self.seed = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_nanos() as u64 % 1_000_000_000)
@@ -696,29 +696,29 @@ impl HomeScreen {
                 });
                 ui.end_row();
 
-                param(ui, tr("Répartition"), tr("Sphère pleine de densité uniforme, ou disque dans le plan (x, y)."));
+                param(ui, tr("Distribution"), tr("Solid sphere of uniform density, or disc in the (x, y) plane."));
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.disk, false, tr("Sphère"));
-                    ui.radio_value(&mut self.disk, true, tr("Disque"));
+                    ui.radio_value(&mut self.disk, false, tr("Sphere"));
+                    ui.radio_value(&mut self.disk, true, tr("Disc"));
                 });
                 ui.end_row();
 
                 if self.disk {
-                    param(ui, tr("   Épaisseur (× rayon)"), tr("Épaisseur du disque, en fraction de son rayon."));
+                    param(ui, tr("   Thickness (× radius)"), tr("Thickness of the disc, as a fraction of its radius."));
                     ui.add(
                         egui::DragValue::new(&mut self.disk_thickness)
                             .range(0.0..=1.0)
                             .speed(0.002),
                     );
                     ui.end_row();
-                    param(ui, tr("   Profil de densité"), tr("Densité surfacique uniforme, ou décroissant exponentiellement avec la distance au centre."));
+                    param(ui, tr("   Density profile"), tr("Uniform surface density, or decreasing exponentially with the distance to the centre."));
                     ui.horizontal(|ui| {
-                        ui.radio_value(&mut self.disk_exponential, false, tr("Uniforme"));
-                        ui.radio_value(&mut self.disk_exponential, true, tr("Exponentiel"));
+                        ui.radio_value(&mut self.disk_exponential, false, tr("Uniform"));
+                        ui.radio_value(&mut self.disk_exponential, true, tr("Exponential"));
                     });
                     ui.end_row();
                     if self.disk_exponential {
-                        param(ui, tr("   Longueur d'échelle (× rayon)"), tr("Distance, en fraction du rayon, sur laquelle la densité du disque est divisée par e."));
+                        param(ui, tr("   Scale length (× radius)"), tr("Distance, as a fraction of the radius, over which the disc density is divided by e."));
                         ui.add(
                             egui::DragValue::new(&mut self.disk_scale)
                                 .range(0.01..=2.0)
@@ -728,7 +728,7 @@ impl HomeScreen {
                     }
                 }
 
-                param(ui, tr("Vitesse initiale"), tr("Repos : effondrement libre. Aléatoire : directions isotropes. Circulaire : rotation autour de Oz, à vitesse imposée ou à la vitesse d'équilibre orbital (calculée sur la masse intérieure). Radiale : chute vers le centre."));
+                param(ui, tr("Initial velocity"), tr("At rest: free collapse. Random: isotropic directions. Circular: rotation about Oz, at a set speed or at the orbital equilibrium speed (computed from the enclosed mass). Radial: fall towards the centre."));
                 egui::ComboBox::from_id_salt("vel-kind")
                     .selected_text(self.vel_kind.label())
                     .show_ui(ui, |ui| {
@@ -741,7 +741,7 @@ impl HomeScreen {
                 match self.vel_kind {
                     VelKind::Rest => {}
                     VelKind::CircularOrbital => {
-                        param(ui, tr("   Dispersion (±)"), tr("Écart aléatoire autour de la vitesse orbitale d'équilibre (± ce pourcentage)."));
+                        param(ui, tr("   Spread (±)"), tr("Random deviation around the orbital equilibrium speed (± this percentage)."));
                         ui.horizontal(|ui| {
                             let mut pct = self.vel_spread * 100.0;
                             if ui
@@ -756,7 +756,7 @@ impl HomeScreen {
                             }
                         });
                         ui.end_row();
-                        param(ui, tr("   Facteur"), tr("Multiple de la vitesse orbitale d'équilibre : 1 donne des orbites circulaires, moins fait s'effondrer le nuage, plus le fait s'étendre."));
+                        param(ui, tr("   Factor"), tr("Multiple of the equilibrium orbital speed: 1 gives circular orbits, less makes the cloud collapse, more makes it expand."));
                         ui.add(
                             egui::Slider::new(&mut self.vel_factor, 0.5..=1.5)
                                 .step_by(0.01)
@@ -770,7 +770,7 @@ impl HomeScreen {
                         ui.end_row();
                     }
                     _ => {
-                        param(ui, tr("   Norme : plage"), tr("Norme de la vitesse, tirée uniformément entre le minimum et le maximum."));
+                        param(ui, tr("   Magnitude: range"), tr("Speed magnitude, drawn uniformly between the minimum and the maximum."));
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::DragValue::new(&mut self.vel_min)
@@ -794,36 +794,36 @@ impl HomeScreen {
         if !ic.masses_are_valid() {
             ui.colored_label(
                 egui::Color32::from_rgb(255, 120, 90),
-                tr!("Le soleil et les corps massifs dépassent {} de la masse totale.", share_text(MAX_MASSIVE_FRACTION)),
+                tr!("The sun and the massive bodies exceed {} of the total mass.", share_text(MAX_MASSIVE_FRACTION)),
             );
         }
         ui.label(
-            RichText::new(tr!("Vitesse caractéristique √(GM/R) ≈ {} · temps de chute libre ≈ {}", format::real(ic.characteristic_speed(self.g)), format::real(ic.free_fall_time(self.g))))
+            RichText::new(tr!("Characteristic speed √(GM/R) ≈ {} · free-fall time ≈ {}", format::real(ic.characteristic_speed(self.g)), format::real(ic.free_fall_time(self.g))))
             .weak(),
         );
         if ic.dust.max > 1 || ic.sun.is_some() || ic.planets.count > 0 {
             ui.label(
-                RichText::new(tr!("Masse totale ≈ {} (masse moyenne d'un grain ≈ {})", format::real(ic.expected_total_mass()), format::real(ic.dust.mean())))
+                RichText::new(tr!("Total mass ≈ {} (mean grain mass ≈ {})", format::real(ic.expected_total_mass()), format::real(ic.dust.mean())))
                 .weak(),
             );
         }
 
         ui.add_space(6.0);
-        egui::CollapsingHeader::new(tr("Paramètres avancés"))
+        egui::CollapsingHeader::new(tr("Advanced parameters"))
             .default_open(false)
             .show(ui, |ui| self.advanced(ui, service, ic));
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.checkbox(&mut self.headless, tr("Sans affichage (enregistrement automatique)"));
+            ui.checkbox(&mut self.headless, tr("Without display (automatic recording)"));
             help(
                 ui,
-                tr("Calcule sans dessiner les corps, toute la carte graphique pour le calcul. Un écran de suivi montre l'avancement ; à la cible (ou à l'arrêt), l'enregistrement est clos et l'état final sauvegardé. Aussi en ligne de commande : stellar-cli.exe (stellar-cli --help)."),
+                tr("Computes without drawing the bodies, the whole graphics card for the computation. A monitoring screen shows the progress; at the target (or when stopped), the recording is closed and the final state saved. Also from the command line: stellar-cli.exe (stellar-cli --help)."),
             );
         });
         if self.headless {
             ui.horizontal(|ui| {
-                ui.label(tr("   Arrêt :"));
+                ui.label(tr("   Stop:"));
                 egui::ComboBox::from_id_salt("target")
                     .selected_text(self.target_kind.label())
                     .show_ui(ui, |ui| {
@@ -839,7 +839,7 @@ impl HomeScreen {
                                 .range(1..=u64::MAX / 2)
                                 .speed(100.0),
                         );
-                        ui.label(tr("pas"));
+                        ui.label(tr("steps"));
                     }
                     TargetKind::SimTime => {
                         ui.add(
@@ -847,7 +847,7 @@ impl HomeScreen {
                                 .range(1e-9..=1e12)
                                 .speed(0.1),
                         );
-                        ui.label(tr!("(≈ {} pas)", format::count((self.target_time / self.physics.dt.max(1e-300)).ceil() as u64)));
+                        ui.label(tr!("(≈ {} steps)", format::count((self.target_time / self.physics.dt.max(1e-300)).ceil() as u64)));
                     }
                     TargetKind::WallTime => {
                         ui.add(
@@ -862,30 +862,28 @@ impl HomeScreen {
             ui.horizontal(|ui| {
                 ui.checkbox(
                     &mut self.headless_prune,
-                    tr("   Supprimer automatiquement les corps isolés négligeables"),
+                    tr("   Automatically remove the negligible lone bodies"),
                 );
                 help(ui, crate::sim::prune_help());
             });
         } else {
             ui.checkbox(
                 &mut self.record,
-                tr("Enregistrer dès le départ (pour relecture fluide)"),
+                tr("Record from the start (for smooth playback)"),
             );
         }
         if self.record || self.headless {
             ui.horizontal(|ui| {
-                param(ui, tr("   Un instantané tous les"), tr("Intervalle entre deux instantanés enregistrés ; la relecture interpole entre eux."));
+                param(ui, tr("   One snapshot every"), tr("Interval between two recorded snapshots; playback interpolates between them."));
                 ui.add(egui::DragValue::new(&mut self.record_interval).range(1..=100_000));
-                ui.label(tr("pas"));
+                ui.label(tr("steps"));
             });
             ui.horizontal(|ui| {
                 ui.label("  ");
-                ui.checkbox(&mut self.record_budget_enabled, tr("Poussière limitée à"));
+                ui.checkbox(&mut self.record_budget_enabled, tr("Dust limited to"));
                 help(
                     ui,
-                    tr("Nombre maximal de particules de masse 1 enregistrées par instantané \
-                     (choisies de façon stable) ; les corps issus de fusions sont toujours \
-                     gardés."),
+                    tr("Maximum number of mass-1 particles recorded per snapshot (chosen consistently); bodies resulting from mergers are always kept."),
                 );
                 ui.add_enabled(
                     self.record_budget_enabled,
@@ -893,7 +891,7 @@ impl HomeScreen {
                         .range(1_000..=100_000_000)
                         .speed(10_000.0),
                 );
-                ui.label(tr("particules"));
+                ui.label(tr("particles"));
             });
             let kept = if self.record_budget_enabled {
                 self.count.min(self.record_budget as usize)
@@ -901,7 +899,7 @@ impl HomeScreen {
                 self.count
             };
             ui.label(
-                RichText::new(tr!("≈ {} Mo par instantané au départ (diminue avec les fusions)", format!("{:.0}", kept as f64 * 12.0 / 1e6)))
+                RichText::new(tr!("≈ {} MB per snapshot at the start (decreases with mergers)", format!("{:.0}", kept as f64 * 12.0 / 1e6)))
                 .weak(),
             );
         }
@@ -910,28 +908,28 @@ impl HomeScreen {
         // Measured: ≈ 4.2 GB for 10 million bodies (engine, snapshots, rendering).
         let size = |mb: f64| {
             if mb >= 1000.0 {
-                tr!("{} Go", format!("{:.1}", mb / 1000.0)).replace('.', crate::format::decimal_sep())
+                tr!("{} GB", format!("{:.1}", mb / 1000.0)).replace('.', crate::format::decimal_sep())
             } else {
-                tr!("{} Mo", format!("{mb:.0}"))
+                tr!("{} MB", format!("{mb:.0}"))
             }
         };
-        let mut text = tr!("Mémoire estimée : ≈ {}", size(self.count as f64 * 420.0 / 1e6));
+        let mut text = tr!("Estimated memory: ≈ {}", size(self.count as f64 * 420.0 / 1e6));
         if self.engine.starts_with("gpu") {
             // GPU engine, measured with the benchmark from 0.5 to 4 M bodies:
             // ≈ 300 bytes of video memory per body plus ≈ 130 MB fixed.
             let video = 130.0 + self.count as f64 * 300.0 / 1e6;
-            text.push_str(&tr!(" · mémoire vidéo ≈ {}", size(video)));
+            text.push_str(&tr!(" · video memory ≈ {}", size(video)));
         }
         ui.label(RichText::new(text).weak());
         let gpu = self.engine.starts_with("gpu");
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(tr!("Durée estimée du premier pas : ≈ {}", format_duration(step_estimate(self.count, gpu))))
+                RichText::new(tr!("Estimated duration of the first step: ≈ {}", format_duration(step_estimate(self.count, gpu))))
                 .weak(),
             );
             help(
                 ui,
-                tr("Estimation tirée des mesures du banc d'essai (RTX 4060 Ti pour le GPU, processeur de la même machine pour le CPU) ; elle varie avec le matériel, la répartition et θ."),
+                tr("Estimate based on benchmark measurements (RTX 4060 Ti for the GPU, the same machine's processor for the CPU); it varies with the hardware, the distribution and θ."),
             );
         });
         if ui
@@ -940,9 +938,9 @@ impl HomeScreen {
                     [260.0, 36.0],
                     egui::Button::new(
                         RichText::new(if self.headless {
-                            tr("▶ Lancer sans affichage")
+                            tr("▶ Start without display")
                         } else {
-                            tr("▶ Lancer la simulation")
+                            tr("▶ Start the simulation")
                         })
                         .size(17.0),
                     ),
@@ -994,7 +992,7 @@ impl HomeScreen {
 
     fn advanced(&mut self, ui: &mut egui::Ui, service: &SimulatorService, ic: &InitialConditions) {
         ui.horizontal(|ui| {
-            param(ui, tr("Constante G"), tr("Constante de gravitation (unités libres)."));
+            param(ui, tr("Constant G"), tr("Gravitational constant (free units)."));
             ui.add(
                 egui::DragValue::new(&mut self.g)
                     .range(1e-12..=1e12)
@@ -1003,9 +1001,9 @@ impl HomeScreen {
         });
         ui.checkbox(
             &mut self.auto_physics,
-            tr("Déduire automatiquement dt, ε, r₀ et la liaison des amas des conditions initiales"),
+            tr("Derive dt, ε, r₀ and the cluster linking length automatically from the initial conditions"),
         );
-        if !self.auto_physics && ui.button(tr("Recalculer les valeurs suggérées")).clicked() {
+        if !self.auto_physics && ui.button(tr("Recompute the suggested values")).clicked() {
             self.physics = PhysicsParams::suggested(ic, self.g);
         }
         self.physics.g = self.g;
@@ -1016,7 +1014,7 @@ impl HomeScreen {
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
                     let p = &mut self.physics;
-                    param(ui, tr("Pas de temps dt"), tr("Pas de temps fixe de l'intégrateur (Leapfrog). Plus petit : plus précis, mais plus lent. Par défaut : temps de chute libre / 500."));
+                    param(ui, tr("Time step dt"), tr("Fixed time step of the (Leapfrog) integrator. Smaller: more accurate, but slower. Default: free-fall time / 500."));
                     let sp = p.dt * 0.01;
                     ui.add(
                         egui::DragValue::new(&mut p.dt)
@@ -1025,7 +1023,7 @@ impl HomeScreen {
                             .max_decimals(8),
                     );
                     ui.end_row();
-                    param(ui, tr("Adoucissement ε"), tr("Adoucissement de Plummer : borne l'attraction lors des rencontres très proches. Par défaut : 0,3 × distance moyenne entre voisins."));
+                    param(ui, tr("Softening ε"), tr("Plummer softening: bounds the attraction during very close encounters. Default: 0.3 × mean distance between neighbours."));
                     let sp = p.softening.max(1e-6) * 0.01;
                     ui.add(
                         egui::DragValue::new(&mut p.softening)
@@ -1034,7 +1032,7 @@ impl HomeScreen {
                             .max_decimals(6),
                     );
                     ui.end_row();
-                    param(ui, tr("Rayon r₀ (masse 1)"), tr("Rayon d'un corps de masse 1 (r = r₀ · m^⅓) : il décide des contacts et donc des fusions. 0 : aucune fusion."));
+                    param(ui, tr("Radius r₀ (mass 1)"), tr("Radius of a body of mass 1 (r = r₀ · m^⅓): it decides contacts and hence mergers. 0: no mergers."));
                     let sp = p.base_radius.max(1e-6) * 0.01;
                     ui.add(
                         egui::DragValue::new(&mut p.base_radius)
@@ -1043,7 +1041,7 @@ impl HomeScreen {
                             .max_decimals(6),
                     );
                     ui.end_row();
-                    param(ui, tr("Amas éjectés : liaison"), tr("Deux corps lointains plus proches que cette distance appartiennent au même groupe (par défaut : distance moyenne entre voisins au départ)."));
+                    param(ui, tr("Ejected clusters: linking length"), tr("Two distant bodies closer than this distance belong to the same group (default: mean distance between neighbours at the start)."));
                     let sp = p.cluster_link_length.max(1e-6) * 0.01;
                     ui.add(
                         egui::DragValue::new(&mut p.cluster_link_length)
@@ -1059,23 +1057,23 @@ impl HomeScreen {
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
                 let p = &mut self.physics;
-                param(ui, tr("Précision Barnes-Hut θ"), tr("Critère d'ouverture : un groupe de corps vu sous un angle inférieur à θ est remplacé par son centre de masse. Plus petit : plus précis, mais plus lent."));
+                param(ui, tr("Barnes-Hut accuracy θ"), tr("Opening criterion: a group of bodies seen under an angle smaller than θ is replaced by its centre of mass. Smaller: more accurate, but slower."));
                 ui.add(egui::Slider::new(&mut p.theta, 0.1..=1.0));
                 ui.end_row();
-                param(ui, tr("Nettoyage : période (pas)"), tr("Tous les combien de pas les corps éjectés sont éliminés (0 : jamais)."));
+                param(ui, tr("Clean-up: period (steps)"), tr("How many steps between removals of ejected bodies (0: never)."));
                 ui.add(egui::DragValue::new(&mut p.cleanup_period).range(0..=1_000_000));
                 ui.end_row();
-                param(ui, tr("Nettoyage : distance (× rayon)"), tr("Seuls les corps non liés situés au-delà de cette distance du barycentre (en rayons du nuage) sont éliminés ; les amas éjectés liés sont conservés."));
+                param(ui, tr("Clean-up: distance (× radius)"), tr("Only unbound bodies beyond this distance from the barycentre (in cloud radii) are removed; bound ejected clusters are kept."));
                 ui.add(
                     egui::DragValue::new(&mut p.cleanup_distance_factor)
                         .range(1.0..=1e6)
                         .speed(0.1),
                 );
                 ui.end_row();
-                param(ui, tr("Amas éjectés : corps au moins"), tr("Un amas éjecté lié d'au moins ce nombre de corps est conservé par le nettoyage (0 : critère ignoré)."));
+                param(ui, tr("Ejected clusters: at least (bodies)"), tr("A bound ejected cluster with at least this many bodies is kept by the clean-up (0: criterion ignored)."));
                 ui.add(egui::DragValue::new(&mut p.cluster_min_bodies).range(0..=10_000_000));
                 ui.end_row();
-                param(ui, tr("… ou masse au moins"), tr("… ou d'au moins cette part de la masse initiale, même s'il ne compte qu'un corps (0 : critère ignoré)."));
+                param(ui, tr("… or at least (mass)"), tr("… or with at least this share of the initial mass, even if it has a single body (0: criterion ignored)."));
                 let mut percent = p.cluster_min_mass * 100.0;
                 if ui
                     .add(
@@ -1090,7 +1088,7 @@ impl HomeScreen {
                     p.cluster_min_mass = percent / 100.0;
                 }
                 ui.end_row();
-                param(ui, tr("Moteur de calcul"), tr("GPU : carte graphique, simple précision, bien plus rapide. CPU : tous les cœurs sauf un, double précision."));
+                param(ui, tr("Computation engine"), tr("GPU: graphics card, single precision, much faster. CPU: all cores but one, double precision."));
                 let engines = service.engines();
                 let current = engines
                     .iter()
@@ -1133,11 +1131,11 @@ impl HomeScreen {
     fn saves_panel(&mut self, ui: &mut egui::Ui, service: &SimulatorService) -> Option<HomeAction> {
         let mut action = None;
         ui.horizontal(|ui| {
-            ui.heading(tr("Simulations sauvegardées"));
-            if ui.button("⟳").on_hover_text(tr("Actualiser")).clicked() {
+            ui.heading(tr("Saved simulations"));
+            if ui.button("⟳").on_hover_text(tr("Refresh")).clicked() {
                 self.refresh(service);
             }
-            if ui.button(tr("Parcourir…")).clicked() {
+            if ui.button(tr("Browse…")).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Sauvegarde Stellar", &["stellar"])
                     .pick_file()
@@ -1151,7 +1149,7 @@ impl HomeScreen {
             ui.colored_label(egui::Color32::LIGHT_RED, e);
         }
         if self.saves.is_empty() {
-            ui.label(RichText::new(tr("Aucune sauvegarde dans le dossier « saves ». Appuyez sur F5 pendant une simulation.")).weak());
+            ui.label(RichText::new(tr("No save in the “saves” folder. Press F5 during a simulation.")).weak());
         }
         let mut to_continue = None;
         let mut file_op: Option<(bool, FileTarget)> = None;
@@ -1164,17 +1162,17 @@ impl HomeScreen {
                         let date = chrono::DateTime::from_timestamp(s.saved_at_unix, 0)
                             .map(|d| {
                                 d.with_timezone(&chrono::Local)
-                                    .format(tr("%d/%m/%Y %H:%M"))
+                                    .format(tr("%Y-%m-%d %H:%M"))
                                     .to_string()
                             })
                             .unwrap_or_default();
                         ui.label(
-                            RichText::new(tr!("{} · {} corps · pas {} · t = {}", date, format::count(s.body_count as u64), format::count(s.step), format::real(s.time)))
+                            RichText::new(tr!("{} · {} bodies · step {} · t = {}", date, format::count(s.body_count as u64), format::count(s.step), format::real(s.time)))
                             .weak(),
                         );
                         if let Some(rec) = &s.recording {
                             ui.label(
-                                RichText::new(tr!("Reprend l'enregistrement « {} »", rec))
+                                RichText::new(tr!("Resumes the recording “{}”", rec))
                                     .small()
                                     .color(egui::Color32::from_rgb(255, 120, 120)),
                             );
@@ -1182,20 +1180,20 @@ impl HomeScreen {
                     });
                 });
                 ui.horizontal(|ui| {
-                    if ui.button(tr("Charger")).clicked() {
+                    if ui.button(tr("Load")).clicked() {
                         action = Some(HomeAction::Load(s.path.clone()));
                     }
                     if ui
-                        .button(tr("Poursuivre un enregistrement…"))
-                        .on_hover_text(tr("Charger cette sauvegarde et prolonger un enregistrement existant à partir de son pas"))
+                        .button(tr("Continue a recording…"))
+                        .on_hover_text(tr("Load this save and extend an existing recording from its step"))
                         .clicked()
                     {
                         to_continue = Some(s.clone());
                     }
-                    if ui.small_button(tr("Renommer…")).clicked() {
+                    if ui.small_button(tr("Rename…")).clicked() {
                         file_op = Some((false, FileTarget::Save(s.clone())));
                     }
-                    if ui.small_button(tr("Supprimer…")).clicked() {
+                    if ui.small_button(tr("Delete…")).clicked() {
                         file_op = Some((true, FileTarget::Save(s.clone())));
                     }
                 });
@@ -1206,8 +1204,8 @@ impl HomeScreen {
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.heading(tr("Enregistrements"));
-            if ui.button(tr("Parcourir…")).clicked() {
+            ui.heading(tr("Recordings"));
+            if ui.button(tr("Browse…")).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Enregistrement Stellar", &["stellarec"])
                     .pick_file()
@@ -1217,7 +1215,7 @@ impl HomeScreen {
             }
         });
         if self.recordings.is_empty() {
-            ui.label(RichText::new(tr("Aucun enregistrement dans le dossier « recordings ». Appuyez sur F9 pendant une simulation.")).weak());
+            ui.label(RichText::new(tr("No recording in the “recordings” folder. Press F9 during a simulation.")).weak());
         }
         for r in &self.recordings {
             egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -1230,39 +1228,39 @@ impl HomeScreen {
                         }
                         ui.label(title);
                         let date = chrono::DateTime::from_timestamp(r.created_at_unix, 0)
-                            .map(|d| d.with_timezone(&chrono::Local).format(tr("%d/%m/%Y %H:%M")).to_string())
+                            .map(|d| d.with_timezone(&chrono::Local).format(tr("%Y-%m-%d %H:%M")).to_string())
                             .unwrap_or_default();
                         let size = if r.bytes >= 1_000_000_000 {
-                            tr!("{} Go", format!("{:.2}", r.bytes as f64 / 1e9))
+                            tr!("{} GB", format!("{:.2}", r.bytes as f64 / 1e9))
                         } else {
-                            tr!("{} Mo", format!("{:.0}", r.bytes as f64 / 1e6))
+                            tr!("{} MB", format!("{:.0}", r.bytes as f64 / 1e6))
                         }
                         .replace('.', crate::format::decimal_sep());
                         ui.label(
-                            RichText::new(tr!("{} · {} instantanés · {} corps au départ · durée {} · {}{}", date, format::count(r.frame_count as u64), format::count(r.first_count as u64), format::real(r.duration), size, if r.complete { "" } else { " · non clos (récupéré)" }))
+                            RichText::new(tr!("{} · {} snapshots · {} bodies at the start · duration {} · {}{}", date, format::count(r.frame_count as u64), format::count(r.first_count as u64), format::real(r.duration), size, if r.complete { "" } else { tr(" · unfinished (recovered)") }))
                             .weak(),
                         );
                     });
                 });
                 ui.horizontal(|ui| {
-                    if ui.button(tr("Rejouer")).clicked() {
+                    if ui.button(tr("Play")).clicked() {
                         action = Some(HomeAction::Replay(r.path.clone()));
                     }
                     // Most recent resume save linked to this recording.
                     let file = r.path.file_name().map(|n| n.to_string_lossy().into_owned());
                     if let Some(save) = self.saves.iter().find(|s| s.recording.is_some() && s.recording == file) {
                         if ui
-                            .button(tr("Reprendre"))
-                            .on_hover_text(tr!("Recharge la sauvegarde « {} » (pas {}) et poursuit l'enregistrement", save.name, format::count(save.step)))
+                            .button(tr("Resume"))
+                            .on_hover_text(tr!("Reloads the save “{}” (step {}) and continues the recording", save.name, format::count(save.step)))
                             .clicked()
                         {
                             action = Some(HomeAction::Load(save.path.clone()));
                         }
                     }
-                    if ui.small_button(tr("Renommer…")).clicked() {
+                    if ui.small_button(tr("Rename…")).clicked() {
                         file_op = Some((false, FileTarget::Recording(r.clone())));
                     }
-                    if ui.small_button(tr("Supprimer…")).clicked() {
+                    if ui.small_button(tr("Delete…")).clicked() {
                         file_op = Some((true, FileTarget::Recording(r.clone())));
                     }
                 });
@@ -1341,14 +1339,14 @@ fn count_picker(ui: &mut egui::Ui, count: &mut usize, max: usize) {
         let slider = egui::Slider::new(&mut index, 0..=steps.len() - 1).show_value(false);
         if ui
             .add(slider)
-            .on_hover_text(tr!("Maximum sur cette machine : {}", format::count(max as u64)))
+            .on_hover_text(tr!("Maximum on this machine: {}", format::count(max as u64)))
             .changed()
         {
             *count = steps[index];
         }
         let speed = (*count as f64 * 0.01).max(1.0);
         ui.add(egui::DragValue::new(count).range(2..=max).speed(speed))
-        .on_hover_text(tr("Valeur exacte"));
+        .on_hover_text(tr("Exact value"));
     });
 }
 

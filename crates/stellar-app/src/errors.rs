@@ -16,17 +16,17 @@ pub trait Localized {
 impl Localized for EngineError {
     fn localized(&self) -> String {
         match self {
-            Self::NoDevice => tr("aucune carte graphique compatible n'a été trouvée").to_owned(),
-            Self::ComputeUnsupported => tr("la carte graphique ne gère pas les shaders de calcul").to_owned(),
-            Self::DeviceOpen(e) => tr!("ouverture de la carte graphique impossible : {}", e),
+            Self::NoDevice => tr("no compatible graphics card was found").to_owned(),
+            Self::ComputeUnsupported => tr("the graphics card does not support compute shaders").to_owned(),
+            Self::DeviceOpen(e) => tr!("cannot open the graphics card: {}", e),
             Self::TooManyBodies { requested, limit } => tr!(
-                "le moteur de calcul est limité à {} corps ({} demandés)",
+                "the computation engine is limited to {} bodies ({} requested)",
                 count(*limit as u64),
                 count(*requested as u64)
             ),
-            Self::IdsTooLarge => tr("identifiants de corps trop grands pour le moteur de calcul").to_owned(),
+            Self::IdsTooLarge => tr("body identifiers too large for the computation engine").to_owned(),
             Self::BufferTooLarge { device, buffer_mb, limit_mb } => tr!(
-                "trop de corps pour cette carte graphique ({} : tampon de {} Mo, limite {} Mo)",
+                "too many bodies for this graphics card ({}: buffer of {} MB, limit {} MB)",
                 device,
                 count(*buffer_mb),
                 count(*limit_mb)
@@ -38,22 +38,22 @@ impl Localized for EngineError {
 impl Localized for FormatError {
     fn localized(&self) -> String {
         let text = match self {
-            Self::Truncated => tr("fichier tronqué"),
-            Self::NotASave => tr("signature absente : ce n'est pas une sauvegarde Stellar"),
-            Self::NotARecording => tr("ce n'est pas un enregistrement Stellar"),
-            Self::OversizedHeader => tr("en-tête démesuré"),
-            Self::InconsistentBodyArrays => tr("tableaux de corps incohérents"),
-            Self::TruncatedSnapshot => tr("instantané tronqué"),
-            Self::InvalidVarint => tr("varint invalide"),
-            Self::InconsistentBodyCount => tr("nombre de corps incohérent"),
-            Self::InvalidSubsystemCount => tr("nombre de sous-systèmes invalide"),
-            Self::UnknownSubsystem => tr("sous-système inconnu"),
-            Self::UnknownFate => tr("devenir inconnu"),
-            Self::SnapshotOutOfRange => tr("instantané hors limites"),
+            Self::Truncated => tr("truncated file"),
+            Self::NotASave => tr("missing signature: this is not a Stellar save"),
+            Self::NotARecording => tr("this is not a Stellar recording"),
+            Self::OversizedHeader => tr("oversized header"),
+            Self::InconsistentBodyArrays => tr("inconsistent body arrays"),
+            Self::TruncatedSnapshot => tr("truncated snapshot"),
+            Self::InvalidVarint => tr("invalid varint"),
+            Self::InconsistentBodyCount => tr("inconsistent body count"),
+            Self::InvalidSubsystemCount => tr("invalid subsystem count"),
+            Self::UnknownSubsystem => tr("unknown subsystem"),
+            Self::UnknownFate => tr("unknown fate"),
+            Self::SnapshotOutOfRange => tr("snapshot out of range"),
             Self::MissingSnapshot(step) => {
-                return tr!("l'instantané du pas {} est introuvable dans l'enregistrement", step)
+                return tr!("the snapshot of step {} is missing from the recording", step)
             }
-            Self::EmptyRecording => tr("enregistrement vide"),
+            Self::EmptyRecording => tr("empty recording"),
             Self::Decode(e) => return e.clone(),
         };
         text.to_owned()
@@ -63,14 +63,14 @@ impl Localized for FormatError {
 impl Localized for RepositoryError {
     fn localized(&self) -> String {
         match self {
-            Self::Io(e) => tr!("erreur d'entrée/sortie : {}", e),
-            Self::NotFound(path) => tr!("fichier introuvable : {}", path.display()),
-            Self::NameTaken(name) => tr!("le nom « {} » est déjà pris", name),
-            Self::DeleteFailed(code) => tr!("suppression annulée ou impossible (code {})", code),
-            Self::RecorderInterrupted => tr("thread d'enregistrement interrompu").to_owned(),
-            Self::RecordingClosed => tr("enregistrement déjà clos").to_owned(),
-            Self::Format(e) => tr!("fichier invalide : {}", e.localized()),
-            Self::UnsupportedVersion(v) => tr!("version de format non prise en charge : {}", v),
+            Self::Io(e) => tr!("input/output error: {}", e),
+            Self::NotFound(path) => tr!("file not found: {}", path.display()),
+            Self::NameTaken(name) => tr!("the name “{}” is already taken", name),
+            Self::DeleteFailed(code) => tr!("deletion cancelled or impossible (code {})", code),
+            Self::RecorderInterrupted => tr("recording thread interrupted").to_owned(),
+            Self::RecordingClosed => tr("recording already closed").to_owned(),
+            Self::Format(e) => tr!("invalid file: {}", e.localized()),
+            Self::UnsupportedVersion(v) => tr!("unsupported format version: {}", v),
         }
     }
 }
@@ -80,11 +80,11 @@ impl Localized for ContinuationError {
         match self {
             Self::Repository(e) => e.localized(),
             Self::OtherSimulation => {
-                tr("l'enregistrement provient d'une autre simulation (conditions initiales différentes)").to_owned()
+                tr("the recording comes from another simulation (different initial conditions)").to_owned()
             }
-            Self::StartsAfterSave => tr("l'enregistrement commence après le pas de la sauvegarde").to_owned(),
+            Self::StartsAfterSave => tr("the recording starts after the save's step").to_owned(),
             Self::MissingBody { id, step } => tr!(
-                "le corps n° {} de la sauvegarde est absent de l'enregistrement au pas {} : il provient d'une autre simulation",
+                "body no. {} of the save is missing from the recording at step {}: it comes from another simulation",
                 id,
                 step
             ),
@@ -95,10 +95,10 @@ impl Localized for ContinuationError {
 impl Localized for AppError {
     fn localized(&self) -> String {
         match self {
-            Self::UnknownEngine(id) => tr!("moteur de calcul inconnu : « {} »", id),
-            Self::NotReady => tr("la simulation n'est pas encore prête").to_owned(),
-            Self::EngineFailed(None) => tr("le moteur de calcul n'a pas pu démarrer").to_owned(),
-            Self::EngineFailed(Some(e)) => tr!("le moteur de calcul n'a pas pu démarrer : {}", e.localized()),
+            Self::UnknownEngine(id) => tr!("unknown computation engine: “{}”", id),
+            Self::NotReady => tr("the simulation is not ready yet").to_owned(),
+            Self::EngineFailed(None) => tr("the computation engine could not start").to_owned(),
+            Self::EngineFailed(Some(e)) => tr!("the computation engine could not start: {}", e.localized()),
             Self::Repository(e) => e.localized(),
             Self::Continuation(e) => e.localized(),
         }
