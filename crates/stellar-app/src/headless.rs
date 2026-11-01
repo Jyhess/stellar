@@ -105,7 +105,7 @@ impl HeadlessScreen {
                 Some(State::Running(run)) => {
                     let p = run.poll();
                     let target = run.target();
-                    if let Some(e) = p.error {
+                    if let Some(e) = &p.error {
                         ui.colored_label(egui::Color32::LIGHT_RED, tr_msg(e));
                     }
                     if let Some(f) = p.fraction {

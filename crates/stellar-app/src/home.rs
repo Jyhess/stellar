@@ -669,7 +669,9 @@ impl HomeScreen {
                 ui.end_row();
 
                 param(ui, tr("Nombre de particules"), tr("Nombre de grains de poussière au départ (leur masse est réglée plus bas). Le coût d'un pas croît à peu près comme n·log n ; le maximum proposé dépend du moteur et de la mémoire de la machine."));
-                let max = max_bodies(service, &self.engine);
+                // The sun and the massive bodies count in the engine's limit.
+                let massive = usize::from(self.sun) + if self.planets_enabled { self.planets.count as usize } else { 0 };
+                let max = max_bodies(service, &self.engine).saturating_sub(massive).max(1_000);
                 count_picker(ui, &mut self.count, max);
                 ui.end_row();
 

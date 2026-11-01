@@ -35,7 +35,7 @@ pub struct RecordSettings {
 }
 
 /// Progress of a simulation without display.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
     pub ready: bool,
     pub step: u64,
@@ -47,7 +47,8 @@ pub struct Progress {
     pub fraction: Option<f64>,
     pub frames: u64,
     pub bytes: u64,
-    pub error: Option<&'static str>,
+    /// The engine could not start: its message.
+    pub error: Option<String>,
 }
 
 /// Result of a simulation without display.
@@ -64,6 +65,14 @@ pub struct HeadlessRun {
     started: Instant,
     /// Step and simulated time at the start.
     origin: (u64, f64),
+}
+
+/// Message of an engine that could not start.
+fn engine_error(detail: &Option<String>) -> String {
+    match detail {
+        Some(d) => format!("le moteur de calcul n'a pas pu démarrer : {d}"),
+        None => "le moteur de calcul n'a pas pu démarrer".to_owned(),
+    }
 }
 
 /// Stop step of a target counted from step `from`.
@@ -196,7 +205,7 @@ impl HeadlessRun {
             fraction: fraction.map(|f| f.clamp(0.0, 1.0)),
             frames: status.frames.load(Ordering::Relaxed),
             bytes: status.bytes.load(Ordering::Relaxed),
-            error: (snap.phase == Phase::Failed).then_some("le moteur de calcul n'a pas pu démarrer"),
+            error: (snap.phase == Phase::Failed).then(|| engine_error(&snap.error)),
         }
     }
 
@@ -221,6 +230,18 @@ impl HeadlessRun {
     pub fn finish(self, service: &SimulatorService) -> Result<RunOutcome, AppError> {
         let h = &self.handle;
         h.pause();
+        // A stop during the preparation (generation, engine creation: long
+        // with millions of bodies) waits for its end to save the initial state.
+        while h.latest().phase == Phase::Initialising {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let first = h.latest();
+        if first.phase == Phase::Failed {
+            let message = engine_error(&first.error);
+            h.stop_recording();
+            self.handle.shutdown();
+            return Err(AppError::EngineFailed(message));
+        }
         // Pausing publishes an up-to-date full state.
         let deadline = Instant::now() + Duration::from_secs(60);
         let snap = loop {

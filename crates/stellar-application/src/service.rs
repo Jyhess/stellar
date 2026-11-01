@@ -32,6 +32,8 @@ pub enum AppError {
     UnknownEngine(String),
     #[error("la simulation n'est pas encore prête")]
     NotReady,
+    #[error("{0}")]
+    EngineFailed(String),
     #[error(transparent)]
     Repository(#[from] RepositoryError),
 }

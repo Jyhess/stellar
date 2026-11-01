@@ -658,6 +658,7 @@ const MESSAGES: &[(&str, &str)] = &[
     ("moteur de calcul inconnu : « {} »", "unknown computation engine: “{}”"),
     ("la simulation n'est pas encore prête", "the simulation is not ready yet"),
     ("le moteur de calcul n'a pas pu démarrer", "the computation engine could not start"),
+    ("le moteur de calcul n'a pas pu démarrer : {}", "the computation engine could not start: {}"),
     ("thread d'enregistrement interrompu", "recording thread interrupted"),
     ("enregistrement déjà clos", "recording already closed"),
     ("enregistrement vide", "empty recording"),
