@@ -4,7 +4,10 @@
 
 Read before any substantial change: `SPEC.md` (rules in force), `README.md` (usage, architecture, tests), and the relevant file in `docs/` (`formats.md`, `gpu-engine.md`, `subsystems.md`; `history.md` for the history of decisions).
 
+**To find where to change something, start with `docs/code-map.md`** (files, key symbols, cross-layer change paths), then navigate by symbol with rust-analyzer. Keep the map up to date with the `code-map` skill.
+
 Project skills (`.claude/skills/`):
+- `code-map`: using and maintaining `docs/code-map.md`;
 - `new-feature`: checklist for any user-visible change (questions, translations, docs, tests);
 - `file-format`: mandatory procedure before touching a saved or recorded structure;
 - `perf-measurement`: benchmarks, profiling, reference timings, known performance leads.
@@ -70,4 +73,7 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 - Commit messages in English: a title, then a list of changes.
 - Line endings: LF in the repository (`.gitattributes`, `eol=lf`). Files may be CRLF in the Windows working copy; Git normalizes them. Never commit a line-ending conversion mixed with a real change.
 - Commit or push only when asked.
+- **Before starting a new feature**, if the working copy has uncommitted changes, say so and ask whether to commit them first.
+- **One commit per feature**: never mix two features (or a feature and unrelated changes) in one commit; stage only the hunks that belong to it.
+- **Adjustments to a feature whose commit is not pushed yet**: amend that commit (`git commit --amend`) instead of adding a new one, once asked to commit. A pushed commit is never amended.
 - `*.exe`, `*.stellar`, `*.stellarec` are ignored.
