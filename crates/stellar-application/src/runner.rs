@@ -720,6 +720,7 @@ impl Worker {
                             let ids = set.current_ids();
                             let pos = self.engine.positions_of(&ids);
                             set.push(self.step, &pos);
+                            self.push_system_center(set);
                         }
                     }
                     Command::StartRecording {
@@ -816,6 +817,7 @@ impl Worker {
                 if let Some(c) = self.engine.center_of_mass() {
                     set.push_barycenter(self.step, c);
                 }
+                self.push_system_center(set);
             }
         }
         if let Some(mut rec) = self.recording.take() {
@@ -878,6 +880,16 @@ impl Worker {
             let mut guard = shared.traces.lock().expect("poisoned lock");
             if let Some(set) = guard.as_mut() {
                 self.update_cluster(set);
+            }
+        }
+    }
+
+    /// Adds the current barycenter of the sub-simulation used as reference
+    /// frame for the traces (none if it no longer exists).
+    fn push_system_center(&self, set: &mut TraceSet) {
+        if let Some(anchor) = set.system_anchor() {
+            if let Some(s) = self.engine.systems().into_iter().find(|s| s.anchor == anchor) {
+                set.push_system(self.step, s.center);
             }
         }
     }

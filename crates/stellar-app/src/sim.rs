@@ -523,13 +523,18 @@ impl SimScreen {
         self.sent_reference = wanted;
     }
 
-    /// Effective reference frame of the traces: without a selected body, the
-    /// barycenter of the simulation.
+    /// Effective reference frame of the traces: with the barycenter of a
+    /// sub-simulation selected, that barycenter (except in the simulation's
+    /// barycenter frame); without a selected body, the barycenter of the
+    /// simulation.
     fn trace_reference(&self) -> Option<TraceReference> {
         let body = self.selected.filter(|_| !self.bary_selected);
-        Some(match (self.trace_frame, body) {
-            (TraceFrame::Body, Some(id)) => TraceReference::Body(id),
-            (TraceFrame::Cluster, Some(id)) => TraceReference::Cluster(id),
+        let system = self.bary_system.filter(|_| self.bary_selected);
+        Some(match (self.trace_frame, body, system) {
+            (TraceFrame::Barycenter, ..) => TraceReference::Barycenter,
+            (_, _, Some(anchor)) => TraceReference::System(anchor),
+            (TraceFrame::Body, Some(id), _) => TraceReference::Body(id),
+            (TraceFrame::Cluster, Some(id), _) => TraceReference::Cluster(id),
             _ => TraceReference::Barycenter,
         })
     }
@@ -2029,6 +2034,9 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         let reference = self.trace_reference();
         let hint = match (self.trace_frame, reference) {
             (TraceFrame::Barycenter, _) => tr("Orbites vues depuis le centre de gravité de la simulation.").to_owned(),
+            (_, Some(TraceReference::System(anchor))) => {
+                tr!("Orbites vues depuis le centre de gravité de la sous-simulation #{}.", anchor)
+            }
             (_, Some(TraceReference::Barycenter)) => {
                 tr("Aucun corps sélectionné : traces relatives au barycentre en attendant.").to_owned()
             }

@@ -17,7 +17,9 @@
 //! Other reference frames: the simulation barycenter, or that of a body's
 //! local cluster (the bound group that contains it, see
 //! [`stellar_domain::ejection::local_cluster`]); the cluster's members are
-//! picked again periodically by the caller ([`TraceSet::set_cluster_members`]).
+//! picked again periodically by the caller ([`TraceSet::set_cluster_members`]),
+//! or the barycenter of a sub-simulation, given at every step by the caller
+//! ([`TraceSet::push_system`]).
 
 use std::collections::VecDeque;
 
@@ -127,6 +129,8 @@ pub enum TraceReference {
     Barycenter,
     /// The center of gravity of the bound cluster that contains this body.
     Cluster(BodyId),
+    /// The center of gravity of the sub-simulation with this marker body.
+    System(BodyId),
 }
 
 /// Barycenter of a body's local cluster: members (identifier, mass) and
@@ -168,6 +172,9 @@ pub struct TraceSet {
     pub barycenter: Trace,
     /// Barycenter of the local cluster, when it is the chosen reference frame.
     pub cluster: Option<ClusterTrack>,
+    /// Barycenter of a sub-simulation (its marker body, trajectory), when it
+    /// is the chosen reference frame.
+    pub system: Option<(BodyId, Trace)>,
 }
 
 impl TraceSet {
@@ -179,6 +186,7 @@ impl TraceSet {
             reference: None,
             barycenter,
             cluster: None,
+            system: None,
         }
     }
 
@@ -187,10 +195,21 @@ impl TraceSet {
         self.barycenter.push((step, p));
     }
 
-    /// Chooses the reference frame (body, barycenter or local cluster).
+    /// Chooses the reference frame (body, barycenter, local cluster or
+    /// sub-simulation).
     pub fn set_reference_kind(&mut self, reference: Option<TraceReference>) {
         if !matches!(reference, Some(TraceReference::Cluster(_))) {
             self.cluster = None;
+        }
+        match reference {
+            Some(TraceReference::System(anchor)) => {
+                if self.system_anchor() != Some(anchor) {
+                    let mut track = Trace::new(BodyId::MAX);
+                    track.current = None;
+                    self.system = Some((anchor, track));
+                }
+            }
+            _ => self.system = None,
         }
         match reference {
             Some(TraceReference::Body(id)) => self.set_reference(Some(id)),
@@ -206,7 +225,21 @@ impl TraceSet {
                     });
                 }
             }
-            Some(TraceReference::Barycenter) | None => self.reference = None,
+            Some(TraceReference::Barycenter | TraceReference::System(_)) | None => {
+                self.reference = None
+            }
+        }
+    }
+
+    /// Marker body of the sub-simulation whose barycenter is the reference frame.
+    pub fn system_anchor(&self) -> Option<BodyId> {
+        self.system.as_ref().map(|s| s.0)
+    }
+
+    /// Adds a point to the trajectory of the reference sub-simulation's barycenter.
+    pub fn push_system(&mut self, step: u64, center: Vec3) {
+        if let Some((_, track)) = &mut self.system {
+            track.push((step, center));
         }
     }
 
@@ -238,6 +271,11 @@ impl TraceSet {
             TraceReference::Cluster(_) => {
                 let s = self.cluster.as_ref()?.track.samples();
                 (!s.is_empty()).then_some(s)
+            }
+            TraceReference::System(anchor) => {
+                let (a, track) = self.system.as_ref()?;
+                let s = track.samples();
+                (*a == anchor && !s.is_empty()).then_some(s)
             }
         }
     }
@@ -398,6 +436,31 @@ mod tests {
         assert_eq!(set.cluster_around(), Some(9));
         set.set_reference_kind(Some(TraceReference::Barycenter));
         assert!(set.cluster.is_none());
+    }
+
+    #[test]
+    fn system_reference_follows_the_given_barycenter() {
+        let mut set = TraceSet::new([1]);
+        set.set_reference_kind(Some(TraceReference::System(5)));
+        assert_eq!(set.system_anchor(), Some(5));
+        // Not a body: nothing more to read back.
+        assert_eq!(set.current_ids(), vec![1]);
+        for step in 0..3u64 {
+            set.push(step, &[Some(Vec3::new(step as f64, 1.0, 0.0))]);
+            set.push_system(step, Vec3::new(step as f64, 0.0, 0.0));
+        }
+        let r = set.samples_for(TraceReference::System(5)).unwrap();
+        let rel = relative_to(&set.traces[0].full(), &r);
+        // The body moves with the sub-simulation: a fixed point in its frame.
+        for p in rel {
+            assert!((p.unwrap() - Vec3::new(2.0, 1.0, 0.0)).length() < 1e-12);
+        }
+        assert!(set.samples_for(TraceReference::System(6)).is_none());
+        // Choosing the same sub-simulation again keeps its track.
+        set.set_reference_kind(Some(TraceReference::System(5)));
+        assert_eq!(set.samples_for(TraceReference::System(5)).unwrap().len(), 3);
+        set.set_reference_kind(Some(TraceReference::Barycenter));
+        assert!(set.system.is_none());
     }
 
     #[test]

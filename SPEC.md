@@ -48,7 +48,7 @@ The rules currently in force. This document is the reference when the code and t
 - Tracking: the target stays at the center; changing target keeps the line of sight, the zoom and the distance (never inside the new body).
 - Rendering: glowing billboards, real size (minimum 1 px), colour by mass, additive blending; trihedron, off-screen arrows.
 - HUD: global statistics, selected body, top 10 (plus the selection), present and ejected mass, sub-simulations and ejected clusters.
-- Traces (T, R): 10 most massive visible bodies, history or tail, reference frame of the selected body, the barycenter or the local cluster; not saved.
+- Traces (T, R): 10 most massive visible bodies, history or tail, reference frame of the selected body, the barycenter or the local cluster (a selected sub-simulation barycenter replaces the body and the cluster); not saved.
 
 ## Files
 - **Save** (F5, `.stellar` version 7): full state, parameters, camera, links to recordings.
