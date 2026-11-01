@@ -131,6 +131,8 @@ pub struct SimScreen {
     captured: bool,
     capture_applied: Option<bool>,
     menu_open: bool,
+    /// "Without display" clicked in the control panel.
+    background_requested: bool,
     selected: Option<BodyId>,
     /// The barycenter is selected (instead of a body).
     bary_selected: bool,
@@ -230,6 +232,7 @@ impl SimScreen {
             captured: true,
             capture_applied: None,
             menu_open: false,
+            background_requested: false,
             selected,
             bary_selected,
             bary_system: None,
@@ -2163,6 +2166,14 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
             if ui.button(tr("Pas à pas")).clicked() {
                 self.step_once();
             }
+            if self.source.live().is_some()
+                && ui
+                    .button(tr("Sans affichage"))
+                    .on_hover_text(background_help())
+                    .clicked()
+            {
+                self.background_requested = true;
+            }
         });
         ui.horizontal(|ui| {
             let mut changed = ui.checkbox(&mut self.limit_rate, tr("Limiter à")).changed();
@@ -2413,7 +2424,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                     if self.source.live().is_some()
                         && ui
                             .button(tr("Passer en arrière-plan"))
-                            .on_hover_text(tr("Le calcul (et l'enregistrement en cours) continue sans affichage, avec toute la carte graphique ; la simulation peut être réaffichée ensuite."))
+                            .on_hover_text(background_help())
                             .clicked()
                     {
                         action = SimAction::Background;
@@ -2525,6 +2536,9 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
 
         self.hud(ctx);
         self.sync_trace_reference();
+        if std::mem::take(&mut self.background_requested) {
+            action = SimAction::Background;
+        }
         if let a @ (SimAction::BackHome | SimAction::Background | SimAction::Quit) = self.menu(ctx) {
             action = a;
         }
@@ -2584,6 +2598,11 @@ enum PanelClick {
     Prune,
     /// Automatic removal turned on or off.
     AutoPrune(bool),
+}
+
+/// Explanation of the switch to computation without display.
+fn background_help() -> &'static str {
+    tr("Le calcul (et l'enregistrement en cours) continue sans affichage, avec toute la carte graphique ; la simulation peut être réaffichée ensuite.")
 }
 
 /// Explanation of the removal of negligible lone bodies.

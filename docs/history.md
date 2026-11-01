@@ -78,3 +78,4 @@ Decisions in the order they were made; v1 came from the initial question session
 - Home screen "?" badges: a click now opens the explanation in a bubble that stays until the next click (egui hides tooltips after a click until the mouse moves, so clicking a badge showed nothing).
 - Disc-plane grid removed (G key, checkbox).
 - Interface tests: the language is per thread in tests, so a test switching to English no longer breaks the number formatting of the others.
+- "Without display" button in the control panel, next to Pause (the Esc menu entry alone went unnoticed).

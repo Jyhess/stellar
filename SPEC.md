@@ -56,6 +56,6 @@ The rules currently in force. This document is the reference when the code and t
 - Every change to a serialized structure creates a new version, and older versions remain readable. Layout and history: [`docs/formats.md`](docs/formats.md).
 
 ## Simulation without display
-- From the home screen (monitoring screen, switch to the display), from the display (Esc menu → send to the background: no target, camera kept for the return) or with `stellar-cli.exe`. Automatic recording; stop at a step count, a simulated time, a real duration, or on demand; on stop, the recording is closed and the final state is saved under the simulation's name.
+- From the home screen (monitoring screen, switch to the display), from the display ("Without display" button of the control panel or Esc menu → send to the background: no target, camera kept for the return) or with `stellar-cli.exe`. Automatic recording; stop at a step count, a simulated time, a real duration, or on demand; on stop, the recording is closed and the final state is saved under the simulation's name.
 - Command line: English option names (`--bodies`, `--load`, `--continue`, `--resume`, `--steps`…); `--help` in the interface language; exit code 2 on an unknown argument.
 
