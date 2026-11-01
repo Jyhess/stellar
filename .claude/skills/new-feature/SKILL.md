@@ -38,9 +38,9 @@ Documentation, code comments and CLI option names are written in **English**; in
 ## 4. Tests
 
 - Add unit or integration tests (`crates/*/tests/`) for any new logic, especially physics and file formats.
-- Before handing over: targeted tests only (`cargo test -p <crate>`), plus `cargo build --release` if the user is to try the app. No visual check on my side: the user tries it and validates.
-- After the user validates, before committing: `cargo test --workspace` and `cargo clippy --workspace --all-targets`; fix any issue first.
+- Before committing: `cargo test --workspace` and `cargo clippy --workspace --all-targets`; fix any issue first.
+- Before handing over: `cargo build --release` if the user is to try the app. No visual check on my side: the user tries it and validates.
 
-## 5. Commit (only when asked)
+## 5. Commit (automatic)
 
-One commit per feature, containing only its hunks. Adjustments to a feature whose commit is not pushed yet amend that commit. English message: a title, then a list of changes, ending with the attribution line. Never mix a line-ending conversion with a real change.
+As soon as the feature is finished and checked, commit it without being asked: one commit per feature, fix or change, containing only its hunks (several subjects in one request give several commits). Adjustments to a subject whose commit is not pushed yet amend that commit (`--amend` for the last one, otherwise `--fixup` + autosquash rebase, see `CLAUDE.md` "Git"); a pushed commit is never amended. English message: a title, then a list of changes, ending with the attribution line. Never mix a line-ending conversion with a real change. Push only when asked.

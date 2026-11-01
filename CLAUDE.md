@@ -63,8 +63,8 @@ The crate table is in the README. Rules:
 
 ## Verification
 
-1. **Before handing over**: targeted tests only (`cargo test -p <modified crate>`, plus `cargo build --release` if the user is to try the app). No visual check on my side: the user tries it and validates.
-2. **After their validation, before committing**: `cargo test --workspace` and `cargo clippy --workspace --all-targets`; fix before committing.
+1. **Before each commit** (see "Git": every finished feature, fix or change is committed right away): `cargo test --workspace` and `cargo clippy --workspace --all-targets`; fix before committing.
+2. **Before handing over**: `cargo build --release` if the user is to try the app. No visual check on my side: the user tries it and validates; their adjustments then amend the commit concerned.
 
 Add unit or integration tests (`crates/*/tests/`) for any new logic, especially file formats and physics.
 
@@ -72,8 +72,8 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 
 - Commit messages in English: a title, then a list of changes.
 - Line endings: LF in the repository (`.gitattributes`, `eol=lf`). Files may be CRLF in the Windows working copy; Git normalizes them. Never commit a line-ending conversion mixed with a real change.
-- Commit or push only when asked.
-- **Before starting a new feature**, if the working copy has uncommitted changes, say so and ask whether to commit them first.
-- **One commit per feature**: never mix two features (or a feature and unrelated changes) in one commit; stage only the hunks that belong to it.
-- **Adjustments to a feature whose commit is not pushed yet**: amend that commit (`git commit --amend`) instead of adding a new one, once asked to commit. A pushed commit is never amended.
+- **Commit automatically**: every feature, fix or change gets its own commit as soon as it is finished (checks of "Verification" passed), without waiting to be asked or for the user's validation. Several subjects in one request give several commits. Push only when asked.
+- **One commit per feature, fix or change**: never mix two subjects (or a subject and unrelated changes) in one commit; stage only the hunks that belong to it. When splitting a file's hunks, check that each staged hunk landed in the right place (one line of context can match elsewhere) and that each commit builds on its own.
+- **Adjustments** requested on a subject whose commit is not pushed yet: amend that commit instead of adding a new one — `git commit --amend` if it is the last commit, otherwise `git commit --fixup=<sha>` then `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <sha>~1` (non-interactive; `--autostash` if the working copy is dirty). A pushed commit is never amended: the adjustment gets a new commit.
+- **Before starting a new subject**, if the working copy has uncommitted changes that are not mine, say so and ask whether to commit them first.
 - `*.exe`, `*.stellar`, `*.stellarec` are ignored.
