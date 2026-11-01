@@ -82,4 +82,4 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 
 - Documentation lives in `docs/`; no wiki.
 - Tasks are GitHub issues of this repository.
-- Time spent is recorded in the work journal (github.com/Jyhess/katrix-journal).
+- Time spent is recorded in the work journal (github.com/Jyhess/dev-journal).
