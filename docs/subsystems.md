@@ -18,7 +18,8 @@ Engines receive it through `PhysicsEngine::set_external_field`. The value passed
 4. On cleanup steps only, the structure operations run in this order:
    - **split**: at most one per subsystem and per cleanup, because rebuilding changes body indices. A cluster becomes a subsystem when (cluster size + system size) < 0.3 × distance, where the size of a cluster is twice its half-mass radius;
    - **merge**, repeated while possible: two subsystems are merged when (sum of sizes) > 0.6 × distance. The hysteresis avoids oscillating between split and merge;
-   - **recentring**: a subsystem whose barycenter has moved away from its origin by more than half its size is rebuilt around the barycenter.
+   - **recentring**: a subsystem whose barycenter has moved away from its origin by more than half its size is rebuilt around the barycenter;
+   - **pruning**, if turned on (`set_auto_prune`): `prune_negligible` drops the secondary subsystems of a single body that is receding on an escape trajectory from the rest (every other subsystem, seen as a point mass, of the main subsystem's size) with an influence (m / M) · (R / d)² < `NEGLIGIBLE_INFLUENCE` (10⁻⁶, `stellar_domain::systems::negligible_escapee`). Its body goes into `StepReport::removed`. The simulation thread also calls it on request.
 
    If anything changed, the moments are recomputed and the live view is republished. Clusters that were not split are listed in `StepReport::clusters`.
 
@@ -27,7 +28,8 @@ Structure operations **rebuild the engines from their state** (`build`, which ta
 ## Invariants
 
 - `state()` returns bodies in **global coordinates**, grouped by subsystem; `SimulationState::systems` gives the range and size of each one. Saves store this grouping (format 5 and later).
-- Live view: `SystemsView` holds one `BodiesView` and one origin per subsystem. The renderer translates the camera anchor into each origin.
+- Live view: `SystemsView` holds one `BodiesView` and one origin per subsystem. The renderer translates the camera anchor into each origin. A tracked body is followed on the GPU in every subsystem (`BodiesView::follow`), so the camera matches the step being drawn.
+- `locate` gives each watched body's subsystem (its marker body): published with the snapshot (`Snapshot::watched_systems`), it lets the interface choose the selected body's sub-simulation.
 - Recordings store one quantization box per subsystem in each snapshot (format 3 and later).
 - An escapee inserted with `insert` gets no acceleration of its own for its first half kick (a known approximation).
 

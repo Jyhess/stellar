@@ -23,7 +23,7 @@ The rules currently in force. This document is the reference when the code and t
 - Contact: **swept detection** (minimum distance over the step); chained mergers through union-find.
 - Merger: masses add up, position at the barycenter, momentum conserved; the resulting body keeps the identifier of the most massive member, so tracking follows it.
 - Open space. **Periodic cleanup** (every N steps): removal of bodies that are **unbound (energy > 0) AND beyond k × R** from the barycenter, except members of a significant bound ejected cluster (friends of friends; at least n bodies or a share of the initial mass).
-- **Sub-simulations**: split when (cluster size + system size) < 0.3 × distance, merge when (sum of sizes) > 0.6 × distance, recentre when the barycenter moves more than half a size from the origin. Coupling through a linear tidal field from point sources, extrapolated to the end of the step. Escapees of a secondary subsystem go to the main subsystem.
+- **Sub-simulations**: split when (cluster size + system size) < 0.3 × distance, merge when (sum of sizes) > 0.6 × distance, recentre when the barycenter moves more than half a size from the origin. Coupling through a linear tidal field from point sources, extrapolated to the end of the step. Escapees of a secondary subsystem go to the main subsystem. Negligible lone bodies (secondary subsystem of one body, receding on an escape trajectory, influence (m / M) · (R / d)² < 10⁻⁶ on the rest) are removed on request or, if the option is on, at every cleanup (option not saved; `--prune`, home screen option without display).
 
 ## Defaults
 - dt = free-fall time / 500 (expected total mass), and with a sun at most 1/200 of the orbital period around it at max(its radius, mean distance between neighbours); ε = 0.3 × mean distance between neighbours; r₀ = 1 % of that distance; cluster link length = that distance; a cluster is kept from 10 bodies or 0.1 % of the initial mass; θ = 0.7; cleanup every 100 steps at k = 10 × the initial radius.
@@ -44,9 +44,9 @@ The rules currently in force. This document is the reference when the code and t
 ## Interface
 - Home screen: new simulation, saves (`saves\`, plus "Browse…"), recordings (`recordings\`), rename and delete (to the recycle bin, linked file optional), language.
 - Navigation: mouse captured (FPS style); orientation by quaternion with rotations in the screen's frame and free roll; Z/S/Q/D, wheel, Ctrl + wheel for optical zoom. Full table of controls in the README.
-- Selection: crosshair + click when captured, free click otherwise; Home / PgDn / PgUp through the mass ranking; B barycenter; clicking a sub-simulation selects its barycenter.
+- Selection: crosshair + click when captured, free click otherwise; Home / PgDn / PgUp through the mass ranking; B barycenter (with sub-simulations: that of the chosen sub-simulation, then the global one on a second press); clicking a sub-simulation selects its barycenter; selecting a body chooses its sub-simulation (default: the main one).
 - Tracking: the target stays at the center; changing target keeps the line of sight, the zoom and the distance (never inside the new body).
-- Rendering: glowing billboards, real size (minimum 1 px), colour by mass, additive blending; trihedron, off-screen arrows, disc-plane grid.
+- Rendering: glowing billboards, real size (minimum 1 px), colour by mass, additive blending; trihedron, off-screen arrows.
 - HUD: global statistics, selected body, top 10 (plus the selection), present and ejected mass, sub-simulations and ejected clusters.
 - Traces (T, R): 10 most massive visible bodies, history or tail, reference frame of the selected body, the barycenter or the local cluster; not saved.
 
@@ -56,6 +56,6 @@ The rules currently in force. This document is the reference when the code and t
 - Every change to a serialized structure creates a new version, and older versions remain readable. Layout and history: [`docs/formats.md`](docs/formats.md).
 
 ## Simulation without display
-- From the home screen (monitoring screen, switch to the display) or with `stellar-cli.exe`. Automatic recording; stop at a step count, a simulated time, a real duration, or on demand; on stop, the recording is closed and the final state is saved under the simulation's name.
+- From the home screen (monitoring screen, switch to the display), from the display (Esc menu → send to the background: no target, camera kept for the return) or with `stellar-cli.exe`. Automatic recording; stop at a step count, a simulated time, a real duration, or on demand; on stop, the recording is closed and the final state is saved under the simulation's name.
 - Command line: English option names (`--bodies`, `--load`, `--continue`, `--resume`, `--steps`…); `--help` in the interface language; exit code 2 on an unknown argument.
 

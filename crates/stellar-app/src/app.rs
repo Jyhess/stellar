@@ -192,12 +192,14 @@ impl eframe::App for StellarApp {
             Screen::Home(home) => match home.show(ctx, &self.service) {
                 HomeAction::None => {}
                 HomeAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                HomeAction::StartHeadless(config, record, name, target) => {
+                HomeAction::StartHeadless(config, record, name, target, prune) => {
                     match stellar_application::HeadlessRun::start(&self.service, config, &name, record, target) {
                         Ok(run) => {
+                            run.handle().set_auto_prune(prune);
                             self.screen = Screen::Headless(Box::new(HeadlessScreen::new(
                                 self.service.clone(),
                                 run,
+                                None,
                             )));
                         }
                         Err(e) => home.message = Some(crate::i18n::tr_msg(&e.to_string())),
@@ -262,6 +264,18 @@ impl eframe::App for StellarApp {
             Screen::Sim(sim) => match sim.show(ctx) {
                 SimAction::None => {}
                 SimAction::BackHome => self.go_home(ctx, None),
+                SimAction::Background => {
+                    if let Screen::Sim(sim) = std::mem::replace(&mut self.screen, Screen::Switching) {
+                        self.screen = match sim.into_background(ctx) {
+                            Ok((handle, view)) => Screen::Headless(Box::new(HeadlessScreen::new(
+                                self.service.clone(),
+                                stellar_application::HeadlessRun::adopt(handle),
+                                Some(view),
+                            ))),
+                            Err(sim) => Screen::Sim(sim),
+                        };
+                    }
+                }
                 SimAction::Quit => {
                     let _ = self.suspend_recording();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -270,11 +284,11 @@ impl eframe::App for StellarApp {
             Screen::Headless(h) => match h.show(ctx) {
                 HeadlessAction::None => {}
                 HeadlessAction::BackHome => self.go_home(ctx, None),
-                HeadlessAction::Show(run) => {
+                HeadlessAction::Show(run, view) => {
                     self.screen = Screen::sim(SimScreen::new(
                         Source::Live(Box::new(run.into_handle())),
                         self.service.clone(),
-                        None,
+                        view,
                     ));
                 }
             },

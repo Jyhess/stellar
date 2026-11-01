@@ -157,6 +157,65 @@ fn approaching_subsystems_merge() {
     assert!(e.state().systems.is_empty());
 }
 
+/// Main cluster at rest (50 bodies) and lone bodies, each in its own
+/// subsystem: `(id, position, velocity, mass)`.
+fn with_lone_bodies(lone: &[(u64, Vec3, Vec3, f64)]) -> (BodySet, Vec<SystemSpan>) {
+    let mut b = BodySet::default();
+    cluster(&mut b, 0, 50, Vec3::ZERO, 0.5, Vec3::ZERO);
+    let mut spans = vec![SystemSpan { start: 0, len: 50, size: 1.0 }];
+    for &(id, p, v, m) in lone {
+        spans.push(SystemSpan { start: b.len(), len: 1, size: 0.1 });
+        b.push(id, p, v, m);
+    }
+    (b, spans)
+}
+
+/// Only the lone bodies that escape with a negligible influence are removed;
+/// the others, and the bodies' subsystems, stay as they are.
+#[test]
+fn prune_removes_only_negligible_escapees() {
+    let out = Vec3::new(100.0, 0.0, 0.0);
+    let (b, spans) = with_lone_bodies(&[
+        // Far and receding: (1 / 50) · (1 / 10⁴)² ≈ 2·10⁻¹⁰, removed.
+        (500, Vec3::new(1e4, 0.0, 0.0), out, 1.0),
+        // Receding but close and heavy: (50 / 51) · (1 / 30)² ≈ 10⁻³, kept.
+        (501, Vec3::new(0.0, 30.0, 0.0), Vec3::new(0.0, 100.0, 0.0), 50.0),
+        // Far but coming back: kept.
+        (502, Vec3::new(0.0, 0.0, 1e4), Vec3::new(0.0, 0.0, -100.0), 1.0),
+    ]);
+    let mut e = composite(b, spans, params());
+    assert_eq!(e.systems().len(), 4);
+    let located = e.locate(&[0, 501]);
+    assert_eq!(located[1].map(|(_, s)| s), Some(501), "a lone body is its subsystem's marker");
+    let main = located[0].expect("main body present").1;
+    assert_ne!(main, 501);
+
+    let r = e.prune_negligible();
+    assert_eq!(r.removed, vec![500]);
+    assert_eq!(r.removed_bodies.len(), 1);
+    assert_eq!(r.removed_bodies.positions[0], Vec3::new(1e4, 0.0, 0.0));
+    assert_eq!(e.systems().len(), 3);
+    assert_eq!(e.body_count(), 52);
+    assert!(e.positions_of(&[500])[0].is_none());
+    // Nothing more to remove.
+    assert!(e.prune_negligible().removed.is_empty());
+}
+
+/// With automatic pruning, the cleanup of a step removes them.
+#[test]
+fn auto_prune_acts_at_cleanup() {
+    let (b, spans) = with_lone_bodies(&[(500, Vec3::new(1e4, 0.0, 0.0), Vec3::new(100.0, 0.0, 0.0), 1.0)]);
+    let mut p = params();
+    p.cleanup_period = 1;
+    let mut e = composite(b.clone(), spans.clone(), p);
+    assert!(e.step().removed.is_empty(), "off by default");
+    assert_eq!(e.systems().len(), 2);
+    e.set_auto_prune(true);
+    assert_eq!(e.step().removed, vec![500]);
+    assert_eq!(e.systems().len(), 1);
+    assert_eq!(e.body_count(), 50);
+}
+
 /// A body escaping from a secondary subsystem joins the main one.
 #[test]
 fn escapee_joins_the_main_system() {

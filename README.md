@@ -69,7 +69,8 @@ The first build takes a few minutes while the dependencies are downloaded and co
 
 For long computations: no rendering of the bodies, the whole graphics card for the computation, and automatic recording with an adjustable interval and dust budget.
 
-- **From the home screen**: tick "Without display", then choose a stop condition: number of steps, simulated time, real duration, or manual. A monitoring screen shows progress (step, steps/s, estimated remaining time, recording). "Stop and save" closes the recording and saves the final state under the simulation's name. "Show the simulation" switches to the usual display while computation and recording continue. Closing the window stops cleanly.
+- **From the home screen**: tick "Without display", then choose a stop condition: number of steps, simulated time, real duration, or manual. A monitoring screen shows progress (step, steps/s, estimated remaining time, recording). "Stop and save" closes the recording and saves the final state under the simulation's name. "Show the simulation" switches to the usual display while computation and recording continue. Closing the window stops cleanly. The option "Automatically remove the negligible lone bodies" turns on the pruning described in [Sub-simulations](#sub-simulations).
+- **From the display**: Esc menu → "Send to the background". The live simulation goes on without display (computation and running recording, if any) on the same monitoring screen, without a target; "Show the simulation" brings it back with the camera as it was.
 - **From the command line**: `stellar-cli.exe` is a console application installed next to `stellar.exe`. The prompt waits for it to finish, and Ctrl+C stops it cleanly. `stellar-cli --help` lists the options, in the interface language. An unknown argument is reported with exit code 2. `stellar.exe` started with arguments forwards them to `stellar-cli`.
 
   ```powershell
@@ -81,7 +82,7 @@ For long computations: no rendering of the bodies, the whole graphics card for t
   - **New simulation**: `--bodies`, `--radius`, `--seed`, `--disc`, `--velocity rest|random|circ|orb|rad`, `--spread`, `--factor` (multiple of the orbital velocity), `--vmin`/`--vmax`, `--max-mass N` and `--mass-exponent A` (grain masses), `--sun P` (central sun of P % of the total mass), `--planets N` and `--planet-mass P` (N massive bodies of P % each, 1 by default, on orbits from 0.2 to 0.9 × the radius), `--engine gpu|cpu`.
   - **Resume a save**: `--load FILE`. The recording linked to the save is continued; otherwise a new recording starts. `--continue FILE` instead extends a compatible recording from the save's step, deleting the later snapshots.
   - **Resume a recording**: `--resume FILE` loads the latest save linked to the recording (the resume save, or an F5 save made during the recording) and continues it.
-  - **In every case**: `--name`, `--interval` (snapshot interval), `--dust N|all` (dust budget), and a target: `--steps N` or `--time T` (simulated time), both counted from the save's step when resuming, or `--duration minutes` (real duration). Without a target, it runs until Ctrl+C. Progress is printed every five seconds. On stop, the recording is closed and the final state is saved.
+  - **In every case**: `--name`, `--interval` (snapshot interval), `--dust N|all` (dust budget), `--prune` (automatic removal of the negligible lone bodies), and a target: `--steps N` or `--time T` (simulated time), both counted from the save's step when resuming, or `--duration minutes` (real duration). Without a target, it runs until Ctrl+C. Progress is printed every five seconds. On stop, the recording is closed and the final state is saved.
 
 ### Controls
 
@@ -99,11 +100,10 @@ Letter keys are read by character and laid out for an AZERTY keyboard.
 | Wheel | forward / backward like Z / S (when tracking: distance to the target; Shift speeds it up) |
 | Ctrl + wheel | optical zoom |
 | F | track the selection (body or barycenter) / stop tracking |
-| G | grid of the disc plane |
 | Left click | track the aimed body (crosshair, or pointer when the mouse is released) |
 | Home | go to the most massive body |
 | PgDn / PgUp | next / previous body by mass |
-| B | select the barycenter and look at the disc face-on (along the angular momentum axis), keeping the distance |
+| B | select the barycenter and look at the disc face-on (along the angular momentum axis), keeping the distance. With sub-simulations: first the barycenter of the chosen sub-simulation (that of the selected body, or the last one clicked, otherwise the main one), then, on a second press, the global barycenter |
 | C | aim at the center of gravity (free flight) |
 | T | trace mode: trajectories of the 10 most massive bodies visible on screen at that moment / clear |
 | R | traces: next reference frame (selected body, simulation barycenter, or barycenter of the selected body's bound cluster) |
@@ -115,7 +115,7 @@ Letter keys are read by character and laid out for an AZERTY keyboard.
 | F5 | save |
 | F9 | start / stop recording |
 | F10 | quit |
-| Esc | menu (resume, save, home, quit, key help) |
+| Esc | menu (resume, save, send to the background, home, quit, key help) |
 
 **Tracking.** A tracked body (or the barycenter) stays at the center of the screen: the mouse orbits the camera around it, Z / S set the distance and A / E roll the view. If the body merges, tracking moves to the resulting body. F hands back free flight without changing the view. Orientation is unrestricted in every direction (you can go over the top of an object); H brings the horizon back to the disc plane. Speed is proportional to the distance to the selected body, or to the barycenter when nothing is selected: slow near the target, fast far away. Moving from one body to another (click, Home, PgDn/PgUp, ranking) keeps the line of sight, the zoom and the distance to the target.
 
@@ -132,8 +132,10 @@ Traces are always shown in a **reference frame** (R moves to the next one). Each
 
 The "Bodies" panel also lists the **sub-simulations** and the **ejected clusters** kept by cleanup (see [Sub-simulations](#sub-simulations)), with marker body (the most massive one), body count, mass and distance to the barycenter.
 
+- The **chosen sub-simulation** is highlighted: the one holding the selected body (selecting a body chooses its sub-simulation), otherwise the last one clicked, otherwise the main one. B goes to its barycenter.
 - **Clicking a sub-simulation** selects its **barycenter** and centres the camera on it, at a distance that shows it entirely. B shows it face-on, and the panel gives its bodies, mass, velocity and size. If it merges with another one, the camera follows the merged whole. If it merges back into the main simulation and no other sub-simulation remains, the camera returns to the global barycenter.
 - **Clicking an ejected cluster** selects its marker body.
+- **"Remove the negligible lone bodies"** removes now the sub-simulations reduced to a single escaping body of negligible influence; the checkbox below does it at every cleanup (see [Sub-simulations](#sub-simulations)).
 
 The cluster list is updated at each cleanup. Neither list exists during playback.
 
@@ -253,6 +255,8 @@ The computation uses every core but one, which is left to the interface.
 
 An ejected cluster that has moved far enough away becomes a **sub-simulation**: its own engine (of the same type), its own frame (origin at its barycenter, which keeps precision intact even very far away), its own tree. The subsystems feel each other through a linear tidal field. They split, merge and recentre at cleanup steps. Details: [`docs/subsystems.md`](docs/subsystems.md).
 
+A heavy enough body ejected alone is kept by cleanup and ends up as a sub-simulation of a single body, computed for nothing. Such **negligible lone bodies** can be removed, on request or at every cleanup: a secondary sub-simulation of one body that moves away from the rest on an escape trajectory (positive energy, the rest seen as a point mass), with an influence (m / M) · (R / d)² < 10⁻⁶ on it (m its mass, M and R the mass and size of the rest, R being the main sub-simulation's size, d its distance to the rest's barycenter). It is the acceleration it gives the rest that counts, not its mass: a heavy body qualifies once far enough away. Removed bodies count as ejected (recordings, traces, ejected mass). The automatic option is not saved.
+
 ### Adding a computation engine
 
 1. Create a crate that implements `stellar_domain::PhysicsEngine` and `stellar_domain::EngineFactory`, with a unique `id`. `EngineFactory::create` must return a readable error rather than panic (no card, insufficient memory).
@@ -308,6 +312,6 @@ To start a simulation directly without going through the home screen: `$env:STEL
 - **physics** (`stellar-engine-cpu/tests/physics.rs`, with the same cases on the GPU in `stellar-engine-gpu/tests/gpu.rs`): Barnes-Hut accuracy against the direct sum, energy conservation on a two-body orbit, conservation of mass and momentum through mergers, fast crossings, chained mergers, cleanup and ejected clusters;
 - **GPU engine** (`gpu.rs`): agreement with the CPU engine over several steps, tracked positions, live view, external field and insertion;
 - **ejected clusters** (`stellar-domain/tests/ejection.rs`): friends of friends, pruning of unbound members, thresholds, spherical approximation for large clusters, local cluster of a body;
-- **sub-simulations** (`stellar-application/tests/systems.rs`): split, merge, escapees, agreement with the full computation;
+- **sub-simulations** (`stellar-application/tests/systems.rs`): split, merge, escapees, removal of negligible lone bodies, agreement with the full computation;
 - **files** (`stellar-persistence`): reading older versions (saves 3 to 5, recordings 1, in the internal tests of `lib.rs` and `recording.rs`), continuing a recording, renaming and deleting linked files, simulation without display (`tests/continuation.rs`, `tests/files.rs`);
 - **interface** (`stellar-app`): command-line parsing, and the translation table (duplicates, placeholders).

@@ -63,6 +63,8 @@ Dans tous les cas :
   --steps N          s'arrêter après N pas (de plus, en reprise)
   --time T           s'arrêter après un temps simulé T (de plus, en reprise)
   --duration M       s'arrêter après M minutes de calcul
+  --prune            supprimer automatiquement les corps isolés négligeables
+                     (sous-simulations d'un seul corps qui s'échappe)
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
 sauvegardé (dossiers « {} » et « {} »).", SAVES_DIR, RECORDINGS_DIR)
 }
@@ -87,6 +89,8 @@ struct Options {
     name: Option<String>,
     record: RecordSettings,
     target: RunTarget,
+    /// Automatic removal of negligible lone bodies.
+    prune: bool,
 }
 
 /// Parses the command line (`Err("")`: help requested; `Err(message)`:
@@ -109,6 +113,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             dust_budget: Some(1_000_000),
         },
         target: RunTarget::Manual,
+        prune: false,
     };
     let (mut velocity, mut spread, mut factor, mut vmin, mut vmax) =
         ("orb".to_owned(), 0.05, 1.0, 0.0, 10.0);
@@ -169,6 +174,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--steps" => o.target = RunTarget::Steps(num(&value(&mut it, a)?, a)?),
             "--time" => o.target = RunTarget::SimTime(num(&value(&mut it, a)?, a)?),
+            "--prune" => o.prune = true,
             "--duration" => {
                 let m: f64 = num(&value(&mut it, a)?, a)?;
                 o.target = RunTarget::WallTime(Duration::from_secs_f64(m.max(0.0) * 60.0));
@@ -347,6 +353,7 @@ pub fn run(args: &[String]) -> i32 {
     };
     let run = match started {
         Ok((run, continued)) => {
+            run.handle().set_auto_prune(o.prune);
             if let Some(p) = continued {
                 println!("{}", tr!("Enregistrement poursuivi : {}", p.display()));
             }
@@ -419,6 +426,9 @@ mod tests {
         assert_eq!(o.target, RunTarget::Steps(500));
         assert_eq!(o.record.dust_budget, None);
         assert_eq!(o.name.as_deref(), Some("test"));
+        assert!(!o.prune);
+        assert!(parse(&args("--prune")).unwrap().prune);
+        assert!(parse(&args("--load a.stellar --prune")).unwrap().prune);
         let o = parse(&args("--duration 1,5 --spread 0,1 --factor 0,8")).unwrap();
         assert_eq!(o.target, RunTarget::WallTime(Duration::from_secs(90)));
         assert_eq!(

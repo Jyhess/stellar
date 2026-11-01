@@ -133,6 +133,7 @@ impl Replay {
             // Derived from the state by the interface (dust weighting).
             center_of_mass: None,
             watched: Vec::new(),
+            watched_systems: Vec::new(),
             top: self.player.top().to_vec(),
             total_mass,
             // Ejected clusters are not recorded.
@@ -193,6 +194,7 @@ fn empty_snapshot() -> Snapshot {
         diagnostics: Diagnostics::default(),
         center_of_mass: None,
         watched: Vec::new(),
+        watched_systems: Vec::new(),
         top: Vec::new(),
         total_mass: 0.0,
         clusters: Arc::default(),

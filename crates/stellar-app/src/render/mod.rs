@@ -7,7 +7,11 @@
 //!   and radius are derived in the shader. No copy. A simulation split into
 //!   subsystems ([`SystemsView`]) has one buffer per subsystem, each in its
 //!   own frame: the anchor of each draw is the camera's, translated to the
-//!   subsystem's origin.
+//!   subsystem's origin. When the camera tracks a body, its position at the
+//!   step being drawn is copied from the engine on the GPU
+//!   ([`BodiesView::followed_position`]) and the anchor is shifted by its
+//!   displacement since the published position: otherwise the bodies, a few
+//!   steps ahead of the camera, would jerk on screen.
 //! - **instances** (CPU engine, playback): at each new snapshot, positions
 //!   (relative to an anchor near the camera, to preserve `f32` precision)
 //!   are uploaded to an instance buffer.
@@ -20,7 +24,7 @@ use eframe::egui_wgpu::wgpu::util::DeviceExt;
 use eframe::egui_wgpu::{self, wgpu};
 use glam::DVec3;
 use stellar_domain::systems::ViewPart;
-use stellar_domain::SystemsView;
+use stellar_domain::{BodyId, SystemsView};
 use stellar_engine_gpu::BodiesView;
 
 /// One instance = one body on screen (20 bytes).
@@ -68,6 +72,9 @@ pub struct PointRenderer {
     /// current frame.
     part_uniforms: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     parts: Arc<Vec<ViewPart>>,
+    /// Live view, tracked body: its positions copied from the engine (layout:
+    /// `Follow` in `points.wgsl`), shared by every bind group.
+    follow_buffer: wgpu::Buffer,
     /// Instance buffers: a single buffer cannot exceed the GPU's
     /// `max_buffer_size` limit (256 MB by default, ~13 million bodies), hence
     /// the split into chunks.
@@ -85,6 +92,11 @@ struct Chunk {
 
 /// Cap of instances per chunk (80 MB), well below the usual limits.
 const MAX_CHUNK_INSTANCES: usize = 4 * 1024 * 1024;
+
+/// Subsystems searched for the tracked body (`MAX_FOLLOW` in `points.wgsl`).
+const MAX_FOLLOW: usize = 32;
+/// Size of the `Follow` uniform: header, then two vectors per subsystem.
+const FOLLOW_BYTES: u64 = 16 + 32 * MAX_FOLLOW as u64;
 
 impl PointRenderer {
     /// Installs the renderer in eframe's wgpu state.
@@ -107,27 +119,33 @@ impl PointRenderer {
             contents: bytemuck::bytes_of(&Uniforms::zeroed()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let follow_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("stellar-follow"),
+            size: FOLLOW_BYTES,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uniform_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("stellar-uniforms-layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+            entries: &[uniform_entry(0), uniform_entry(1)],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("stellar-uniforms-group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let bind_group = Self::bind_group(
+            device,
+            &bind_group_layout,
+            &uniform_buffer,
+            &follow_buffer,
+            "stellar-uniforms-group",
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("stellar-points-layout"),
             bind_group_layouts: &[&bind_group_layout],
@@ -222,9 +240,69 @@ impl PointRenderer {
             bind_group_layout,
             part_uniforms: Vec::new(),
             parts: Arc::default(),
+            follow_buffer,
             chunks: Vec::new(),
             chunk_capacity: by_limit.clamp(1024, MAX_CHUNK_INSTANCES),
             generation: u64::MAX,
+        }
+    }
+
+    fn bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        uniforms: &wgpu::Buffer,
+        follow: &wgpu::Buffer,
+        label: &str,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: follow.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Live view: asks every subsystem for the position of the tracked body
+    /// (`follow`: identifier and point the anchor was built from) and copies
+    /// those already computed into the `Follow` uniform.
+    fn prepare_follow(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        follow: Option<(BodyId, DVec3)>,
+    ) {
+        let mut entries = vec![[0f32; 4]; 2 * MAX_FOLLOW];
+        let mut count = 0;
+        for part in self.parts.iter() {
+            let Some(view) = part.view.downcast_ref::<BodiesView>() else {
+                continue;
+            };
+            view.follow(follow.map(|(id, _)| id));
+            let Some((id, target)) = follow else { continue };
+            if count == MAX_FOLLOW {
+                continue;
+            }
+            if let Some(buffer) = view.followed_position(id) {
+                let base = (part.origin - target).as_vec3();
+                entries[2 * count + 1] = [base.x, base.y, base.z, 0.0];
+                encoder.copy_buffer_to_buffer(buffer, 0, &self.follow_buffer, 16 + 32 * count as u64, 16);
+                count += 1;
+            }
+        }
+        // Written before the copies of this frame's commands, which overwrite the
+        // positions.
+        let header = [count as u32, 0, 0, 0];
+        queue.write_buffer(&self.follow_buffer, 0, bytemuck::cast_slice(&header));
+        if count > 0 {
+            queue.write_buffer(&self.follow_buffer, 16, bytemuck::cast_slice(&entries[..2 * count]));
         }
     }
 
@@ -270,7 +348,13 @@ pub enum PointsSource {
     /// Instances uploaded from a snapshot.
     Batch(Option<InstanceBatch>),
     /// Buffers of the GPU engine, read in place; anchor: position of the camera.
-    Direct { view: Arc<SystemsView>, anchor: DVec3 },
+    /// `follow`: body tracked by the camera and its position the anchor was
+    /// built from.
+    Direct {
+        view: Arc<SystemsView>,
+        anchor: DVec3,
+        follow: Option<(BodyId, DVec3)>,
+    },
 }
 
 /// Draw command of a frame.
@@ -285,7 +369,7 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen: &egui_wgpu::ScreenDescriptor,
-        _encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(r) = resources.get_mut::<PointRenderer>() else {
@@ -298,8 +382,9 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
             }
         }
         queue.write_buffer(&r.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
-        if let PointsSource::Direct { view, anchor } = &self.source {
+        if let PointsSource::Direct { view, anchor, follow } = &self.source {
             r.parts = view.parts();
+            r.prepare_follow(queue, encoder, *follow);
             while r.part_uniforms.len() < r.parts.len() {
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("stellar-uniforms-part"),
@@ -307,14 +392,13 @@ impl egui_wgpu::CallbackTrait for PointsCallback {
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("stellar-uniforms-part-group"),
-                    layout: &r.bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    }],
-                });
+                let group = PointRenderer::bind_group(
+                    device,
+                    &r.bind_group_layout,
+                    &buffer,
+                    &r.follow_buffer,
+                    "stellar-uniforms-part-group",
+                );
                 r.part_uniforms.push((buffer, group));
             }
             for (part, (buffer, _)) in r.parts.iter().zip(&r.part_uniforms) {

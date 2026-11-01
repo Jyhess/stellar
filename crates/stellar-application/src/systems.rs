@@ -14,7 +14,10 @@
 //!   recentred;
 //! - bodies removed by a secondary subsystem (escapees) are not lost: they
 //!   join the main system (the most massive one), whose cleanup decides
-//!   their fate.
+//!   their fate;
+//! - with automatic pruning, secondary subsystems reduced to a single
+//!   negligible escaping body are removed
+//!   ([`MultiSystem::prune_negligible`], also available on request).
 //!
 //! The rest of the application sees an ordinary engine; with a single
 //! subsystem (the usual case), the composite only forwards calls. Details:
@@ -24,7 +27,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use stellar_domain::systems::{ViewPart, MERGE_RATIO, SPLIT_RATIO};
+use stellar_domain::systems::{negligible_escapee, ViewPart, MERGE_RATIO, SPLIT_RATIO};
 use stellar_domain::{
     ranking, BodyId, BodySet, Diagnostics, EjectedCluster, EngineFactory, ExternalField, Moments,
     PhysicsEngine, PhysicsParams, SimulationState, StepReport, SystemSpan, SystemSummary,
@@ -62,6 +65,8 @@ pub struct MultiSystem {
     systems: Vec<Subsystem>,
     /// Composite live view, if the engines offer one.
     view: Option<Arc<SystemsView>>,
+    /// Negligible lone bodies removed at every cleanup.
+    auto_prune: bool,
 }
 
 fn shift(bodies: &mut BodySet, by: Vec3) {
@@ -103,6 +108,7 @@ impl MultiSystem {
             initial_mass: state.initial_mass,
             systems: Vec::new(),
             view: None,
+            auto_prune: false,
         };
         let (step, time) = (state.step, state.time);
         let spans = if state.systems.len() > 1 {
@@ -356,6 +362,72 @@ impl MultiSystem {
         false
     }
 
+    /// Removes at each cleanup the negligible lone bodies (see
+    /// [`Self::prune_negligible`]).
+    pub fn set_auto_prune(&mut self, on: bool) {
+        self.auto_prune = on;
+    }
+
+    /// Removes the secondary subsystems reduced to a single body escaping the
+    /// rest of the simulation with a negligible influence on it
+    /// ([`stellar_domain::systems::negligible_escapee`]; rest: every other
+    /// subsystem, of the main system's size). Returns the removals (global
+    /// coordinates), to be handled like those of a step.
+    pub fn prune_negligible(&mut self) -> StepReport {
+        let mut report = StepReport::default();
+        if self.systems.len() < 2 {
+            return report;
+        }
+        let root = self.root();
+        let rest_size = self.systems[root].size;
+        let total = self.moments();
+        let g = self.params.g;
+        let gone: Vec<usize> = (0..self.systems.len())
+            .filter(|&i| i != root && self.systems[i].engine.body_count() == 1)
+            .filter(|&i| {
+                let m = self.systems[i].moments;
+                let rest_mass = total.mass - m.mass;
+                if rest_mass <= 0.0 {
+                    return false;
+                }
+                let rest = Moments {
+                    mass: rest_mass,
+                    center: (total.center * total.mass - m.center * m.mass) / rest_mass,
+                    velocity: (total.velocity * total.mass - m.velocity * m.mass) / rest_mass,
+                };
+                negligible_escapee(g, m.mass, m.center, m.velocity, &rest, rest_size)
+            })
+            .collect();
+        for &i in gone.iter().rev() {
+            let system = self.systems.remove(i);
+            let (bodies, _, _) = Self::bodies_of(&system);
+            for k in 0..bodies.len() {
+                report.removed.push(bodies.ids[k]);
+                report
+                    .removed_bodies
+                    .push(bodies.ids[k], bodies.positions[k], bodies.velocities[k], bodies.masses[k]);
+            }
+        }
+        if !gone.is_empty() {
+            self.publish_view();
+        }
+        report
+    }
+
+    /// Current positions of the requested bodies, with the marker body of the
+    /// subsystem holding each one.
+    pub fn locate(&self, ids: &[BodyId]) -> Vec<Option<(Vec3, BodyId)>> {
+        let mut out = vec![None; ids.len()];
+        for system in &self.systems {
+            for (o, p) in out.iter_mut().zip(system.engine.positions_of(ids)) {
+                if o.is_none() {
+                    *o = p.map(|p| (p + system.origin, system.anchor));
+                }
+            }
+        }
+        out
+    }
+
     /// Recentres the subsystems whose barycenter has moved away from their
     /// origin by more than half their size (to preserve the GPU engine's
     /// single precision); returns `true` if one was.
@@ -442,6 +514,16 @@ impl PhysicsEngine for MultiSystem {
                 changed = true;
             }
             changed |= self.recenter();
+            if self.auto_prune {
+                let pruned = self.prune_negligible();
+                report.removed.extend(pruned.removed);
+                let b = pruned.removed_bodies;
+                for k in 0..b.len() {
+                    report
+                        .removed_bodies
+                        .push(b.ids[k], b.positions[k], b.velocities[k], b.masses[k]);
+                }
+            }
             if changed {
                 for s in &mut self.systems {
                     let m = s.engine.moments();
@@ -493,15 +575,7 @@ impl PhysicsEngine for MultiSystem {
     }
 
     fn positions_of(&self, ids: &[BodyId]) -> Vec<Option<Vec3>> {
-        let mut out = vec![None; ids.len()];
-        for system in &self.systems {
-            for (o, p) in out.iter_mut().zip(system.engine.positions_of(ids)) {
-                if o.is_none() {
-                    *o = p.map(|p| p + system.origin);
-                }
-            }
-        }
-        out
+        self.locate(ids).into_iter().map(|o| o.map(|(p, _)| p)).collect()
     }
 
     fn center_of_mass(&self) -> Option<Vec3> {

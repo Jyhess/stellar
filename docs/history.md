@@ -69,3 +69,12 @@ Decisions in the order they were made; v1 came from the initial question session
 - Initial conditions: integer grain masses from 1 to N following a power law (`--max-mass`, `--mass-exponent`), drawn on a stream of their own; optional central sun holding a share of the total mass (`--sun`); optional massive bodies on circular orbits in the disc plane, at evenly spaced radii (`--planets`, `--planet-mass`).
 - Orbital velocity and suggested dt account for the sun (dt at most 1/200 of the inner orbital period); characteristic speed and free-fall time use the expected total mass; playback computes the exact initial mass from the initial conditions.
 - Formats: `.stellar` v7, `.stellarec` v5 (older versions read with dust of mass 1, no sun, no planets).
+
+## v1.12 — sub-simulation tools
+- Live GPU view: the camera tracking a body no longer jerks. The engine writes the followed body's position on the GPU at every step and the renderer shifts its anchor accordingly, instead of relying on the published position, a few steps behind the bodies drawn.
+- Chosen sub-simulation: that of the selected body, or the last one clicked, otherwise the main one; B goes to its barycenter, a second press to the global barycenter.
+- Removal of the negligible lone bodies (single-body sub-simulations escaping, influence (m / M) · (R / d)² < 10⁻⁶): button and automatic option in the "Bodies" panel, option on the home screen without display, `--prune`.
+- Esc menu → "Send to the background": the live simulation goes on without display; showing it again restores the camera.
+- Home screen "?" badges: a click now opens the explanation in a bubble that stays until the next click (egui hides tooltips after a click until the mouse moves, so clicking a badge showed nothing).
+- Disc-plane grid removed (G key, checkbox).
+- Interface tests: the language is per thread in tests, so a test switching to English no longer breaks the number formatting of the others.

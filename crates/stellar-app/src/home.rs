@@ -28,7 +28,8 @@ pub enum HomeAction {
     /// Configuration, recording from the start, name of the simulation.
     Start(SimulationConfig, Option<RecordOptions>, String),
     /// Simulation without display: configuration, recording, name, target.
-    StartHeadless(SimulationConfig, RecordSettings, String, RunTarget),
+    /// Last field: automatic removal of negligible lone bodies.
+    StartHeadless(SimulationConfig, RecordSettings, String, RunTarget, bool),
     Load(PathBuf),
     /// Loads a save already read (name of the save) and continues the given
     /// recording.
@@ -100,6 +101,8 @@ pub struct HomeScreen {
     record: bool,
     /// Without display (automatic recording), and its target.
     headless: bool,
+    /// Without display: automatic removal of negligible lone bodies.
+    headless_prune: bool,
     target_kind: TargetKind,
     target_steps: u64,
     target_time: f64,
@@ -213,6 +216,7 @@ impl HomeScreen {
             recordings: Vec::new(),
             record: false,
             headless: false,
+            headless_prune: false,
             target_kind: TargetKind::Steps,
             target_steps: 100_000,
             target_time: 10.0,
@@ -852,6 +856,13 @@ impl HomeScreen {
                     }
                 }
             });
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut self.headless_prune,
+                    tr("   Supprimer automatiquement les corps isolés négligeables"),
+                );
+                help(ui, crate::sim::prune_help());
+            });
         } else {
             ui.checkbox(
                 &mut self.record,
@@ -969,6 +980,7 @@ impl HomeScreen {
                     },
                     name,
                     target,
+                    self.headless_prune,
                 )
             } else {
                 HomeAction::Start(config, record, name)
@@ -1337,10 +1349,25 @@ fn count_picker(ui: &mut egui::Ui, count: &mut usize, max: usize) {
     });
 }
 
-/// "?" badge whose tooltip explains a parameter.
+/// "?" badge explaining a parameter: tooltip on hover, and a bubble that
+/// stays open on click (egui hides a tooltip after a click until the mouse
+/// moves, and a "?" invites a click).
 fn help(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new("?").small().strong().weak()).sense(egui::Sense::hover()))
-        .on_hover_text(text);
+    let r = ui
+        .add(egui::Label::new(RichText::new("?").small().strong().weak()).sense(egui::Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::Help);
+    let id = r.id.with("help");
+    if r.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    let open = ui.memory(|m| m.is_popup_open(id));
+    egui::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        ui.set_max_width(360.0);
+        ui.label(text);
+    });
+    if !open {
+        r.on_hover_text(text);
+    }
 }
 
 /// Label of a parameter followed by its help badge.
@@ -1454,6 +1481,77 @@ pub fn default_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every "?" badge of the form explains its parameter on hover, and keeps
+    /// the explanation open after a click (a click hides egui's tooltips).
+    #[test]
+    fn help_badges_explain_on_hover_and_on_click() {
+        use stellar_persistence::{FileRecordingRepository, FileRepository};
+        let dir = std::env::temp_dir().join("stellar-test-help-badges");
+        let service = SimulatorService::new(
+            stellar_application::EngineRegistry::new(),
+            std::sync::Arc::new(FileRepository::new(dir.join("saves"))),
+            std::sync::Arc::new(FileRecordingRepository::new(dir.join("recordings"))),
+        );
+        let mut home = HomeScreen::new(&service);
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |events: Vec<egui::Event>| {
+            time += 0.02;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let out = ctx.run(input, |ctx| {
+                home.show(ctx, &service);
+            });
+            out.shapes
+                .into_iter()
+                .filter_map(|s| match s.shape {
+                    egui::epaint::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos + t.galley.rect.center().to_vec2())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let texts = frame(Vec::new());
+        let base: std::collections::HashSet<String> = texts.iter().map(|t| t.0.clone()).collect();
+        let marks: Vec<egui::Pos2> = texts.iter().filter(|t| t.0 == "?").map(|t| t.1).collect();
+        assert!(marks.len() >= 10, "{} badges", marks.len());
+        let click = |at, pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        // Explanation shown at the end of a few frames (`events`: those of the
+        // first frames).
+        let mut shown_after = |events: Vec<Vec<egui::Event>>| {
+            let mut last = Vec::new();
+            for e in events {
+                last = frame(e);
+            }
+            for _ in 0..50 {
+                last = frame(Vec::new());
+            }
+            last.into_iter().any(|t| !base.contains(&t.0) && t.0.len() > 20)
+        };
+        for &at in &marks {
+            // Gradual approach, like a real mouse: egui only sees a movement
+            // through the pointer's velocity.
+            let hover = (0..=5)
+                .rev()
+                .map(|k| vec![egui::Event::PointerMoved(at + egui::vec2(6.0 * k as f32, 0.0))])
+                .collect();
+            assert!(shown_after(hover), "no tooltip on hover at {at:?}");
+            assert!(shown_after(vec![vec![click(at, true), click(at, false)]]), "nothing shown after a click at {at:?}");
+            // A click elsewhere (the footer text) closes it.
+            let away = egui::pos2(20.0, 890.0);
+            assert!(!shown_after(vec![vec![egui::Event::PointerMoved(away), click(away, true), click(away, false)]]));
+            shown_after(vec![vec![egui::Event::PointerGone]]);
+        }
+    }
 
     #[test]
     fn default_names() {

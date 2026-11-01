@@ -44,10 +44,25 @@ impl Lang {
     }
 }
 
+#[cfg(not(test))]
 static LANG: AtomicU8 = AtomicU8::new(0);
 
+// Tests run in parallel threads: a test switching the language must not
+// change the formatting seen by the others.
+#[cfg(test)]
+thread_local! {
+    static LANG: AtomicU8 = const { AtomicU8::new(0) };
+}
+
+fn with_lang<R>(f: impl FnOnce(&AtomicU8) -> R) -> R {
+    #[cfg(not(test))]
+    return f(&LANG);
+    #[cfg(test)]
+    LANG.with(f)
+}
+
 pub fn lang() -> Lang {
-    if LANG.load(Ordering::Relaxed) == 1 {
+    if with_lang(|l| l.load(Ordering::Relaxed)) == 1 {
         Lang::En
     } else {
         Lang::Fr
@@ -55,7 +70,7 @@ pub fn lang() -> Lang {
 }
 
 fn apply(l: Lang) {
-    LANG.store(matches!(l, Lang::En) as u8, Ordering::Relaxed);
+    with_lang(|v| v.store(matches!(l, Lang::En) as u8, Ordering::Relaxed));
 }
 
 /// Chooses the language and stores the choice.
@@ -394,7 +409,7 @@ const EN: &[(&str, &str)] = &[
     ("Échec de la sauvegarde : {}", "Save failed: {}"),
     ("Génération de {} particules et premier calcul des forces…", "Generating {} particles and computing the first forces…"),
     ("Le moteur de calcul n'a pas pu démarrer :\n{}\n\nÉchap → Retour à l'accueil, puis choisir un autre moteur dans les paramètres avancés.", "The computation engine could not start:\n{}\n\nEsc → Back to the home screen, then choose another engine in the advanced parameters."),
-    ("Tab : libérer la souris · Échap : menu · F : suivre / cesser · A / E : bascule · H : horizon · G : grille · C : barycentre · V : vue d'ensemble · T : traces", "Tab: release the mouse · Esc: menu · F: follow / stop · A / E: roll · H: horizon · G: grid · C: barycentre · V: overview · T: traces"),
+    ("Tab : libérer la souris · Échap : menu · F : suivre / cesser · A / E : bascule · H : horizon · C : barycentre · V : vue d'ensemble · T : traces", "Tab: release the mouse · Esc: menu · F: follow / stop · A / E: roll · H: horizon · C: barycentre · V: overview · T: traces"),
     ("Souris libre — clic gauche : suivre un corps · clic droit ou Tab : reprendre la visée · Échap : menu", "Mouse released — left click: follow a body · right click or Tab: resume aiming · Esc: menu"),
     ("Relecture", "Playback"),
     ("Corps", "Bodies"),
@@ -466,7 +481,6 @@ Vitesse : {}", "Half-mass radius: {}\nVelocity: {}"),
     ("Vitesse caméra", "Camera speed"),
     ("Fraction de la distance au corps sélectionné (ou au barycentre) parcourue chaque seconde.", "Fraction of the distance to the selected body (or to the barycentre) travelled each second."),
     ("(+/−, Maj, Ctrl)", "(+/−, Shift, Ctrl)"),
-    ("Grille du plan du disque (G)", "Disc plane grid (G)"),
     ("Enregistrement (F9)", "Recording (F9)"),
     ("{} instantanés · {} · 1 tous les {} pas", "{} snapshots · {} · 1 every {} steps"),
     ("■ Arrêter", "■ Stop"),
@@ -509,11 +523,18 @@ Vitesse : {}", "Half-mass radius: {}\nVelocity: {}"),
     ("Clic gauche", "Left click"),
     ("suivre le corps visé", "follow the body aimed at"),
     ("suivre la sélection / cesser le suivi", "follow the selection / stop following"),
-    ("grille du plan du disque", "disc plane grid"),
     ("Origine", "Home"),
     ("corps le plus massif", "most massive body"),
     ("corps suivant / précédent par masse", "next / previous body by mass"),
-    ("barycentre : sélection, vue de face au disque", "barycentre: selection, face-on view of the disc"),
+    ("barycentre : sous-simulation choisie, puis global (vue de face au disque)", "barycentre: chosen sub-simulation, then global (face-on view of the disc)"),
+    ("Supprimer les corps isolés négligeables", "Remove the negligible lone bodies"),
+    ("Supprimer automatiquement les corps isolés négligeables", "Automatically remove the negligible lone bodies"),
+    ("   Supprimer automatiquement les corps isolés négligeables", "   Automatically remove the negligible lone bodies"),
+    ("Corps isolés négligeables supprimés.", "Negligible lone bodies removed."),
+    ("Sous-simulations réduites à un seul corps qui s'échappe et dont l'influence sur le reste est négligeable : (m / M) · (R / d)² < 10⁻⁶, où m est sa masse, M et R la masse et la taille du reste, d sa distance au barycentre du reste. Elles sont retirées comme des corps éjectés.", "Sub-simulations reduced to a single escaping body whose influence on the rest is negligible: (m / M) · (R / d)² < 10⁻⁶, where m is its mass, M and R the mass and size of the rest, d its distance to the rest's barycenter. They are removed like ejected bodies."),
+    ("Passer en arrière-plan", "Send to the background"),
+    ("Le calcul (et l'enregistrement en cours) continue sans affichage, avec toute la carte graphique ; la simulation peut être réaffichée ensuite.", "The computation (and the running recording) goes on without display, with the whole graphics card; the simulation can be shown again later."),
+    ("aucun", "none"),
     ("viser le centre de gravité", "aim at the centre of mass"),
     ("vue d'ensemble (90 % de la masse)", "overview (90% of the mass)"),
     ("tracer les 10 plus massifs visibles / effacer", "trace the 10 most massive visible / clear"),
@@ -576,8 +597,10 @@ Dans tous les cas :
   --steps N          s'arrêter après N pas (de plus, en reprise)
   --time T           s'arrêter après un temps simulé T (de plus, en reprise)
   --duration M       s'arrêter après M minutes de calcul
+  --prune            supprimer automatiquement les corps isolés négligeables
+                     (sous-simulations d'un seul corps qui s'échappe)
 Sans cible : jusqu'à Ctrl+C. À l'arrêt, l'enregistrement est clos et l'état final
-sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --load FILE           resume a save (.stellar)\n       stellar-cli --resume FILE         resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --bodies N         number of particles (default: 1000000)\n  --radius R         cloud radius (default: 100)\n  --seed S           random seed (default: 42)\n  --disc             rotating disc (otherwise a sphere)\n  --velocity V       rest | random | circ | orb | rad (default: orb)\n  --spread D         spread of the orbital speed (default: 0.05)\n  --factor F         multiple of the orbital speed: < 1 collapse,\n                     > 1 expansion (default: 1)\n  --vmin A --vmax B  speed range (random, circ, rad)\n  --max-mass N       grain masses: integers from 1 to N (default: 1)\n  --mass-exponent A  power law of the masses, density ∝ m^A (default: -2)\n  --sun P            central sun of P % of the total mass\n  --planets N        N massive bodies on circular orbits (from 0.2 to 0.9 × radius)\n  --planet-mass P    mass of each one in % of the total mass (default: 1)\n  --engine M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --load F           save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --continue F       with --load: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --resume F         recording to continue from its latest linked save\n\nIn all cases:\n  --name NAME        simulation name (default: date and parameters, or file name)\n  --interval N       one snapshot every N steps (default: 10)\n  --dust N           dust recorded per snapshot, or “all” (default: 1000000)\n  --steps N          stop after N steps (more, when resuming)\n  --time T           stop after a simulated time T (more, when resuming)\n  --duration M       stop after M minutes of computation\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
+sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]        new simulation without a window\n       stellar-cli --load FILE           resume a save (.stellar)\n       stellar-cli --resume FILE         resume a recording (.stellarec)\n       stellar-cli --help                this help\nThe graphical interface is stellar.exe (without arguments).\n\nNew simulation:\n  --bodies N         number of particles (default: 1000000)\n  --radius R         cloud radius (default: 100)\n  --seed S           random seed (default: 42)\n  --disc             rotating disc (otherwise a sphere)\n  --velocity V       rest | random | circ | orb | rad (default: orb)\n  --spread D         spread of the orbital speed (default: 0.05)\n  --factor F         multiple of the orbital speed: < 1 collapse,\n                     > 1 expansion (default: 1)\n  --vmin A --vmax B  speed range (random, circ, rad)\n  --max-mass N       grain masses: integers from 1 to N (default: 1)\n  --mass-exponent A  power law of the masses, density ∝ m^A (default: -2)\n  --sun P            central sun of P % of the total mass\n  --planets N        N massive bodies on circular orbits (from 0.2 to 0.9 × radius)\n  --planet-mass P    mass of each one in % of the total mass (default: 1)\n  --engine M         gpu | cpu (default: gpu if a suitable card is present)\n\nResuming:\n  --load F           save to resume; its linked recording is continued,\n                     otherwise a new recording starts\n  --continue F       with --load: compatible recording to extend from the\n                     save's step (later snapshots deleted)\n  --resume F         recording to continue from its latest linked save\n\nIn all cases:\n  --name NAME        simulation name (default: date and parameters, or file name)\n  --interval N       one snapshot every N steps (default: 10)\n  --dust N           dust recorded per snapshot, or “all” (default: 1000000)\n  --steps N          stop after N steps (more, when resuming)\n  --time T           stop after a simulated time T (more, when resuming)\n  --duration M       stop after M minutes of computation\n  --prune            automatically remove the negligible lone bodies\n                     (single-body sub-simulations escaping)\nWithout a target: until Ctrl+C. When stopped, the recording is closed and the final\nstate saved (folders “{}” and “{}”)."),
     ("valeur manquante après {}", "missing value after {}"),
     ("valeur invalide pour {} : {}", "invalid value for {}: {}"),
     ("argument inconnu : {}", "unknown argument: {}"),

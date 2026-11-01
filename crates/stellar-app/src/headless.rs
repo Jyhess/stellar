@@ -5,15 +5,16 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use eframe::egui::{self, RichText};
-use stellar_application::{HeadlessRun, RunOutcome, RunTarget, SimulatorService};
+use stellar_application::{HeadlessRun, RunOutcome, RunTarget, SimulatorService, ViewState};
 
 use crate::format;
 use crate::i18n::{tr, tr_msg};
 
 pub enum HeadlessAction {
     None,
-    /// Show the simulation (computation and recording continue).
-    Show(Box<HeadlessRun>),
+    /// Show the simulation (computation and recording continue), with the
+    /// camera it had when sent to the background.
+    Show(Box<HeadlessRun>, Option<ViewState>),
     BackHome,
 }
 
@@ -27,6 +28,8 @@ pub struct HeadlessScreen {
     service: SimulatorService,
     name: String,
     state: Option<State>,
+    /// Camera of a simulation sent to the background from the display.
+    view: Option<ViewState>,
 }
 
 /// Readable duration: 1 h 02 min 03 s.
@@ -43,11 +46,12 @@ pub fn hms(d: Duration) -> String {
 }
 
 impl HeadlessScreen {
-    pub fn new(service: SimulatorService, run: HeadlessRun) -> Self {
+    pub fn new(service: SimulatorService, run: HeadlessRun, view: Option<ViewState>) -> Self {
         Self {
             service,
             name: run.handle().name(),
             state: Some(State::Running(Box::new(run))),
+            view,
         }
     }
 
@@ -146,11 +150,15 @@ impl HeadlessScreen {
                             row(tr("Durée écoulée"), hms(p.elapsed));
                             row(
                                 tr("Enregistrement"),
-                                tr!(
-                                    "{} instantanés · {}",
-                                    format::count(p.frames),
-                                    crate::sim::format_bytes(p.bytes)
-                                ),
+                                if run.handle().is_recording() || p.frames > 0 {
+                                    tr!(
+                                        "{} instantanés · {}",
+                                        format::count(p.frames),
+                                        crate::sim::format_bytes(p.bytes)
+                                    )
+                                } else {
+                                    tr("aucun").to_owned()
+                                },
                             );
                         });
                     ui.add_space(12.0);
@@ -197,7 +205,7 @@ impl HeadlessScreen {
             self.finish();
         } else if show {
             if let Some(State::Running(run)) = self.state.take() {
-                action = HeadlessAction::Show(run);
+                action = HeadlessAction::Show(run, self.view.take());
             }
         }
         // Moderate refresh: nothing else to draw.

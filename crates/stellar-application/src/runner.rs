@@ -72,6 +72,8 @@ pub struct Snapshot {
     pub center_of_mass: Option<Vec3>,
     /// Current positions of the watched bodies (missing: removed or merged).
     pub watched: Vec<(BodyId, Vec3)>,
+    /// Sub-simulation (its marker body) holding each watched body found.
+    pub watched_systems: Vec<(BodyId, BodyId)>,
     /// Ranking of the most massive bodies: (id, mass).
     pub top: Vec<(BodyId, f64)>,
     /// Total mass of the bodies present in the simulation.
@@ -105,6 +107,7 @@ impl Snapshot {
             diagnostics: Diagnostics::default(),
             center_of_mass: None,
             watched: Vec::new(),
+            watched_systems: Vec::new(),
             top: Vec::new(),
             total_mass: 0.0,
             clusters: Arc::default(),
@@ -162,6 +165,9 @@ enum Command {
     StopAt(Option<u64>),
     StartTraces(Vec<BodyId>),
     SetWatched(Vec<BodyId>),
+    /// Removes the negligible lone bodies now.
+    PruneNegligible,
+    SetAutoPrune(bool),
     StopTraces,
     SetTraceReference(Option<TraceReference>),
     StartRecording {
@@ -193,6 +199,8 @@ struct Shared {
     fates: Mutex<HashMap<BodyId, Fate>>,
     traces: Mutex<Option<TraceSet>>,
     tracing: AtomicBool,
+    /// Automatic removal of the negligible lone bodies.
+    auto_prune: AtomicBool,
     recording: Arc<RecordingStatus>,
     /// Direct access of the engine for display, once the engine is created.
     live_view: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
@@ -228,6 +236,7 @@ impl SimulationHandle {
             fates: Mutex::new(HashMap::new()),
             traces: Mutex::new(None),
             tracing: AtomicBool::new(false),
+            auto_prune: AtomicBool::new(false),
             recording: Arc::new(RecordingStatus::default()),
             live_view: Mutex::new(None),
         });
@@ -242,9 +251,7 @@ impl SimulationHandle {
                 // Older saves: initial mass derived from the initial conditions.
                 let initial_mass = state.initial_mass.or(Some(initial_count as f64));
                 let step = state.step;
-                let engine = match crate::MultiSystem::new(factory, state, params)
-                    .map(|e| Box::new(e) as Box<dyn PhysicsEngine>)
-                {
+                let engine = match crate::MultiSystem::new(factory, state, params).map(Box::new) {
                     Ok(e) => e,
                     Err(message) => {
                         let mut s = Snapshot::initialising(false);
@@ -337,6 +344,23 @@ impl SimulationHandle {
     /// ([`Snapshot::watched`]), typically the selected body.
     pub fn set_watched(&self, ids: Vec<BodyId>) {
         let _ = self.tx.send(Command::SetWatched(ids));
+    }
+
+    /// Removes now the sub-simulations reduced to a single body escaping with
+    /// a negligible influence ([`crate::MultiSystem::prune_negligible`]).
+    pub fn prune_negligible(&self) {
+        let _ = self.tx.send(Command::PruneNegligible);
+    }
+
+    /// Does the same at every cleanup.
+    pub fn set_auto_prune(&self, on: bool) {
+        self.shared.auto_prune.store(on, Ordering::Release);
+        let _ = self.tx.send(Command::SetAutoPrune(on));
+    }
+
+    /// Is the automatic removal of negligible lone bodies on?
+    pub fn auto_prune(&self) -> bool {
+        self.shared.auto_prune.load(Ordering::Acquire)
     }
 
     /// Number of the last published snapshot.
@@ -468,7 +492,7 @@ impl Drop for SimulationHandle {
 }
 
 struct Worker {
-    engine: Box<dyn PhysicsEngine>,
+    engine: Box<crate::MultiSystem>,
     rx: Receiver<Command>,
     shared: Arc<Shared>,
     running: bool,
@@ -668,6 +692,14 @@ impl Worker {
                             self.publish(false);
                         }
                     }
+                    Command::PruneNegligible => {
+                        let report = self.engine.prune_negligible();
+                        if !report.removed.is_empty() {
+                            self.apply_fates(&[], &report.removed);
+                            self.publish(true);
+                        }
+                    }
+                    Command::SetAutoPrune(on) => self.engine.set_auto_prune(on),
                     Command::SetMaxRate(r) => self.max_rate = r.filter(|r| *r > 0.0),
                     Command::StopAt(step) => self.stop_at = step,
                     Command::StartTraces(ids) => {
@@ -772,10 +804,10 @@ impl Worker {
         } else {
             0.9 * self.steps_per_second + 0.1 * inst
         };
+        self.apply_fates(&report.merges, &report.removed);
         if self.shared.tracing.load(Ordering::Acquire) {
             let mut guard = self.shared.traces.lock().expect("poisoned lock");
             if let Some(set) = guard.as_mut() {
-                set.apply_fates(&report.merges, &report.removed);
                 let ids = set.current_ids();
                 if !ids.is_empty() {
                     let pos = self.engine.positions_of(&ids);
@@ -787,27 +819,36 @@ impl Worker {
             }
         }
         if let Some(mut rec) = self.recording.take() {
-            rec.pending.extend(
-                report
-                    .merges
-                    .iter()
-                    .map(|&(a, s)| (a, BodyFate::MergedInto(s))),
-            );
-            rec.pending
-                .extend(report.removed.iter().map(|&id| (id, BodyFate::Removed)));
             if self.step >= rec.next_step {
                 self.record_keyframe(&mut rec);
             }
             self.recording = Some(rec);
         }
-        if !report.merges.is_empty() || !report.removed.is_empty() {
-            let mut fates = self.shared.fates.lock().expect("poisoned lock");
-            for (absorbed, survivor) in report.merges {
-                fates.insert(absorbed, Fate::MergedInto(survivor));
+    }
+
+    /// Passes on the bodies that disappeared (mergers: absorbed → survivor)
+    /// to the traces, the recording and the identifier resolution.
+    fn apply_fates(&mut self, merges: &[(BodyId, BodyId)], removed: &[BodyId]) {
+        if merges.is_empty() && removed.is_empty() {
+            return;
+        }
+        if self.shared.tracing.load(Ordering::Acquire) {
+            if let Some(set) = self.shared.traces.lock().expect("poisoned lock").as_mut() {
+                set.apply_fates(merges, removed);
             }
-            for id in report.removed {
-                fates.insert(id, Fate::Removed);
-            }
+        }
+        if let Some(rec) = &mut self.recording {
+            rec.pending
+                .extend(merges.iter().map(|&(a, s)| (a, BodyFate::MergedInto(s))));
+            rec.pending
+                .extend(removed.iter().map(|&id| (id, BodyFate::Removed)));
+        }
+        let mut fates = self.shared.fates.lock().expect("poisoned lock");
+        for &(absorbed, survivor) in merges {
+            fates.insert(absorbed, Fate::MergedInto(survivor));
+        }
+        for &id in removed {
+            fates.insert(id, Fate::Removed);
         }
     }
 
@@ -857,16 +898,18 @@ impl Worker {
         if full {
             self.refresh_full_state();
         }
-        let watched = if self.watched.is_empty() {
+        let found: Vec<(BodyId, (Vec3, BodyId))> = if self.watched.is_empty() {
             Vec::new()
         } else {
-            let pos = self.engine.positions_of(&self.watched);
+            let pos = self.engine.locate(&self.watched);
             self.watched
                 .iter()
                 .zip(pos)
                 .filter_map(|(&id, p)| p.map(|p| (id, p)))
                 .collect()
         };
+        let watched = found.iter().map(|&(id, (p, _))| (id, p)).collect();
+        let watched_systems = found.iter().map(|&(id, (_, s))| (id, s)).collect();
         // Without live view, the interface derives it from the full state.
         let center_of_mass = if self.direct_view {
             self.engine.center_of_mass()
@@ -884,6 +927,7 @@ impl Worker {
             diagnostics: self.engine.diagnostics(),
             center_of_mass,
             watched,
+            watched_systems,
             top: self.top.clone(),
             total_mass: self.total_mass,
             clusters: Arc::clone(&self.clusters),

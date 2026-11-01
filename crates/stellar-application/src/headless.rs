@@ -145,6 +145,20 @@ impl HeadlessRun {
         ))
     }
 
+    /// Takes over a running simulation (sent to the background from the
+    /// display), without a target: it runs until a stop is requested. A
+    /// running recording continues.
+    pub fn adopt(handle: SimulationHandle) -> Self {
+        let snap = handle.latest();
+        handle.stop_at(None);
+        Self {
+            origin: (snap.step, snap.time),
+            handle,
+            target: RunTarget::Manual,
+            started: Instant::now(),
+        }
+    }
+
     pub fn handle(&self) -> &SimulationHandle {
         &self.handle
     }

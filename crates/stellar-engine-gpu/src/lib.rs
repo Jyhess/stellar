@@ -428,6 +428,8 @@ struct Buffers {
     id_cap: u64,
     query_ids: wgpu::Buffer,
     query_results: wgpu::Buffer,
+    /// Identifier of the body followed by the display (one u32).
+    follow_id: wgpu::Buffer,
     params: wgpu::Buffer,
     /// Readback buffer of the step (layout: module [`readback`]).
     readback: wgpu::Buffer,
@@ -445,11 +447,27 @@ struct Buffers {
 /// Each body takes [`STRIDE`](Self::STRIDE) bytes; position (3 × f32) and
 /// mass (f32) are at offsets [`POSITION_OFFSET`](Self::POSITION_OFFSET) and
 /// [`MASS_OFFSET`](Self::MASS_OFFSET). A body of zero mass is dead.
+///
+/// The display may also designate a **followed body** ([`follow`](Self::follow)):
+/// its position is then written on the GPU at every step, in the same
+/// submission as the bodies ([`followed_position`](Self::followed_position)).
+/// A camera tracking it reads it there, and stays exactly in step with the
+/// bodies drawn, whereas the published positions lag a few steps behind.
 pub struct BodiesView {
     buffers: [wgpu::Buffer; 2],
     /// Index of the current buffer (bit 32) and body count (low 32 bits).
     current: AtomicU64,
+    /// Body requested by the display (`NO_BODY`: none).
+    followed: AtomicU64,
+    /// Position of the followed body at the last submitted step: xyz, w = 1 if
+    /// present in this engine.
+    follow: wgpu::Buffer,
+    /// Body `follow` was last computed for (`NO_BODY`: none).
+    follow_for: AtomicU64,
 }
+
+/// No followed body.
+const NO_BODY: u64 = u64::MAX;
 
 impl BodiesView {
     pub const STRIDE: u64 = std::mem::size_of::<GpuBody>() as u64;
@@ -465,6 +483,21 @@ impl BodiesView {
     fn publish(&self, cur: usize, n: usize) {
         self.current
             .store(((cur as u64) << 32) | n as u64, Ordering::Release);
+    }
+
+    /// Designates the body whose position is written at every step (`None`:
+    /// none). Taken into account from the next step.
+    pub fn follow(&self, id: Option<BodyId>) {
+        self.followed.store(id.unwrap_or(NO_BODY), Ordering::Release);
+    }
+
+    /// 16-byte buffer holding the position of `id` in this engine's frame (xyz,
+    /// as f32) and w = 1 if the body is present, written by every step since
+    /// `id` was followed; `None` if no submitted step has computed it yet. A
+    /// command submitted after this call reads it at the same step as the
+    /// bodies' buffer.
+    pub fn followed_position(&self, id: BodyId) -> Option<&wgpu::Buffer> {
+        (id != NO_BODY && self.follow_for.load(Ordering::Acquire) == id).then_some(&self.follow)
     }
 }
 
@@ -543,6 +576,8 @@ pub struct GpuEngine {
     queries: RefCell<Queries>,
     /// The index table is stale (compaction since the last tree).
     map_stale: std::cell::Cell<bool>,
+    /// Identifier written to `follow_id` (`NO_BODY`: none yet).
+    follow_id: BodyId,
     /// Steps since the tree topology was last built (`u32::MAX`: to be
     /// rebuilt).
     tree_age: u32,
@@ -623,7 +658,7 @@ impl GpuEngine {
             len = blocks;
         }
         let scan_levels = scan_sums.len();
-        let slots = PassSlots::new(&gpu, slot::SORT_SCAN + 2 * scan_levels + 1);
+        let slots = PassSlots::new(&gpu, slot::SORT_SCAN + 2 * scan_levels + 2);
 
         let level_uniforms = (0..LEVELS)
             .map(|l| {
@@ -679,6 +714,7 @@ impl GpuEngine {
             id_cap: max_id + 1,
             query_ids: gpu.storage("query-ids", QUERY_CAP as u64 * 4),
             query_results: gpu.storage("query-results", QUERY_CAP as u64 * 16),
+            follow_id: gpu.storage("follow-id", 4),
             params: gpu.uniform("params", bytemuck::bytes_of(&Params::default())),
             readback: gpu.readback("readback", readback::SIZE),
         };
@@ -705,6 +741,9 @@ impl GpuEngine {
             Arc::new(BodiesView {
                 buffers: b.bodies.clone(),
                 current: AtomicU64::new(0),
+                followed: AtomicU64::new(NO_BODY),
+                follow: gpu.storage("follow", 16),
+                follow_for: AtomicU64::new(NO_BODY),
             })
         });
         let mut engine = Self {
@@ -730,6 +769,7 @@ impl GpuEngine {
             moments: Moments::default(),
             queries: RefCell::default(),
             map_stale: Default::default(),
+            follow_id: NO_BODY,
             tree_age: u32::MAX,
         };
         // First computation of the field (the first kick needs it) and of the moments.
@@ -1025,6 +1065,47 @@ impl GpuEngine {
         );
     }
 
+    /// Position of the body followed by the display, into the view's `follow`
+    /// buffer ([`BodiesView::follow`]); returns its identifier (`NO_BODY`: none).
+    fn encode_follow(&mut self, enc: &mut gpu::Encoder) -> BodyId {
+        let Some(view) = self.view.clone() else {
+            return NO_BODY;
+        };
+        let id = view.followed.load(Ordering::Acquire);
+        if id >= u32::MAX as u64 {
+            return NO_BODY;
+        }
+        if id != self.follow_id {
+            self.gpu
+                .queue
+                .write_buffer(&self.b.follow_id, 0, bytemuck::bytes_of(&(id as u32)));
+            self.follow_id = id;
+        }
+        let b = &self.b;
+        let u = self.slots.get(
+            &self.gpu,
+            slot::SORT_SCAN + 2 * b.scan_sums.len() + 1,
+            Pass {
+                n: 1,
+                ..Default::default()
+            },
+        );
+        self.gpu.run(
+            enc,
+            &self.k.query,
+            &[
+                &b.params,
+                u,
+                &b.follow_id,
+                &b.index_of,
+                &b.bodies[self.cur],
+                &view.follow,
+            ],
+            1,
+        );
+        id
+    }
+
     /// Removes the bodies of zero mass (compaction by scan).
     fn encode_compaction(&mut self, enc: &mut gpu::Encoder) {
         let b = &self.b;
@@ -1220,6 +1301,7 @@ impl GpuEngine {
         }
         let query_count = self.queries.borrow().total();
         self.encode_queries(&mut enc, query_count);
+        let followed = self.encode_follow(&mut enc);
         let index = {
             let b = &self.b;
             let rb = &b.readback;
@@ -1245,6 +1327,10 @@ impl GpuEngine {
             self.gpu.submit(enc)
         };
         self.publish_view();
+        if let Some(v) = &self.view {
+            // After the submission: whoever sees it submits after this step.
+            v.follow_for.store(followed, Ordering::Release);
+        }
 
         // 2. Readback: counters, moments, positions, first pairs.
         let mut found = 0usize;

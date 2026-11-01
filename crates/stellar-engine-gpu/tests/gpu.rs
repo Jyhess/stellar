@@ -378,12 +378,8 @@ fn tracked_positions_follow_steps_and_merges() {
     assert!(merged, "the test must cause a merger");
 }
 
-/// Shared device: the buffers exposed to the display contain, at the
-/// advertised offsets, exactly the positions and masses of the state.
-#[test]
-fn shared_device_exposes_current_bodies() {
-    use stellar_engine_gpu::{BodiesView, SharedDevice};
-
+/// Device shared with a (simulated) display, `None` without a graphics card.
+fn shared_device() -> Option<(stellar_engine_gpu::SharedDevice, wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::from_env()
             .unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
@@ -393,7 +389,7 @@ fn shared_device_exposes_current_bodies() {
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
     else {
         eprintln!("GPU test skipped: no graphics card");
-        return;
+        return None;
     };
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
@@ -405,11 +401,88 @@ fn shared_device_exposes_current_bodies() {
         None,
     ))
     .expect("opening the graphics card");
-    let shared = SharedDevice {
+    let shared = stellar_engine_gpu::SharedDevice {
         adapter,
         device: device.clone(),
         queue: queue.clone(),
     };
+    Some((shared, device, queue))
+}
+
+/// Copies the start of a GPU buffer back to main memory.
+fn read_buffer(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer, size: u64) -> Vec<u8> {
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+    queue.submit(Some(enc.finish()));
+    staging
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    let _ = device.poll(wgpu::Maintain::Wait);
+    let raw = staging.slice(..).get_mapped_range().to_vec();
+    raw
+}
+
+/// Followed body: once a step has run, its position is written on the GPU at
+/// every step, equal to the one the engine publishes; an absent body has
+/// w = 0, and a body no longer followed is no longer advertised.
+#[test]
+fn followed_body_position_is_written_every_step() {
+    use stellar_engine_gpu::BodiesView;
+
+    let Some((shared, device, queue)) = shared_device() else { return };
+    let mut e = match GpuEngine::with_device(sphere(500, 5), params(), &shared) {
+        Ok(e) => e,
+        Err(msg) => {
+            eprintln!("GPU test skipped: {msg}");
+            return;
+        }
+    };
+    let view = e
+        .live_view()
+        .expect("view exposed on a shared device")
+        .downcast::<BodiesView>()
+        .expect("GPU engine view");
+    let id = e.state().bodies.ids[42];
+    let read = |buffer: &wgpu::Buffer| {
+        let raw = read_buffer(&device, &queue, buffer, 16);
+        let f = |k: usize| f32::from_le_bytes(raw[4 * k..4 * k + 4].try_into().unwrap()) as f64;
+        (DVec3::new(f(0), f(1), f(2)), f(3))
+    };
+
+    view.follow(Some(id));
+    assert!(view.followed_position(id).is_none(), "not computed before a step");
+    for _ in 0..10 {
+        e.step();
+        let (pos, found) = read(view.followed_position(id).expect("computed by the step"));
+        assert_eq!(found, 1.0);
+        assert_eq!(Some(pos), e.positions_of(&[id])[0]);
+    }
+
+    let absent = 1_000_000;
+    view.follow(Some(absent));
+    e.step();
+    assert!(view.followed_position(id).is_none(), "another body is followed");
+    let (_, found) = read(view.followed_position(absent).expect("computed by the step"));
+    assert_eq!(found, 0.0);
+
+    view.follow(None);
+    e.step();
+    assert!(view.followed_position(absent).is_none());
+}
+
+/// Shared device: the buffers exposed to the display contain, at the
+/// advertised offsets, exactly the positions and masses of the state.
+#[test]
+fn shared_device_exposes_current_bodies() {
+    use stellar_engine_gpu::BodiesView;
+
+    let Some((shared, device, queue)) = shared_device() else { return };
 
     // Collapsing cloud, large radii: mergers, hence compactions.
     let ic = InitialConditions {
@@ -443,21 +516,7 @@ fn shared_device_exposes_current_bodies() {
 
     let (buffer, count) = view.current();
     assert_eq!(count as usize, e.body_count());
-    let size = count as u64 * BodiesView::STRIDE;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut enc = device.create_command_encoder(&Default::default());
-    enc.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
-    queue.submit(Some(enc.finish()));
-    staging
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, |r| r.unwrap());
-    let _ = device.poll(wgpu::Maintain::Wait);
-    let raw = staging.slice(..).get_mapped_range().to_vec();
+    let raw = read_buffer(&device, &queue, buffer, count as u64 * BodiesView::STRIDE);
 
     let s = e.state();
     let stride = BodiesView::STRIDE as usize;

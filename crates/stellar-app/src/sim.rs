@@ -11,7 +11,7 @@ use glam::DVec3;
 use rayon::prelude::*;
 use stellar_application::recording::is_dust;
 use stellar_application::trace::{relative_to, MAX_TAIL};
-use stellar_application::{Phase, SimulatorService, Snapshot, TraceReference, ViewState};
+use stellar_application::{Phase, SimulationHandle, SimulatorService, Snapshot, TraceReference, ViewState};
 use stellar_domain::physics::body_radius;
 use stellar_domain::{ranking, BodyId, SystemSummary, SystemsView};
 
@@ -73,6 +73,8 @@ pub fn format_bytes(b: u64) -> String {
 pub enum SimAction {
     None,
     BackHome,
+    /// Computation goes on without display (headless monitoring screen).
+    Background,
     Quit,
 }
 
@@ -87,12 +89,6 @@ const ROLL_SPEED: f64 = 1.6;
 const DEFAULT_SPEED: f64 = 0.5;
 /// Rate of horizon levelling (1/s).
 const LEVEL_RATE: f64 = 6.0;
-/// Interval between recomputations of the disc normal (displayed grid).
-const DISK_NORMAL_REFRESH: Duration = Duration::from_secs(5);
-/// Half-extent of the disc-plane grid, in cells.
-const GRID_HALF_LINES: i64 = 24;
-/// Subdivision of each grid line (for fading).
-const GRID_SUBDIVISIONS: usize = 24;
 const PICK_TOLERANCE_PX: f64 = 10.0;
 const TOAST_DURATION: Duration = Duration::from_secs(4);
 /// Number of traced bodies.
@@ -144,6 +140,11 @@ pub struct SimScreen {
     /// Last known barycenter of that sub-simulation (to find it again after a
     /// merge).
     bary_system_center: DVec3,
+    /// Chosen sub-simulation (marker body): that of the selected body, or the
+    /// last one clicked; the main one otherwise.
+    system_choice: Option<BodyId>,
+    /// Automatic removal of negligible lone bodies (live simulation).
+    auto_prune: bool,
     paused: bool,
 
     snapshot: Arc<Snapshot>,
@@ -188,8 +189,6 @@ pub struct SimScreen {
     record_budget_enabled: bool,
     record_budget: u64,
 
-    /// Disc-plane grid shown.
-    show_grid: bool,
     /// Progressive horizon levelling in progress (H key).
     leveling: bool,
     /// Normal to the disc plane (axis of the total angular momentum),
@@ -210,6 +209,7 @@ impl SimScreen {
         let selected = camera.followed();
         let snapshot = source.latest();
         let paused = !snapshot.running;
+        let auto_prune = source.live().is_some_and(|h| h.auto_prune());
         let handle_count = match source.replay() {
             Some(r) => r
                 .player
@@ -234,6 +234,8 @@ impl SimScreen {
             bary_selected,
             bary_system: None,
             bary_system_center: DVec3::ZERO,
+            system_choice: None,
+            auto_prune,
             paused,
             seen_sequence: u64::MAX,
             snapshot,
@@ -270,7 +272,6 @@ impl SimScreen {
             record_interval: 10,
             record_budget_enabled: true,
             record_budget: 1_000_000,
-            show_grid: false,
             leveling: false,
             disk_normal: None,
             disk_normal_at: None,
@@ -377,6 +378,12 @@ impl SimScreen {
                         self.notify(tr("Le corps suivi a été éjecté et éliminé."));
                     }
                 }
+            }
+        }
+        // The selected body's sub-simulation becomes the chosen one.
+        if let Some(id) = self.selected {
+            if let Some(&(_, system)) = self.snapshot.watched_systems.iter().find(|w| w.0 == id) {
+                self.system_choice = Some(system);
             }
         }
         if state_changed || self.selected != selected_before {
@@ -547,8 +554,14 @@ impl SimScreen {
         if self.snapshot.state.bodies.is_empty() {
             return;
         }
-        if !self.bary_selected {
-            self.bary_system = None;
+        // First press: barycenter of the chosen sub-simulation; second press:
+        // that of the whole simulation (and back).
+        self.bary_system = match (self.bary_selected, self.bary_system) {
+            (true, Some(_)) => None,
+            _ => self.chosen_system().map(|s| s.anchor),
+        };
+        if let Some(s) = self.bary_summary() {
+            self.bary_system_center = s.center;
         }
         let c = self.bary_center();
         let axis = self.bary_axis();
@@ -572,6 +585,18 @@ impl SimScreen {
             .replace('.', crate::format::decimal_sep()),
             None => tr("Barycentre : aucune rotation d'ensemble, vue selon l'axe Oz.").to_owned(),
         });
+    }
+
+    /// Chosen sub-simulation (`None`: simulation in one piece), the main one
+    /// (most massive) if none was chosen or it has disappeared.
+    fn chosen_system(&self) -> Option<&SystemSummary> {
+        let systems = &self.snapshot.systems;
+        if systems.len() < 2 {
+            return None;
+        }
+        self.system_choice
+            .and_then(|a| systems.iter().find(|s| s.anchor == a))
+            .or_else(|| systems.iter().max_by(|a, b| a.mass.total_cmp(&b.mass)))
     }
 
     /// Summary of the sub-simulation whose barycenter is selected.
@@ -621,6 +646,7 @@ impl SimScreen {
         let (c, size) = (s.center, s.size);
         self.bary_system = Some(anchor);
         self.bary_system_center = c;
+        self.system_choice = Some(anchor);
         self.selected = None;
         self.bary_selected = true;
         self.cache.selected_index = None;
@@ -684,16 +710,12 @@ impl SimScreen {
     }
 
     /// Recomputes the normal to the disc plane: always if `force`, otherwise
-    /// once, then periodically while the grid is shown.
+    /// once.
     fn refresh_disk_normal(&mut self, force: bool) {
         if self.snapshot.phase != Phase::Ready || self.snapshot.state.bodies.is_empty() {
             return;
         }
-        let due = match self.disk_normal_at {
-            None => true,
-            Some(t) => self.show_grid && t.elapsed() >= DISK_NORMAL_REFRESH,
-        };
-        if !(force || due) {
+        if !force && self.disk_normal_at.is_some() {
             return;
         }
         let w = self.source.dust_weight() as f64;
@@ -897,12 +919,6 @@ impl SimScreen {
         }
         if pressed(Key::H) {
             self.start_leveling();
-        }
-        if pressed(Key::G) {
-            self.show_grid = !self.show_grid;
-            if self.show_grid {
-                self.refresh_disk_normal(true);
-            }
         }
         if pressed(Key::Home) {
             self.select_heaviest();
@@ -1258,9 +1274,15 @@ impl SimScreen {
         let source = match &self.direct {
             Some(view) => {
                 self.anchor = self.camera.position;
+                // Tracked body: the rendering follows it at the step drawn.
+                let follow = match self.camera.mode {
+                    Mode::Orbit { target, .. } => self.selected_position().map(|p| (target, p)),
+                    _ => None,
+                };
                 PointsSource::Direct {
                     view: Arc::clone(view),
                     anchor: self.anchor,
+                    follow,
                 }
             }
             None => {
@@ -1311,9 +1333,6 @@ impl SimScreen {
             )
         };
 
-        if self.show_grid && !self.snapshot.state.bodies.is_empty() {
-            self.paint_disk_grid(&painter, aspect, &to_screen);
-        }
 
         // Marker of the selected barycenter: golden crosshair.
         if self.bary_selected {
@@ -1504,7 +1523,7 @@ impl SimScreen {
         }
 
         let hint = if self.captured {
-            tr("Tab : libérer la souris · Échap : menu · F : suivre / cesser · A / E : bascule · H : horizon · G : grille · C : barycentre · V : vue d'ensemble · T : traces")
+            tr("Tab : libérer la souris · Échap : menu · F : suivre / cesser · A / E : bascule · H : horizon · C : barycentre · V : vue d'ensemble · T : traces")
         } else {
             tr("Souris libre — clic gauche : suivre un corps · clic droit ou Tab : reprendre la visée · Échap : menu")
         };
@@ -1622,69 +1641,6 @@ impl SimScreen {
                 egui::FontId::proportional(11.0),
                 color,
             );
-        }
-    }
-
-    /// Grid of the disc plane (through the barycenter, perpendicular to the
-    /// disc normal), fading with the distance to the point below the camera.
-    fn paint_disk_grid(
-        &self,
-        painter: &egui::Painter,
-        aspect: f64,
-        to_screen: &dyn Fn((f64, f64)) -> Pos2,
-    ) {
-        let n = self.reference_up().normalize();
-        let o = self.cache.barycenter;
-        let cam = &self.camera;
-        let h = (cam.position - o).dot(n);
-        let height = h.abs().max(0.02 * self.reference_radius());
-        // Cell size: power of 10 between height/10 and height.
-        let step = 10f64.powf(height.log10().floor());
-        let (u, v) = n.any_orthonormal_pair();
-        let foot = cam.position - n * h;
-        let fu = (foot - o).dot(u) / step;
-        let fv = (foot - o).dot(v) / step;
-        let fade = GRID_HALF_LINES as f64 * step;
-        let near = 1e-3 * height;
-        let base = Color32::from_rgb(110, 150, 220);
-        for (a, b, fa, fb) in [(u, v, fu, fv), (v, u, fv, fu)] {
-            let i0 = fa.round() as i64;
-            let j0 = fb.round() as i64;
-            for i in (i0 - GRID_HALF_LINES)..=(i0 + GRID_HALF_LINES) {
-                let major = i.rem_euclid(10) == 0;
-                let strength = if major { 0.45 } else { 0.2 };
-                let t0 = (j0 - GRID_HALF_LINES) as f64;
-                let t1 = (j0 + GRID_HALF_LINES) as f64;
-                let point = |t: f64| o + a * (i as f64 * step) + b * (t * step);
-                for k in 0..GRID_SUBDIVISIONS {
-                    let ta = t0 + (t1 - t0) * k as f64 / GRID_SUBDIVISIONS as f64;
-                    let tb = t0 + (t1 - t0) * (k + 1) as f64 / GRID_SUBDIVISIONS as f64;
-                    let (pa, pb) = (point(ta), point(tb));
-                    let mid = 0.5 * (pa + pb);
-                    let d = (mid - foot).length() / fade;
-                    let alpha = ((1.0 - d).max(0.0).powi(2) * strength) as f32;
-                    if alpha < 0.01 {
-                        continue;
-                    }
-                    let (mut la, mut lb) = (cam.to_local(pa), cam.to_local(pb));
-                    if la.z < near && lb.z < near {
-                        continue;
-                    }
-                    if la.z < near {
-                        la += (lb - la) * ((near - la.z) / (lb.z - la.z));
-                    } else if lb.z < near {
-                        lb += (la - lb) * ((near - lb.z) / (la.z - lb.z));
-                    }
-                    if let (Some(sa), Some(sb)) =
-                        (cam.project_local(la, aspect), cam.project_local(lb, aspect))
-                    {
-                        painter.line_segment(
-                            [to_screen(sa), to_screen(sb)],
-                            Stroke::new(1.0_f32, base.gamma_multiply(alpha)),
-                        );
-                    }
-                }
-            }
         }
     }
 
@@ -1885,6 +1841,18 @@ impl SimScreen {
                     match self.clusters_panel(ui, &snap) {
                         Some(PanelClick::Body(id)) => clicked_id = Some(id),
                         Some(PanelClick::System(a)) => clicked_system = Some(a),
+                        Some(PanelClick::Prune) => {
+                            if let Some(h) = self.source.live() {
+                                h.prune_negligible();
+                            }
+                            self.notify(tr("Corps isolés négligeables supprimés."));
+                        }
+                        Some(PanelClick::AutoPrune(on)) => {
+                            if let Some(h) = self.source.live() {
+                                h.set_auto_prune(on);
+                            }
+                            self.auto_prune = on;
+                        }
                         None => {}
                     }
                 }
@@ -1905,6 +1873,7 @@ impl SimScreen {
         /// Maximum number of clusters shown.
         const SHOWN: usize = 10;
         let mut clicked = None;
+        let chosen = self.chosen_system().map(|s| s.anchor);
         if snap.systems.len() > 1 {
             ui.label(RichText::new(tr("Sous-simulations")).strong()).on_hover_text(
                 tr("Amas éjectés détachés : chacun est calculé à part, dans son propre repère, et ressent les autres par leur champ de marée. Deux sous-simulations qui se rapprochent sont réunies."),
@@ -1919,7 +1888,7 @@ impl SimScreen {
                     ui.label(RichText::new(tr("Distance")).weak());
                     ui.end_row();
                     for s in &snap.systems {
-                        let sel = self.bary_selected && self.bary_system == Some(s.anchor);
+                        let sel = chosen == Some(s.anchor);
                         if ui
                             .selectable_label(sel, format!("#{}", s.anchor))
                             .on_hover_text(tr!("Taille : {}
@@ -1938,7 +1907,22 @@ Cliquer pour centrer la caméra sur son barycentre.", format::real(s.size), form
                         ui.end_row();
                     }
                 });
+            if ui
+                .button(tr("Supprimer les corps isolés négligeables"))
+                .on_hover_text(prune_help())
+                .clicked()
+            {
+                clicked = Some(PanelClick::Prune);
+            }
             ui.add_space(4.0);
+        }
+        let mut auto = self.auto_prune;
+        if ui
+            .checkbox(&mut auto, tr("Supprimer automatiquement les corps isolés négligeables"))
+            .on_hover_text(prune_help())
+            .changed()
+        {
+            clicked = Some(PanelClick::AutoPrune(auto));
         }
         ui.label(RichText::new(tr("Amas éjectés")).strong())
             .on_hover_text(
@@ -2224,13 +2208,6 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
             );
             ui.label(RichText::new(tr("(+/−, Maj, Ctrl)")).weak());
         });
-        if ui
-            .checkbox(&mut self.show_grid, tr("Grille du plan du disque (G)"))
-            .changed()
-            && self.show_grid
-        {
-            self.refresh_disk_normal(true);
-        }
     }
 
     fn recording_panel(&mut self, ui: &mut egui::Ui) {
@@ -2433,6 +2410,14 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                     if ui.button(tr("Sauvegarder (F5)")).clicked() {
                         self.start_save();
                     }
+                    if self.source.live().is_some()
+                        && ui
+                            .button(tr("Passer en arrière-plan"))
+                            .on_hover_text(tr("Le calcul (et l'enregistrement en cours) continue sans affichage, avec toute la carte graphique ; la simulation peut être réaffichée ensuite."))
+                            .clicked()
+                    {
+                        action = SimAction::Background;
+                    }
                     if ui.button(tr("Retour à l'accueil")).clicked() {
                         action = SimAction::BackHome;
                     }
@@ -2471,10 +2456,9 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                             (tr("Ctrl + molette"), tr("zoom optique")),
                             (tr("Clic gauche"), tr("suivre le corps visé")),
                             ("F", tr("suivre la sélection / cesser le suivi")),
-                            ("G", tr("grille du plan du disque")),
                             (tr("Origine"), tr("corps le plus massif")),
                             (tr("PgDn / PgUp"), tr("corps suivant / précédent par masse")),
-                            ("B", tr("barycentre : sélection, vue de face au disque")),
+                            ("B", tr("barycentre : sous-simulation choisie, puis global (vue de face au disque)")),
                             ("C", tr("viser le centre de gravité")),
                             ("V", tr("vue d'ensemble (90 % de la masse)")),
                             ("T", tr("tracer les 10 plus massifs visibles / effacer")),
@@ -2541,7 +2525,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
 
         self.hud(ctx);
         self.sync_trace_reference();
-        if let a @ (SimAction::BackHome | SimAction::Quit) = self.menu(ctx) {
+        if let a @ (SimAction::BackHome | SimAction::Background | SimAction::Quit) = self.menu(ctx) {
             action = a;
         }
 
@@ -2556,6 +2540,29 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
         self.apply_capture(ctx);
         ctx.request_repaint();
         action
+    }
+
+    /// Hands the live simulation over, with the camera, to go on without
+    /// display; a playback is given back unchanged.
+    pub fn into_background(self, ctx: &egui::Context) -> Result<(SimulationHandle, ViewState), Box<Self>> {
+        if self.source.live().is_none() {
+            return Err(Box::new(self));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+        // Nothing is drawn any more: the engine stops writing the followed body.
+        if let Some(view) = &self.direct {
+            for part in view.parts().iter() {
+                if let Some(b) = part.view.downcast_ref::<stellar_engine_gpu::BodiesView>() {
+                    b.follow(None);
+                }
+            }
+        }
+        let view = self.camera.to_view();
+        match self.source {
+            Source::Live(h) => Ok((*h, view)),
+            Source::Replay(_) => unreachable!("checked above"),
+        }
     }
 
     /// Ends the simulation cleanly.
@@ -2573,6 +2580,15 @@ enum PanelClick {
     Body(BodyId),
     /// Sub-simulation: its marker body.
     System(BodyId),
+    /// Removal of the negligible lone bodies.
+    Prune,
+    /// Automatic removal turned on or off.
+    AutoPrune(bool),
+}
+
+/// Explanation of the removal of negligible lone bodies.
+pub fn prune_help() -> &'static str {
+    tr("Sous-simulations réduites à un seul corps qui s'échappe et dont l'influence sur le reste est négligeable : (m / M) · (R / d)² < 10⁻⁶, où m est sa masse, M et R la masse et la taille du reste, d sa distance au barycentre du reste. Elles sont retirées comme des corps éjectés.")
 }
 
 /// Reference frame for displaying the traces.

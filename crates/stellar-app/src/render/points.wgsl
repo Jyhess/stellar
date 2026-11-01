@@ -15,6 +15,34 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
+// Direct source, camera tracking a body: its position at the step being drawn,
+// copied from the engine on the GPU. The published position, used for the
+// anchor, lags a few steps behind the bodies' buffers.
+const MAX_FOLLOW: u32 = 32u;
+struct Follow {
+    // x: number of entries (one per subsystem that may hold the body)
+    count: vec4<u32>,
+    // Per entry: position of the body in the subsystem's frame (xyz, w = 1 if
+    // present), then the subsystem's origin minus the tracked point used for
+    // the anchor (xyz).
+    entries: array<vec4<f32>, 64>,
+};
+
+@group(0) @binding(1) var<uniform> follow: Follow;
+
+// Displacement of the tracked body since the position the anchor was built
+// from (zero if it is not found).
+fn follow_shift() -> vec3<f32> {
+    let count = min(follow.count.x, MAX_FOLLOW);
+    for (var k = 0u; k < count; k++) {
+        let p = follow.entries[2u * k];
+        if (p.w > 0.5) {
+            return p.xyz + follow.entries[2u * k + 1u].xyz;
+        }
+    }
+    return vec3<f32>(0.0);
+}
+
 struct VsIn {
     @builtin(vertex_index) vertex: u32,
     @location(0) pos_radius: vec4<f32>,
@@ -107,7 +135,8 @@ fn vs_bodies(in: BodyIn) -> VsOut {
         return out;
     }
     let radius = u.anchor.w * pow(in.mass, 1.0 / 3.0);
-    return billboard(in.vertex, in.pos - u.anchor.xyz, radius, mass_color(in.mass), 1.0);
+    let anchor = u.anchor.xyz + follow_shift();
+    return billboard(in.vertex, in.pos - anchor, radius, mass_color(in.mass), 1.0);
 }
 
 @fragment

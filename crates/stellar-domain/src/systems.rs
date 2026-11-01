@@ -13,6 +13,9 @@
 //!   (cluster size + system size) < [`SPLIT_RATIO`] × distance;
 //! - two subsystems are merged when
 //!   (sum of sizes) > [`MERGE_RATIO`] × distance.
+//!
+//! A subsystem reduced to a single body that escapes the rest, and whose
+//! influence on it is negligible ([`negligible_escapee`]), may be removed.
 
 use std::any::Any;
 use std::sync::{Arc, Mutex};
@@ -26,6 +29,40 @@ pub const SPLIT_RATIO: f64 = 0.3;
 /// Merge threshold (size / distance); well above the split threshold to
 /// avoid going back and forth.
 pub const MERGE_RATIO: f64 = 0.6;
+
+/// Influence threshold of a negligible body: acceleration it gives the rest
+/// of the system, relative to the rest's own acceleration scale.
+pub const NEGLIGIBLE_INFLUENCE: f64 = 1e-6;
+
+/// Is a lone body (mass `mass`, global position and velocity) negligible
+/// with respect to the rest of the simulation (moments `rest`, size
+/// `rest_size`)? It must be on an escape trajectory (positive energy
+/// relative to the rest, seen as a point mass), moving away from it, and its
+/// influence (m / M) · (R / d)² — acceleration G·m/d² it gives the rest,
+/// relative to the rest's own scale G·M/R² — below [`NEGLIGIBLE_INFLUENCE`].
+/// The criterion depends on distance: a heavy body far enough away
+/// qualifies.
+pub fn negligible_escapee(
+    g: f64,
+    mass: f64,
+    position: Vec3,
+    velocity: Vec3,
+    rest: &Moments,
+    rest_size: f64,
+) -> bool {
+    if rest.mass <= 0.0 {
+        return false;
+    }
+    let r = position - rest.center;
+    let v = velocity - rest.velocity;
+    let d = r.length();
+    if d <= 0.0 || r.dot(v) <= 0.0 {
+        return false;
+    }
+    let escaping = 0.5 * v.length_squared() > g * (rest.mass + mass) / d;
+    let influence = (mass / rest.mass) * (rest_size / d).powi(2);
+    escaping && influence < NEGLIGIBLE_INFLUENCE
+}
 
 /// External gravitational field, linearized around `center` (engine
 /// coordinates): a(x) = `acceleration` + `tidal` · (x − `center`).
@@ -146,5 +183,38 @@ impl SystemsView {
 
     pub fn set(&self, parts: Vec<ViewPart>) {
         *self.parts.lock().expect("poisoned lock") = Arc::new(parts);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rest() -> Moments {
+        Moments {
+            mass: 1e6,
+            center: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+        }
+    }
+
+    #[test]
+    fn negligible_escapee_needs_escape_recession_and_low_influence() {
+        let (g, size) = (1.0, 10.0);
+        // Fast, receding, far: (1 / 1e6) · (10 / 1e4)² = 1e-12.
+        let far = Vec3::new(1e4, 0.0, 0.0);
+        let out = Vec3::new(100.0, 0.0, 0.0);
+        assert!(negligible_escapee(g, 1.0, far, out, &rest(), size));
+        // Coming back: kept.
+        assert!(!negligible_escapee(g, 1.0, far, -out, &rest(), size));
+        // Bound (too slow to escape): kept.
+        assert!(!negligible_escapee(g, 1.0, far, Vec3::new(1.0, 0.0, 0.0), &rest(), size));
+        // Heavy and close: (1e4 / 1e6) · (10 / 1e3)² = 1e-6, not below the threshold.
+        let near = Vec3::new(1e3, 0.0, 0.0);
+        assert!(!negligible_escapee(g, 1e4, near, out, &rest(), size));
+        // The same heavy body, ten times farther: 1e-8, removed.
+        assert!(negligible_escapee(g, 1e4, near * 10.0, out, &rest(), size));
+        // Nothing left to compare with.
+        assert!(!negligible_escapee(g, 1.0, far, out, &Moments::default(), size));
     }
 }
