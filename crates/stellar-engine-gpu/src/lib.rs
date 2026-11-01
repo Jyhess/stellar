@@ -452,7 +452,9 @@ struct Buffers {
 /// its position is then written on the GPU at every step, in the same
 /// submission as the bodies ([`followed_position`](Self::followed_position)).
 /// A camera tracking it reads it there, and stays exactly in step with the
-/// bodies drawn, whereas the published positions lag a few steps behind.
+/// bodies drawn, whereas the published positions lag a few steps behind. A
+/// camera tracking the barycenter reads the engine's moments the same way
+/// ([`moments`](Self::moments)).
 pub struct BodiesView {
     buffers: [wgpu::Buffer; 2],
     /// Index of the current buffer (bit 32) and body count (low 32 bits).
@@ -464,6 +466,8 @@ pub struct BodiesView {
     follow: wgpu::Buffer,
     /// Body `follow` was last computed for (`NO_BODY`: none).
     follow_for: AtomicU64,
+    /// Global moments of the engine (`Buffers::moments`).
+    moments: wgpu::Buffer,
 }
 
 /// No followed body.
@@ -498,6 +502,14 @@ impl BodiesView {
     /// bodies' buffer.
     pub fn followed_position(&self, id: BodyId) -> Option<&wgpu::Buffer> {
         (id != NO_BODY && self.follow_for.load(Ordering::Acquire) == id).then_some(&self.follow)
+    }
+
+    /// Moments of the bodies in this engine's frame, written by every step in
+    /// the same submission as the bodies: its first 16 bytes are the mass and
+    /// the mass-weighted sum of the positions (4 × f32: M, Σ m·x, Σ m·y,
+    /// Σ m·z). Zero before the first step.
+    pub fn moments(&self) -> &wgpu::Buffer {
+        &self.moments
     }
 }
 
@@ -744,6 +756,7 @@ impl GpuEngine {
                 followed: AtomicU64::new(NO_BODY),
                 follow: gpu.storage("follow", 16),
                 follow_for: AtomicU64::new(NO_BODY),
+                moments: b.moments.clone(),
             })
         });
         let mut engine = Self {

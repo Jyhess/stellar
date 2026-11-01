@@ -206,6 +206,7 @@ impl MultiSystem {
                         s.engine.live_view().map(|v| ViewPart {
                             view: v,
                             origin: s.origin,
+                            anchor: s.anchor,
                         })
                     })
                     .collect(),

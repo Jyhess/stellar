@@ -18,7 +18,7 @@ use stellar_domain::{ranking, BodyId, SystemSummary, SystemsView};
 use crate::camera::{Camera, Mode, MAX_FOV, MIN_FOV};
 use crate::format;
 use crate::picking::{pick, visible_top_k};
-use crate::render::{mass_color, Instance, InstanceBatch, PointsCallback, PointsSource, Uniforms};
+use crate::render::{mass_color, Follow, Instance, InstanceBatch, PointsCallback, PointsSource, Uniforms};
 use crate::source::{angular_momentum, weighted_barycenter, Source};
 
 use crate::i18n::{tr, tr_msg};
@@ -1282,10 +1282,17 @@ impl SimScreen {
         let source = match &self.direct {
             Some(view) => {
                 self.anchor = self.camera.position;
-                // Tracked body: the rendering follows it at the step drawn.
+                // Tracked body or barycenter: the rendering follows it at the
+                // step drawn.
                 let follow = match self.camera.mode {
-                    Mode::Orbit { target, .. } => self.selected_position().map(|p| (target, p)),
-                    _ => None,
+                    Mode::Orbit { target, .. } => {
+                        self.selected_position().map(|p| Follow::Body(target, p))
+                    }
+                    Mode::Barycenter { .. } => Some(Follow::Barycenter {
+                        system: self.bary_summary().map(|s| s.anchor),
+                        target: self.bary_center(),
+                    }),
+                    Mode::Free => None,
                 };
                 PointsSource::Direct {
                     view: Arc::clone(view),

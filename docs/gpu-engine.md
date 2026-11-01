@@ -45,7 +45,7 @@ Main submission, then a single wait:
 4. `collide`: each body walks down the swept boxes and records the pairs (i < j) whose trajectories come closer than the sum of their radii.
 5. `kick_moments` → `moments_final`: second half kick, and global moments (mass, m·x, m·v, kinetic and potential energy) in the same read of the bodies.
 6. On cleanup steps only, `cleanup`: indices and records of the bodies beyond k × R from the barycenter.
-7. `query`: positions of the tracked lists, through the index table. If the display follows a body (`BodiesView::follow`, camera in orbit), a second `query` dispatch writes its position into the view's 16-byte `follow` buffer, not read back: the renderer copies it on the GPU and shifts its anchor by the body's displacement since the published position, so the camera stays in step with the bodies drawn (the published positions lag a few steps behind).
+7. `query`: positions of the tracked lists, through the index table. If the display follows a body (`BodiesView::follow`, camera in orbit), a second `query` dispatch writes its position into the view's 16-byte `follow` buffer, not read back: the renderer copies it on the GPU and shifts its anchor by the body's displacement since the published position, so the camera stays in step with the bodies drawn (the published positions lag a few steps behind). A camera tracking a barycenter reads the `moments` buffer the same way (`BodiesView::moments`: mass and Σ m·x, written by `kick_moments` / `moments_final` in the same submission).
 8. Copy into the **readback buffer** (`readback` module): counters, moments, tracked positions, first pairs, first far bodies.
 
 Then on the CPU:

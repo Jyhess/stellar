@@ -11,7 +11,9 @@
 //!   step being drawn is copied from the engine on the GPU
 //!   ([`BodiesView::followed_position`]) and the anchor is shifted by its
 //!   displacement since the published position: otherwise the bodies, a few
-//!   steps ahead of the camera, would jerk on screen.
+//!   steps ahead of the camera, would jerk on screen. A camera tracking a
+//!   barycenter (of the simulation or of a subsystem) is shifted the same
+//!   way, from the engines' moments ([`BodiesView::moments`]).
 //! - **instances** (CPU engine, playback): at each new snapshot, positions
 //!   (relative to an anchor near the camera, to preserve `f32` precision)
 //!   are uploaded to an instance buffer.
@@ -277,7 +279,7 @@ impl PointRenderer {
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        follow: Option<(BodyId, DVec3)>,
+        follow: Option<Follow>,
     ) {
         let mut entries = vec![[0f32; 4]; 2 * MAX_FOLLOW];
         let mut count = 0;
@@ -285,12 +287,23 @@ impl PointRenderer {
             let Some(view) = part.view.downcast_ref::<BodiesView>() else {
                 continue;
             };
-            view.follow(follow.map(|(id, _)| id));
-            let Some((id, target)) = follow else { continue };
+            let followed = match follow {
+                Some(Follow::Body(id, _)) => Some(id),
+                _ => None,
+            };
+            view.follow(followed);
+            let (buffer, target) = match follow {
+                Some(Follow::Body(id, target)) => (view.followed_position(id), target),
+                Some(Follow::Barycenter { system, target }) => (
+                    (system.is_none() || system == Some(part.anchor)).then(|| view.moments()),
+                    target,
+                ),
+                None => continue,
+            };
             if count == MAX_FOLLOW {
                 continue;
             }
-            if let Some(buffer) = view.followed_position(id) {
+            if let Some(buffer) = buffer {
                 let base = (part.origin - target).as_vec3();
                 entries[2 * count + 1] = [base.x, base.y, base.z, 0.0];
                 encoder.copy_buffer_to_buffer(buffer, 0, &self.follow_buffer, 16 + 32 * count as u64, 16);
@@ -299,7 +312,8 @@ impl PointRenderer {
         }
         // Written before the copies of this frame's commands, which overwrite the
         // positions.
-        let header = [count as u32, 0, 0, 0];
+        let mode = u32::from(matches!(follow, Some(Follow::Barycenter { .. })));
+        let header = [count as u32, mode, 0, 0];
         queue.write_buffer(&self.follow_buffer, 0, bytemuck::cast_slice(&header));
         if count > 0 {
             queue.write_buffer(&self.follow_buffer, 16, bytemuck::cast_slice(&entries[..2 * count]));
@@ -343,17 +357,27 @@ impl PointRenderer {
     }
 }
 
+/// Point tracked by the camera in the live view, with its published position
+/// the anchor was built from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Follow {
+    /// A body.
+    Body(BodyId, DVec3),
+    /// The barycenter of the subsystem with this marker body, or of the
+    /// whole simulation (`None`).
+    Barycenter { system: Option<BodyId>, target: DVec3 },
+}
+
 /// Bodies to draw.
 pub enum PointsSource {
     /// Instances uploaded from a snapshot.
     Batch(Option<InstanceBatch>),
     /// Buffers of the GPU engine, read in place; anchor: position of the camera.
-    /// `follow`: body tracked by the camera and its position the anchor was
-    /// built from.
+    /// `follow`: point tracked by the camera.
     Direct {
         view: Arc<SystemsView>,
         anchor: DVec3,
-        follow: Option<(BodyId, DVec3)>,
+        follow: Option<Follow>,
     },
 }
 

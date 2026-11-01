@@ -20,10 +20,12 @@ struct Uniforms {
 // anchor, lags a few steps behind the bodies' buffers.
 const MAX_FOLLOW: u32 = 32u;
 struct Follow {
-    // x: number of entries (one per subsystem that may hold the body)
+    // x: number of entries (one per subsystem that may hold the body or count
+    // in the barycenter); y: 0 = a body, 1 = a barycenter
     count: vec4<u32>,
     // Per entry: position of the body in the subsystem's frame (xyz, w = 1 if
-    // present), then the subsystem's origin minus the tracked point used for
+    // present), or the subsystem's moments (x: mass, yzw: Σ m·position, in its
+    // frame); then the subsystem's origin minus the tracked point used for
     // the anchor (xyz).
     entries: array<vec4<f32>, 64>,
 };
@@ -34,6 +36,22 @@ struct Follow {
 // from (zero if it is not found).
 fn follow_shift() -> vec3<f32> {
     let count = min(follow.count.x, MAX_FOLLOW);
+    if (follow.count.y == 1u) {
+        // Barycenter of the subsystems' barycenters, weighted by their masses.
+        var mass = 0.0;
+        var sum = vec3<f32>(0.0);
+        for (var k = 0u; k < count; k++) {
+            let m = follow.entries[2u * k];
+            if (m.x > 0.0) {
+                mass += m.x;
+                sum += m.x * (m.yzw / m.x + follow.entries[2u * k + 1u].xyz);
+            }
+        }
+        if (mass > 0.0) {
+            return sum / mass;
+        }
+        return vec3<f32>(0.0);
+    }
     for (var k = 0u; k < count; k++) {
         let p = follow.entries[2u * k];
         if (p.w > 0.5) {

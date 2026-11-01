@@ -28,7 +28,7 @@ Structure operations **rebuild the engines from their state** (`build`, which ta
 ## Invariants
 
 - `state()` returns bodies in **global coordinates**, grouped by subsystem; `SimulationState::systems` gives the range and size of each one. Saves store this grouping (format 5 and later).
-- Live view: `SystemsView` holds one `BodiesView` and one origin per subsystem. The renderer translates the camera anchor into each origin. A tracked body is followed on the GPU in every subsystem (`BodiesView::follow`), so the camera matches the step being drawn.
+- Live view: `SystemsView` holds one `BodiesView` and one origin per subsystem. The renderer translates the camera anchor into each origin. A tracked body is followed on the GPU in every subsystem (`BodiesView::follow`), so the camera matches the step being drawn. A tracked barycenter is computed in the shader from the moments of the subsystem with that marker body (`ViewPart::anchor`), or of all of them for the global barycenter (`BodiesView::moments`).
 - `locate` gives each watched body's subsystem (its marker body): published with the snapshot (`Snapshot::watched_systems`), it lets the interface choose the selected body's sub-simulation.
 - Recordings store one quantization box per subsystem in each snapshot (format 3 and later).
 - An escapee inserted with `insert` gets no acceleration of its own for its first half kick (a known approximation).

@@ -81,3 +81,4 @@ Decisions in the order they were made; v1 came from the initial question session
 - "Without display" button in the control panel, next to Pause (the Esc menu entry alone went unnoticed).
 - Headless run: an engine that cannot start now reports its own message (it was hidden behind "the simulation is not ready yet" at the final save); a stop during the preparation waits for its end. The home screen's particle maximum leaves room for the sun and the massive bodies (the GPU limit counts every body: 16,776,960 grains plus a sun exceeded it).
 - Traces: with the barycenter of a sub-simulation selected, it becomes the reference in the selected-body and local-cluster frames (`TraceReference::System`); the reference used to fall back to the global barycenter.
+- Live GPU view: a camera tracking a barycenter (sub-simulation or global) no longer jumps at each step; the shader computes it from the engines' moments at the step drawn, as for a tracked body.

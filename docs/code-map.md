@@ -129,7 +129,7 @@ Tests: `tests/continuation.rs`, `tests/files.rs`. Examples: `examples/inspect.rs
 | `console.rs` | CLI: `usage`, `Options`, `parse`, `run`, `redirect`; tests of the parser |
 | `camera.rs` | `Camera`, `Mode`, projection and ray |
 | `picking.rs` | `pick`, `visible_top_k` |
-| `render/mod.rs` | `PointRenderer` (chunked instance buffers, follow buffer), `PointsSource` (direct GPU view or copied instances), `PointsCallback`, `mass_color` |
+| `render/mod.rs` | `PointRenderer` (chunked instance buffers, follow buffer: `prepare_follow`), `Follow` (tracked body or barycenter), `PointsSource` (direct GPU view or copied instances), `PointsCallback`, `mass_color` |
 | `render/points.wgsl` | Billboard shader |
 | `i18n.rs` | `Lang`, `tr`, `tr!`, `tr_msg`, `EN` and `MESSAGES` tables, translation tests |
 | `format.rs` | `count`, `real`, `percent`, `decimal_sep` |

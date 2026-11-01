@@ -162,11 +162,13 @@ pub struct SystemSummary {
 }
 
 /// Element of a composite live view: direct access to an engine (see
-/// [`crate::PhysicsEngine::live_view`]) and origin of its frame.
+/// [`crate::PhysicsEngine::live_view`]), origin of its frame and marker body
+/// of its subsystem.
 #[derive(Clone)]
 pub struct ViewPart {
     pub view: Arc<dyn Any + Send + Sync>,
     pub origin: Vec3,
+    pub anchor: crate::BodyId,
 }
 
 /// Live view of several subsystems: the list changes when subsystems are
