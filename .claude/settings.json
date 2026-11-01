@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "docs-folder@jyhess": true,
+    "tracking-github-issues@jyhess": true
+  }
+}

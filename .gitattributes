@@ -5,3 +5,7 @@
 *.stellar binary
 *.stellarec binary
 *.png binary
+
+# Shell scripts run by sh, which does not accept CRLF
+.githooks/* text eol=lf
+*.sh text eol=lf

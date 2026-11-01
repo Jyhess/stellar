@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse the commit if the verification fails. Never bypass it with --no-verify.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings

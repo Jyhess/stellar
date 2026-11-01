@@ -6,3 +6,8 @@
 *~
 *.stellarec
 stellar-crash.log
+
+# Vim backup, undo and swap files
+*.un~
+*.swp
+*.swo

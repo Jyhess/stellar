@@ -77,3 +77,9 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 - **Adjustments** requested on a subject whose commit is not pushed yet: amend that commit instead of adding a new one — `git commit --amend` if it is the last commit, otherwise `git commit --fixup=<sha>` then `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <sha>~1` (non-interactive; `--autostash` if the working copy is dirty). A pushed commit is never amended: the adjustment gets a new commit.
 - **Before starting a new subject**, if the working copy has uncommitted changes that are not mine, say so and ask whether to commit them first.
 - `*.exe`, `*.stellar`, `*.stellarec` are ignored.
+
+## Documentation and tracking
+
+- Documentation lives in `docs/`; no wiki.
+- Tasks are GitHub issues of this repository.
+- Time spent is recorded in the work journal (github.com/Jyhess/katrix-journal).
