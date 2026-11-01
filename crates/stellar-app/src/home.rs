@@ -14,7 +14,8 @@ use stellar_domain::{
 
 use crate::format;
 
-use crate::i18n::{tr, tr_msg};
+use crate::errors::Localized;
+use crate::i18n::tr;
 
 /// Recording options chosen at creation.
 #[derive(Clone, Copy)]
@@ -238,11 +239,11 @@ impl HomeScreen {
                 self.saves = list;
                 self.saves_error = None;
             }
-            Err(e) => self.saves_error = Some(e.to_string()),
+            Err(e) => self.saves_error = Some(e.localized()),
         }
         match service.list_recordings() {
             Ok(list) => self.recordings = list,
-            Err(e) => self.saves_error = Some(e.to_string()),
+            Err(e) => self.saves_error = Some(e.localized()),
         }
     }
 
@@ -538,7 +539,7 @@ impl HomeScreen {
             None => Ok(()),
         };
         if let Err(e) = result {
-            self.message = Some(tr!("Opération impossible : {}", e));
+            self.message = Some(tr!("Opération impossible : {}", e.localized()));
         } else {
             self.message = None;
         }
@@ -624,7 +625,7 @@ impl HomeScreen {
                     options,
                 });
             }
-            Err(e) => self.message = Some(tr!("Lecture de la sauvegarde impossible : {}", e)),
+            Err(e) => self.message = Some(tr!("Lecture de la sauvegarde impossible : {}", e.localized())),
         }
     }
 
@@ -1147,7 +1148,7 @@ impl HomeScreen {
         });
         ui.add_space(4.0);
         if let Some(e) = &self.saves_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, tr_msg(e));
+            ui.colored_label(egui::Color32::LIGHT_RED, e);
         }
         if self.saves.is_empty() {
             ui.label(RichText::new(tr("Aucune sauvegarde dans le dossier « saves ». Appuyez sur F5 pendant une simulation.")).weak());

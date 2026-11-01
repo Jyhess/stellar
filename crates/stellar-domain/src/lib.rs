@@ -23,7 +23,7 @@ pub use config::{
     SimulationConfig, VelocityMode, MAX_DUST_MASS, MAX_MASSIVE_FRACTION, MAX_PLANETS,
 };
 pub use ejection::EjectedCluster;
-pub use engine::{Diagnostics, EngineDescriptor, EngineFactory, PhysicsEngine, StepReport};
+pub use engine::{Diagnostics, EngineDescriptor, EngineError, EngineFactory, PhysicsEngine, StepReport};
 pub use state::SimulationState;
 pub use systems::{ExternalField, Moments, SystemSpan, SystemSummary, SystemsView};
 

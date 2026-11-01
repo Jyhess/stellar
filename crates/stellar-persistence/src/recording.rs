@@ -34,7 +34,7 @@ use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use stellar_application::{
-    BodyFate, FrameMeta, Keyframe, RecordingHeader, RecordingInfo, RecordingReader,
+    BodyFate, FormatError, FrameMeta, Keyframe, RecordingHeader, RecordingInfo, RecordingReader,
     RecordingRepository, RecordingSummary, RecordingWriter, RepositoryError,
 };
 use stellar_domain::{BodySet, Vec3};
@@ -60,8 +60,9 @@ fn io(e: std::io::Error) -> RepositoryError {
     RepositoryError::Io(e.to_string())
 }
 
+/// Decoding failure of the serializer.
 fn fmt(e: impl std::fmt::Display) -> RepositoryError {
-    RepositoryError::Format(e.to_string())
+    FormatError::Decode(e.to_string()).into()
 }
 
 // ----------------------------------------------------------------------
@@ -87,7 +88,7 @@ impl<'a> Cursor<'a> {
             .pos
             .checked_add(n)
             .filter(|&e| e <= self.buf.len())
-            .ok_or_else(|| fmt("instantané tronqué"))?;
+            .ok_or(FormatError::TruncatedSnapshot)?;
         let s = &self.buf[self.pos..end];
         self.pos = end;
         Ok(s)
@@ -119,7 +120,7 @@ impl<'a> Cursor<'a> {
                 return Ok(v);
             }
         }
-        Err(fmt("varint invalide"))
+        Err(FormatError::InvalidVarint.into())
     }
 }
 
@@ -262,11 +263,11 @@ pub fn decode_frame(meta: FrameMeta, buf: &[u8], version: u32) -> Result<Keyfram
     let dust_weight = c.f32()?;
     let n = c.u32()? as usize;
     if n != meta.count as usize {
-        return Err(fmt("nombre de corps incohérent"));
+        return Err(FormatError::InconsistentBodyCount.into());
     }
     let count = if version >= 3 { c.u32()? as usize } else { 1 };
     if count == 0 || count > (1 << 16) {
-        return Err(fmt("nombre de sous-systèmes invalide"));
+        return Err(FormatError::InvalidSubsystemCount.into());
     }
     let mut boxes = Vec::with_capacity(count);
     for _ in 0..count {
@@ -298,7 +299,7 @@ pub fn decode_frame(meta: FrameMeta, buf: &[u8], version: u32) -> Result<Keyfram
             .map(|i| planes[0][i] as u16 | (planes[1][i] as u16) << 8)
             .collect();
         if groups.iter().any(|&g| g as usize >= count) {
-            return Err(fmt("sous-système inconnu"));
+            return Err(FormatError::UnknownSubsystem.into());
         }
     }
 
@@ -327,7 +328,7 @@ pub fn decode_frame(meta: FrameMeta, buf: &[u8], version: u32) -> Result<Keyfram
         let fate = match c.u8()? {
             0 => BodyFate::MergedInto(c.varint()?),
             1 => BodyFate::Removed,
-            _ => return Err(fmt("devenir inconnu")),
+            _ => return Err(FormatError::UnknownFate.into()),
         };
         fates.push((id, fate));
     }
@@ -411,7 +412,7 @@ pub struct FileRecordingReader {
 
 fn read_exact<const N: usize>(r: &mut impl Read) -> Result<[u8; N], RepositoryError> {
     let mut b = [0u8; N];
-    r.read_exact(&mut b).map_err(|_| fmt("fichier tronqué"))?;
+    r.read_exact(&mut b).map_err(|_| FormatError::Truncated)?;
     Ok(b)
 }
 
@@ -419,7 +420,7 @@ impl FileRecordingReader {
     pub fn open(path: &Path) -> Result<Self, RepositoryError> {
         let mut file = BufReader::new(File::open(path).map_err(io)?);
         if &read_exact::<8>(&mut file)? != MAGIC {
-            return Err(fmt("ce n'est pas un enregistrement Stellar"));
+            return Err(FormatError::NotARecording.into());
         }
         let version = u32::from_le_bytes(read_exact::<4>(&mut file)?);
         if !(1..=VERSION).contains(&version) {
@@ -427,7 +428,7 @@ impl FileRecordingReader {
         }
         let len = u32::from_le_bytes(read_exact::<4>(&mut file)?);
         if len > MAX_HEADER {
-            return Err(fmt("en-tête démesuré"));
+            return Err(FormatError::OversizedHeader.into());
         }
         let mut hb = vec![0u8; len as usize];
         file.read_exact(&mut hb).map_err(io)?;
@@ -519,7 +520,7 @@ impl RecordingReader for FileRecordingReader {
         let offset = *self
             .offsets
             .get(index)
-            .ok_or_else(|| fmt("instantané hors limites"))?;
+            .ok_or(FormatError::SnapshotOutOfRange)?;
         let meta = self.info.frames[index];
         self.file
             .seek(SeekFrom::Start(offset + FRAME_HEAD - 4))
@@ -607,9 +608,7 @@ impl RecordingRepository for FileRecordingRepository {
         // Kept snapshots: those up to the resume step, included.
         let keep = frames.partition_point(|f| f.step <= keep_through_step);
         if keep == 0 || frames[keep - 1].step != keep_through_step {
-            return Err(fmt(format!(
-                "l'instantané du pas {keep_through_step} est introuvable dans l'enregistrement"
-            )));
+            return Err(FormatError::MissingSnapshot(keep_through_step).into());
         }
         // End of the last kept snapshot: everything after it (later snapshots,
         // old index) is truncated.

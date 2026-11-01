@@ -21,7 +21,7 @@ pub mod service;
 pub mod systems;
 pub mod trace;
 
-pub use ports::{RepositoryError, SaveData, SaveSummary, SimulationRepository, ViewState};
+pub use ports::{FormatError, RepositoryError, SaveData, SaveSummary, SimulationRepository, ViewState};
 pub use recording::{
     BodyFate, FrameMeta, Keyframe, RecordingHeader, RecordingInfo, RecordingLink, RecordingReader,
     RecordingRepository, RecordingStatus, RecordingSummary, RecordingWriter,
@@ -31,5 +31,7 @@ pub use replay::{PlaybackClock, ReplayPlayer};
 pub use runner::{Phase, SimulationHandle, Snapshot};
 pub use headless::{HeadlessRun, Progress, RecordSettings, RunOutcome, RunTarget};
 pub use systems::MultiSystem;
-pub use service::{name_from_file, AppError, Continuation, LoadedSimulation, SimulatorService};
+pub use service::{
+    name_from_file, AppError, Continuation, ContinuationError, LoadedSimulation, SimulatorService,
+};
 pub use trace::{Trace, TraceReference, TraceSet};

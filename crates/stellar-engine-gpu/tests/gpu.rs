@@ -7,7 +7,7 @@
 use glam::DVec3;
 use stellar_application::generator::generate_state;
 use stellar_domain::{
-    BodySet, Distribution, InitialConditions, PhysicsEngine, PhysicsParams, SimulationState,
+    BodySet, Distribution, EngineError, InitialConditions, PhysicsEngine, PhysicsParams, SimulationState,
     VelocityMode,
 };
 use stellar_engine_cpu::CpuEngine;
@@ -40,11 +40,16 @@ fn state(bodies: BodySet) -> SimulationState {
 fn engine(s: SimulationState, p: PhysicsParams) -> Option<GpuEngine> {
     match GpuEngine::new(s, p) {
         Ok(e) => Some(e),
-        Err(msg) if msg.contains("carte graphique") => {
-            eprintln!("GPU test skipped: {msg}");
+        Err(
+            e @ (EngineError::NoDevice
+            | EngineError::ComputeUnsupported
+            | EngineError::DeviceOpen(_)
+            | EngineError::BufferTooLarge { .. }),
+        ) => {
+            eprintln!("GPU test skipped: {e}");
             None
         }
-        Err(msg) => panic!("{msg}"),
+        Err(e) => panic!("{e}"),
     }
 }
 
@@ -531,7 +536,7 @@ fn shared_device_exposes_current_bodies() {
     }
 
     // Without a shared device: no view.
-    let own = GpuEngine::new(sphere(100, 3), params()).expect("carte graphique");
+    let own = GpuEngine::new(sphere(100, 3), params()).expect("graphics card");
     assert!(own.live_view().is_none());
 }
 

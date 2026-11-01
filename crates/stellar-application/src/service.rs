@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use stellar_domain::{BodyId, EngineDescriptor, SimulationConfig};
+use stellar_domain::{BodyId, EngineDescriptor, EngineError, SimulationConfig};
 
 use crate::generator::generate_state;
-use crate::ports::{RepositoryError, SaveData, SaveSummary, SimulationRepository, ViewState};
+use crate::ports::{FormatError, RepositoryError, SaveData, SaveSummary, SimulationRepository, ViewState};
 use crate::recording::{
     is_dust, BodyFate, RecordingHeader, RecordingLink, RecordingRepository, RecordingSummary,
 };
@@ -26,16 +26,34 @@ pub fn name_from_file(stem: &str) -> String {
     base.to_owned()
 }
 
-#[derive(Debug, thiserror::Error)]
+/// Failure of a use case. `Display` gives an English message (logs); the
+/// interface translates each variant.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AppError {
-    #[error("moteur de calcul inconnu : « {0} »")]
+    #[error("unknown computation engine: “{0}”")]
     UnknownEngine(String),
-    #[error("la simulation n'est pas encore prête")]
+    #[error("the simulation is not ready yet")]
     NotReady,
-    #[error("{0}")]
-    EngineFailed(String),
+    /// The engine could not start (reason, if known).
+    #[error("the computation engine could not start{}", .0.as_ref().map(|e| format!(": {e}")).unwrap_or_default())]
+    EngineFailed(Option<EngineError>),
     #[error(transparent)]
     Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    Continuation(#[from] ContinuationError),
+}
+
+/// Why a recording cannot be continued from a save.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum ContinuationError {
+    #[error(transparent)]
+    Repository(#[from] RepositoryError),
+    #[error("the recording comes from another simulation (different initial conditions)")]
+    OtherSimulation,
+    #[error("the recording starts after the save's step")]
+    StartsAfterSave,
+    #[error("body no. {id} of the save is missing from the recording at step {step}: it comes from another simulation")]
+    MissingBody { id: BodyId, step: u64 },
 }
 
 /// Result of loading a save.
@@ -43,7 +61,7 @@ pub struct LoadedSimulation {
     pub handle: SimulationHandle,
     pub view: Option<ViewState>,
     /// Resumption of a linked recording: path of the file, or error.
-    pub recording: Option<Result<PathBuf, String>>,
+    pub recording: Option<Result<PathBuf, ContinuationError>>,
 }
 
 /// Recording that can be continued from a save.
@@ -213,7 +231,7 @@ impl SimulatorService {
                     handle.resume_recording(writer, link);
                     path
                 })
-                .map_err(|e| e.to_string())
+                .map_err(ContinuationError::from)
         });
         Ok(LoadedSimulation {
             handle,
@@ -251,19 +269,23 @@ impl SimulatorService {
     /// the save get their real fate if it appears in the next snapshot,
     /// "removed" otherwise. Also returns the number of snapshots that will be
     /// deleted.
-    fn continuation_link(&self, data: &SaveData, path: &Path) -> Result<(RecordingLink, usize), String> {
+    fn continuation_link(
+        &self,
+        data: &SaveData,
+        path: &Path,
+    ) -> Result<(RecordingLink, usize), ContinuationError> {
         let step = data.state.step;
-        let mut reader = self.recordings.open(path).map_err(|e| e.to_string())?;
+        let mut reader = self.recordings.open(path)?;
         let info = reader.info().clone();
         if info.header.config.initial != data.config.initial {
-            return Err("l'enregistrement provient d'une autre simulation (conditions initiales différentes)".into());
+            return Err(ContinuationError::OtherSimulation);
         }
         let keep = info.frames.partition_point(|f| f.step <= step);
         if keep == 0 {
-            return Err("l'enregistrement commence après le pas de la sauvegarde".into());
+            return Err(ContinuationError::StartsAfterSave);
         }
         let last = info.frames[keep - 1].step;
-        let frame = reader.read_frame(keep - 1).map_err(|e| e.to_string())?;
+        let frame = reader.read_frame(keep - 1)?;
         let recorded: HashSet<BodyId> = frame.bodies.ids.iter().copied().collect();
         let present: HashSet<BodyId> = data.state.bodies.ids.iter().copied().collect();
         // Bodies only ever disappear: every massive body of the save must appear
@@ -277,9 +299,7 @@ impl SimulatorService {
             .find(|(id, &m)| !is_dust(m) && !recorded.contains(id))
             .map(|(id, _)| *id)
         {
-            return Err(format!(
-                "le corps n° {id} de la sauvegarde est absent de l'enregistrement au pas {last} : il provient d'une autre simulation"
-            ));
+            return Err(ContinuationError::MissingBody { id, step: last });
         }
         let known: HashMap<BodyId, BodyFate> = if keep < info.frames.len() && last < step {
             reader
@@ -490,9 +510,7 @@ impl SimulatorService {
     pub fn open_replay(&self, path: &Path) -> Result<ReplayPlayer, AppError> {
         let reader = self.recordings.open(path)?;
         if reader.info().frames.is_empty() {
-            return Err(AppError::Repository(RepositoryError::Format(
-                "enregistrement vide".into(),
-            )));
+            return Err(RepositoryError::from(FormatError::EmptyRecording).into());
         }
         Ok(ReplayPlayer::new(reader))
     }

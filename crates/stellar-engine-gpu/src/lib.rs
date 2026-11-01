@@ -47,7 +47,7 @@ use rayon::prelude::*;
 use stellar_domain::ejection::{sort_out, Candidate, EjectionRules};
 use stellar_domain::physics::{merge, MergeInput};
 use stellar_domain::{
-    BodyId, BodySet, Diagnostics, EjectedCluster, EngineDescriptor, ExternalField, Moments as SystemMoments, EngineFactory, PhysicsEngine, PhysicsParams,
+    BodyId, BodySet, Diagnostics, EjectedCluster, EngineDescriptor, EngineError, ExternalField, Moments as SystemMoments, EngineFactory, PhysicsEngine, PhysicsParams,
     SimulationState, StepReport,
 };
 
@@ -222,7 +222,7 @@ impl GpuEngineFactory {
     }
 
     /// Checks that a usable graphics card is present; returns its name.
-    pub fn probe() -> Result<String, String> {
+    pub fn probe() -> Result<String, EngineError> {
         Gpu::open().map(|g| g.adapter_name)
     }
 
@@ -257,7 +257,7 @@ impl EngineFactory for GpuEngineFactory {
         &self,
         state: SimulationState,
         params: PhysicsParams,
-    ) -> Result<Box<dyn PhysicsEngine>, String> {
+    ) -> Result<Box<dyn PhysicsEngine>, EngineError> {
         // Interface device unsuitable for computation (OpenGL, for example): the
         // engine opens its own device, without live display.
         let shared = self.shared.get().filter(|s| Gpu::supports(s));
@@ -597,7 +597,7 @@ pub struct GpuEngine {
 
 impl GpuEngine {
     /// Engine on its own device (benchmark, tests, no window).
-    pub fn new(state: SimulationState, params: PhysicsParams) -> Result<Self, String> {
+    pub fn new(state: SimulationState, params: PhysicsParams) -> Result<Self, EngineError> {
         Self::build(Gpu::open()?, state, params, false)
     }
 
@@ -607,7 +607,7 @@ impl GpuEngine {
         state: SimulationState,
         params: PhysicsParams,
         shared: &SharedDevice,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         Self::build(Gpu::shared(shared)?, state, params, true)
     }
 
@@ -616,17 +616,15 @@ impl GpuEngine {
         state: SimulationState,
         mut params: PhysicsParams,
         expose: bool,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         params.theta = params.theta.clamp(0.05, 1.0);
         let n = state.bodies.len();
         if n > MAX_BODIES {
-            return Err(format!(
-                "le moteur GPU est limité à {MAX_BODIES} corps ({n} demandés)"
-            ));
+            return Err(EngineError::TooManyBodies { requested: n, limit: MAX_BODIES });
         }
         let max_id = state.bodies.ids.iter().copied().max().unwrap_or(0);
         if max_id >= u32::MAX as u64 {
-            return Err("identifiants de corps trop grands pour le moteur GPU".to_owned());
+            return Err(EngineError::IdsTooLarge);
         }
         // Margin for bodies handed over by other subsystems
         // ([`PhysicsEngine::insert`]), if the device allows it.
@@ -644,13 +642,11 @@ impl GpuEngine {
         if largest > gpu.limits.max_storage_buffer_binding_size as u64
             || largest > gpu.limits.max_buffer_size
         {
-            return Err(format!(
-                "trop de corps pour cette carte graphique ({} : tampon de {} Mo, limite {} Mo)",
-                gpu.adapter_name,
-                largest / 1_000_000,
-                (gpu.limits.max_storage_buffer_binding_size as u64).min(gpu.limits.max_buffer_size)
-                    / 1_000_000
-            ));
+            return Err(EngineError::BufferTooLarge {
+                device: gpu.adapter_name.clone(),
+                buffer_mb: largest / 1_000_000,
+                limit_mb: limit / 1_000_000,
+            });
         }
         let k = Kernels::new(&gpu);
         let pair_cap = capacity.min(MAX_PAIRS);

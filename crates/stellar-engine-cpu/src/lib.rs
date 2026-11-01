@@ -24,8 +24,8 @@ use rayon::prelude::*;
 use stellar_domain::ejection::{sort_out, Candidate, EjectionRules};
 use stellar_domain::physics::{body_radius, merge, MergeInput};
 use stellar_domain::{
-    BodyId, BodySet, Diagnostics, EjectedCluster, EngineDescriptor, EngineFactory, ExternalField,
-    Moments, PhysicsEngine, PhysicsParams, SimulationState, StepReport,
+    BodyId, BodySet, Diagnostics, EjectedCluster, EngineDescriptor, EngineError, EngineFactory,
+    ExternalField, Moments, PhysicsEngine, PhysicsParams, SimulationState, StepReport,
 };
 
 use crate::collisions::{find_contacts, DisjointSets};
@@ -52,7 +52,7 @@ impl EngineFactory for CpuEngineFactory {
         &self,
         state: SimulationState,
         params: PhysicsParams,
-    ) -> Result<Box<dyn PhysicsEngine>, String> {
+    ) -> Result<Box<dyn PhysicsEngine>, EngineError> {
         Ok(Box::new(CpuEngine::new(state, params)))
     }
 }

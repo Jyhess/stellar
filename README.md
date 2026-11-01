@@ -259,7 +259,7 @@ A heavy enough body ejected alone is kept by cleanup and ends up as a sub-simula
 
 ### Adding a computation engine
 
-1. Create a crate that implements `stellar_domain::PhysicsEngine` and `stellar_domain::EngineFactory`, with a unique `id`. `EngineFactory::create` must return a readable error rather than panic (no card, insufficient memory).
+1. Create a crate that implements `stellar_domain::PhysicsEngine` and `stellar_domain::EngineFactory`, with a unique `id`. `EngineFactory::create` must return an `EngineError` rather than panic (no card, insufficient memory); a new variant gets its translation in `stellar-app/src/errors.rs`.
 2. Register it in `crates/stellar-app/src/lib.rs`:
 
 ```rust
@@ -314,4 +314,4 @@ To start a simulation directly without going through the home screen: `$env:STEL
 - **ejected clusters** (`stellar-domain/tests/ejection.rs`): friends of friends, pruning of unbound members, thresholds, spherical approximation for large clusters, local cluster of a body;
 - **sub-simulations** (`stellar-application/tests/systems.rs`): split, merge, escapees, removal of negligible lone bodies, agreement with the full computation;
 - **files** (`stellar-persistence`): reading older versions (saves 3 to 5, recordings 1, in the internal tests of `lib.rs` and `recording.rs`), continuing a recording, renaming and deleting linked files, simulation without display (`tests/continuation.rs`, `tests/files.rs`);
-- **interface** (`stellar-app`): command-line parsing, and the translation table (duplicates, placeholders).
+- **interface** (`stellar-app`): command-line parsing, the translation table (duplicates, placeholders) and the translation of nested errors (`errors.rs`).

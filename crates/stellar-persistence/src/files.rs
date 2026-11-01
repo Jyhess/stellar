@@ -32,10 +32,7 @@ pub fn sanitize(name: &str, fallback: &str) -> String {
 /// permanently.
 pub fn delete(path: &Path, trash: bool) -> Result<(), RepositoryError> {
     if !path.exists() {
-        return Err(RepositoryError::Io(format!(
-            "fichier introuvable : {}",
-            path.display()
-        )));
+        return Err(RepositoryError::NotFound(path.to_path_buf()));
     }
     if trash {
         return to_trash(path);
@@ -51,10 +48,9 @@ pub fn rename(path: &Path, name: &str, extension: &str, fallback: &str) -> Resul
         return Ok(target);
     }
     if target.exists() {
-        return Err(RepositoryError::Io(format!(
-            "le nom « {} » est déjà pris",
-            target.file_stem().unwrap_or_default().to_string_lossy()
-        )));
+        return Err(RepositoryError::NameTaken(
+            target.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
+        ));
     }
     fs::rename(path, &target).map_err(|e| RepositoryError::Io(e.to_string()))?;
     Ok(target)
@@ -88,9 +84,7 @@ fn to_trash(path: &Path) -> Result<(), RepositoryError> {
     // SAFETY: strings terminated by two zeros, alive during the call.
     let code = unsafe { SHFileOperationW(&mut op) };
     if code != 0 || op.fAnyOperationsAborted != 0 {
-        return Err(RepositoryError::Io(format!(
-            "suppression annulée ou impossible (code {code})"
-        )));
+        return Err(RepositoryError::DeleteFailed(code));
     }
     Ok(())
 }

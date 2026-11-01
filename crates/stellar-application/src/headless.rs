@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use stellar_domain::SimulationConfig;
 
-use crate::ports::RepositoryError;
 use crate::runner::{Phase, SimulationHandle};
 use crate::service::{name_from_file, AppError, SimulatorService};
 
@@ -47,8 +46,8 @@ pub struct Progress {
     pub fraction: Option<f64>,
     pub frames: u64,
     pub bytes: u64,
-    /// The engine could not start: its message.
-    pub error: Option<String>,
+    /// The engine could not start: [`AppError::EngineFailed`].
+    pub error: Option<AppError>,
 }
 
 /// Result of a simulation without display.
@@ -65,14 +64,6 @@ pub struct HeadlessRun {
     started: Instant,
     /// Step and simulated time at the start.
     origin: (u64, f64),
-}
-
-/// Message of an engine that could not start.
-fn engine_error(detail: &Option<String>) -> String {
-    match detail {
-        Some(d) => format!("le moteur de calcul n'a pas pu démarrer : {d}"),
-        None => "le moteur de calcul n'a pas pu démarrer".to_owned(),
-    }
 }
 
 /// Stop step of a target counted from step `from`.
@@ -134,7 +125,7 @@ impl HeadlessRun {
             Some(Ok(path)) => Some(path),
             Some(Err(e)) => {
                 handle.shutdown();
-                return Err(AppError::Repository(RepositoryError::Format(e)));
+                return Err(e.into());
             }
             None => {
                 service.start_recording(&name, &handle, record.interval, record.dust_budget)?;
@@ -205,7 +196,7 @@ impl HeadlessRun {
             fraction: fraction.map(|f| f.clamp(0.0, 1.0)),
             frames: status.frames.load(Ordering::Relaxed),
             bytes: status.bytes.load(Ordering::Relaxed),
-            error: (snap.phase == Phase::Failed).then(|| engine_error(&snap.error)),
+            error: (snap.phase == Phase::Failed).then(|| AppError::EngineFailed(snap.error.clone())),
         }
     }
 
@@ -237,10 +228,9 @@ impl HeadlessRun {
         }
         let first = h.latest();
         if first.phase == Phase::Failed {
-            let message = engine_error(&first.error);
             h.stop_recording();
             self.handle.shutdown();
-            return Err(AppError::EngineFailed(message));
+            return Err(AppError::EngineFailed(first.error.clone()));
         }
         // Pausing publishes an up-to-date full state.
         let deadline = Instant::now() + Duration::from_secs(60);

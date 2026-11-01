@@ -6,6 +6,7 @@
 //! in the parameters.
 
 use std::any::Any;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::{
@@ -140,11 +141,49 @@ pub trait EngineFactory: Send + Sync {
         None
     }
 
-    /// Builds an engine from a state and parameters. Fails, with a readable
-    /// message, if the required hardware is missing or insufficient.
+    /// Builds an engine from a state and parameters. Fails if the required
+    /// hardware is missing or insufficient.
     fn create(
         &self,
         state: SimulationState,
         params: PhysicsParams,
-    ) -> Result<Box<dyn PhysicsEngine>, String>;
+    ) -> Result<Box<dyn PhysicsEngine>, EngineError>;
 }
+
+/// Reason why an engine cannot be built. `Display` gives an English message
+/// (logs); the interface translates each variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineError {
+    /// No compatible graphics card was found.
+    NoDevice,
+    /// The graphics card does not support compute shaders.
+    ComputeUnsupported,
+    /// The graphics card could not be opened (driver message).
+    DeviceOpen(String),
+    /// More bodies than the engine can handle.
+    TooManyBodies { requested: usize, limit: usize },
+    /// Body identifiers too large for the engine.
+    IdsTooLarge,
+    /// A buffer would exceed the device's limit.
+    BufferTooLarge { device: String, buffer_mb: u64, limit_mb: u64 },
+}
+
+impl fmt::Display for EngineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoDevice => write!(f, "no compatible graphics card was found"),
+            Self::ComputeUnsupported => write!(f, "the graphics card does not support compute shaders"),
+            Self::DeviceOpen(e) => write!(f, "cannot open the graphics card: {e}"),
+            Self::TooManyBodies { requested, limit } => {
+                write!(f, "the engine is limited to {limit} bodies ({requested} requested)")
+            }
+            Self::IdsTooLarge => write!(f, "body identifiers too large for the engine"),
+            Self::BufferTooLarge { device, buffer_mb, limit_mb } => write!(
+                f,
+                "too many bodies for this graphics card ({device}: buffer of {buffer_mb} MB, limit {limit_mb} MB)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EngineError {}

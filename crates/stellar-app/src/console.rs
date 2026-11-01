@@ -20,6 +20,7 @@ use stellar_engine_cpu::CpuEngineFactory;
 use stellar_engine_gpu::GpuEngineFactory;
 use stellar_persistence::{FileRecordingRepository, FileRepository};
 
+use crate::errors::Localized;
 use crate::headless::hms;
 use crate::{format, RECORDINGS_DIR, SAVES_DIR};
 
@@ -295,7 +296,7 @@ pub fn run(args: &[String]) -> i32 {
         Arc::new(FileRecordingRepository::new(RECORDINGS_DIR)),
     );
     if let Err(e) = &gpu {
-        println!("{}", tr!("Moteur GPU indisponible : {}", e));
+        println!("{}", tr!("Moteur GPU indisponible : {}", e.localized()));
     }
     let started = match &o.start {
         Start::New => {
@@ -360,7 +361,7 @@ pub fn run(args: &[String]) -> i32 {
             run
         }
         Err(e) => {
-            eprintln!("{}", tr!("Erreur : {}", e));
+            eprintln!("{}", tr!("Erreur : {}", e.localized()));
             return 1;
         }
     };
@@ -399,7 +400,7 @@ pub fn run(args: &[String]) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("{}", tr!("Échec : {}", e));
+            eprintln!("{}", tr!("Échec : {}", e.localized()));
             1
         }
     }

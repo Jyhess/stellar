@@ -29,8 +29,8 @@ use std::sync::Arc;
 
 use stellar_domain::systems::{negligible_escapee, ViewPart, MERGE_RATIO, SPLIT_RATIO};
 use stellar_domain::{
-    ranking, BodyId, BodySet, Diagnostics, EjectedCluster, EngineFactory, ExternalField, Moments,
-    PhysicsEngine, PhysicsParams, SimulationState, StepReport, SystemSpan, SystemSummary,
+    ranking, BodyId, BodySet, Diagnostics, EjectedCluster, EngineError, EngineFactory, ExternalField,
+    Moments, PhysicsEngine, PhysicsParams, SimulationState, StepReport, SystemSpan, SystemSummary,
     SystemsView, Vec3,
 };
 
@@ -101,7 +101,7 @@ impl MultiSystem {
         factory: Arc<dyn EngineFactory>,
         state: SimulationState,
         params: PhysicsParams,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         let mut this = Self {
             factory,
             params,
@@ -153,7 +153,7 @@ impl MultiSystem {
         size: f64,
         step: u64,
         time: f64,
-    ) -> Result<Subsystem, String> {
+    ) -> Result<Subsystem, EngineError> {
         let anchor = heaviest(&bodies);
         let moments = moments_of(&bodies);
         shift(&mut bodies, -origin);

@@ -5,10 +5,8 @@
 //! otherwise (or if it is missing from the table). [`tr!`](macro@crate::tr) does
 //! the same for a template with `{}` placeholders.
 //!
-//! Messages of the lower layers (domain, application, engines, persistence)
-//! are also written in French; [`tr_msg`] translates them from the
-//! `MESSAGES` templates, including the messages they quote. Arguments of
-//! [`tr!`](macro@crate::tr) go through it.
+//! Errors of the lower layers (domain, application, engines, persistence) are
+//! typed; [`crate::errors::Localized`] gives their text.
 //!
 //! Default language: Windows' (French, or English otherwise); a choice made
 //! in the menu is stored in `%APPDATA%\Stellar\langue`.
@@ -69,7 +67,7 @@ pub fn lang() -> Lang {
     }
 }
 
-fn apply(l: Lang) {
+pub(crate) fn apply(l: Lang) {
     with_lang(|v| v.store(matches!(l, Lang::En) as u8, Ordering::Relaxed));
 }
 
@@ -152,52 +150,13 @@ pub fn fill(template: &str, args: &[&dyn Display]) -> String {
     while let Some(i) = rest.find("{}") {
         out.push_str(&rest[..i]);
         match args.next() {
-            Some(a) => out.push_str(&tr_msg(&a.to_string())),
+            Some(a) => out.push_str(&a.to_string()),
             None => out.push_str("{}"),
         }
         rest = &rest[i + 2..];
     }
     out.push_str(rest);
     out
-}
-
-/// Translation of a message of the lower layers, which may quote another
-/// one (`fichier invalide : fichier tronqué`). Unknown text is returned as is.
-pub fn tr_msg(fr: &str) -> String {
-    if lang() == Lang::Fr {
-        return fr.to_owned();
-    }
-    static EXACT: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    let exact = EXACT.get_or_init(|| {
-        MESSAGES.iter().copied().filter(|(fr, _)| !fr.contains("{}")).collect()
-    });
-    if let Some(en) = exact.get(fr) {
-        return (*en).to_owned();
-    }
-    for (template, en) in MESSAGES.iter().filter(|(t, _)| t.contains("{}")) {
-        if let Some(parts) = captures(template, fr) {
-            let parts: Vec<String> = parts.into_iter().map(tr_msg).collect();
-            let args: Vec<&dyn Display> = parts.iter().map(|p| p as &dyn Display).collect();
-            return fill(en, &args);
-        }
-    }
-    fr.to_owned()
-}
-
-/// Parts of `text` matching the `{}` of `template` (leftmost occurrence of
-/// each inner literal part), or `None` if it does not match.
-fn captures<'a>(template: &str, text: &'a str) -> Option<Vec<&'a str>> {
-    let literals: Vec<&str> = template.split("{}").collect();
-    let (first, last) = (literals[0], literals[literals.len() - 1]);
-    let mut rest = text.strip_prefix(first)?.strip_suffix(last)?;
-    let mut parts = Vec::new();
-    for literal in &literals[1..literals.len() - 1] {
-        let i = rest.find(literal)?;
-        parts.push(&rest[..i]);
-        rest = &rest[i + literal.len()..];
-    }
-    parts.push(rest);
-    Some(parts)
 }
 
 /// Translated text with `{}` placeholders: `tr!("Masse : {}", m)`.
@@ -647,31 +606,17 @@ sauvegardé (dossiers « {} » et « {} »).", "Usage: stellar-cli [options]    
     ("Octree de Barnes-Hut sur tous les cœurs (sauf un, réservé à l'affichage).", "Barnes-Hut octree on all cores (but one, kept for the display)."),
     ("GPU — Barnes-Hut (carte graphique)", "GPU — Barnes-Hut (graphics card)"),
     ("Arbre de Barnes-Hut construit et parcouru sur la carte graphique (simple précision).", "Barnes-Hut tree built and traversed on the graphics card (single precision)."),
-];
-
-/// Messages of the lower layers (named placeholders of the source written
-/// `{}`). A test checks that every French message of those crates is here.
-const MESSAGES: &[(&str, &str)] = &[
-    // stellar-application
-    ("erreur d'entrée/sortie : {}", "input/output error: {}"),
-    ("fichier invalide : {}", "invalid file: {}"),
-    ("version de format non prise en charge : {}", "unsupported format version: {}"),
-    ("moteur de calcul inconnu : « {} »", "unknown computation engine: “{}”"),
-    ("la simulation n'est pas encore prête", "the simulation is not ready yet"),
-    ("le moteur de calcul n'a pas pu démarrer", "the computation engine could not start"),
-    ("le moteur de calcul n'a pas pu démarrer : {}", "the computation engine could not start: {}"),
-    ("thread d'enregistrement interrompu", "recording thread interrupted"),
-    ("enregistrement déjà clos", "recording already closed"),
-    ("enregistrement vide", "empty recording"),
-    ("l'enregistrement provient d'une autre simulation (conditions initiales différentes)", "the recording comes from another simulation (different initial conditions)"),
-    ("l'enregistrement commence après le pas de la sauvegarde", "the recording starts after the save's step"),
-    ("le corps n° {} de la sauvegarde est absent de l'enregistrement au pas {} : il provient d'une autre simulation", "body no. {} of the save is missing from the recording at step {}: it comes from another simulation"),
-    // stellar-persistence
-    ("fichier introuvable : {}", "file not found: {}"),
-    ("le nom « {} » est déjà pris", "the name “{}” is already taken"),
-    ("suppression annulée ou impossible (code {})", "deletion cancelled or impossible (code {})"),
+    ("erreur inconnue", "unknown error"),
+    // Errors of the lower layers (errors.rs)
+    ("aucune carte graphique compatible n'a été trouvée", "no compatible graphics card was found"),
+    ("la carte graphique ne gère pas les shaders de calcul", "the graphics card does not support compute shaders"),
+    ("ouverture de la carte graphique impossible : {}", "cannot open the graphics card: {}"),
+    ("le moteur de calcul est limité à {} corps ({} demandés)", "the computation engine is limited to {} bodies ({} requested)"),
+    ("identifiants de corps trop grands pour le moteur de calcul", "body identifiers too large for the computation engine"),
+    ("trop de corps pour cette carte graphique ({} : tampon de {} Mo, limite {} Mo)", "too many bodies for this graphics card ({}: buffer of {} MB, limit {} MB)"),
     ("fichier tronqué", "truncated file"),
     ("signature absente : ce n'est pas une sauvegarde Stellar", "missing signature: this is not a Stellar save"),
+    ("ce n'est pas un enregistrement Stellar", "this is not a Stellar recording"),
     ("en-tête démesuré", "oversized header"),
     ("tableaux de corps incohérents", "inconsistent body arrays"),
     ("instantané tronqué", "truncated snapshot"),
@@ -680,16 +625,24 @@ const MESSAGES: &[(&str, &str)] = &[
     ("nombre de sous-systèmes invalide", "invalid subsystem count"),
     ("sous-système inconnu", "unknown subsystem"),
     ("devenir inconnu", "unknown fate"),
-    ("ce n'est pas un enregistrement Stellar", "this is not a Stellar recording"),
     ("instantané hors limites", "snapshot out of range"),
     ("l'instantané du pas {} est introuvable dans l'enregistrement", "the snapshot of step {} is missing from the recording"),
-    // stellar-engine-gpu
-    ("la carte graphique ne gère pas les shaders de calcul", "the graphics card does not support compute shaders"),
-    ("aucune carte graphique compatible n'a été trouvée", "no compatible graphics card was found"),
-    ("ouverture de la carte graphique impossible : {}", "cannot open the graphics card: {}"),
-    ("le moteur GPU est limité à {} corps ({} demandés)", "the GPU engine is limited to {} bodies ({} requested)"),
-    ("identifiants de corps trop grands pour le moteur GPU", "body identifiers too large for the GPU engine"),
-    ("trop de corps pour cette carte graphique ({} : tampon de {} Mo, limite {} Mo)", "too many bodies for this graphics card ({}: buffer of {} MB, limit {} MB)"),
+    ("enregistrement vide", "empty recording"),
+    ("erreur d'entrée/sortie : {}", "input/output error: {}"),
+    ("fichier introuvable : {}", "file not found: {}"),
+    ("le nom « {} » est déjà pris", "the name “{}” is already taken"),
+    ("suppression annulée ou impossible (code {})", "deletion cancelled or impossible (code {})"),
+    ("thread d'enregistrement interrompu", "recording thread interrupted"),
+    ("enregistrement déjà clos", "recording already closed"),
+    ("fichier invalide : {}", "invalid file: {}"),
+    ("version de format non prise en charge : {}", "unsupported format version: {}"),
+    ("l'enregistrement provient d'une autre simulation (conditions initiales différentes)", "the recording comes from another simulation (different initial conditions)"),
+    ("l'enregistrement commence après le pas de la sauvegarde", "the recording starts after the save's step"),
+    ("le corps n° {} de la sauvegarde est absent de l'enregistrement au pas {} : il provient d'une autre simulation", "body no. {} of the save is missing from the recording at step {}: it comes from another simulation"),
+    ("moteur de calcul inconnu : « {} »", "unknown computation engine: “{}”"),
+    ("la simulation n'est pas encore prête", "the simulation is not ready yet"),
+    ("le moteur de calcul n'a pas pu démarrer", "the computation engine could not start"),
+    ("le moteur de calcul n'a pas pu démarrer : {}", "the computation engine could not start: {}"),
 ];
 
 #[cfg(test)]
@@ -710,141 +663,5 @@ mod tests {
             assert!(seen.insert(fr), "en double : {fr}");
             assert_eq!(fr.matches("{}").count(), en.matches("{}").count(), "{fr}");
         }
-        let mut seen = std::collections::HashSet::new();
-        for (fr, en) in MESSAGES {
-            assert!(seen.insert(fr), "duplicate: {fr}");
-            assert!(!fr.contains("{}{}"), "adjacent placeholders: {fr}");
-            assert_eq!(fr.matches("{}").count(), en.matches("{}").count(), "{fr}");
-        }
-    }
-
-    #[test]
-    fn translates_nested_messages() {
-        apply(Lang::En);
-        assert_eq!(tr_msg("fichier invalide : fichier tronqué"), "invalid file: truncated file");
-        assert_eq!(
-            tr_msg("le moteur GPU est limité à 16776960 corps (20000000 demandés)"),
-            "the GPU engine is limited to 16776960 bodies (20000000 requested)"
-        );
-        assert_eq!(tr_msg("erreur d'entrée/sortie : Access denied"), "input/output error: Access denied");
-        assert_eq!(tr_msg("galaxie"), "galaxie");
-        assert_eq!(
-            tr!("Chargement impossible : {}", "fichier invalide : varint invalide"),
-            fill(tr("Chargement impossible : {}"), &[&"invalid file: invalid varint"])
-        );
-        apply(Lang::Fr);
-        assert_eq!(tr_msg("fichier tronqué"), "fichier tronqué");
-    }
-
-    /// Every French string literal of the lower crates (outside their tests)
-    /// has an English translation in `MESSAGES` or `EN`.
-    #[test]
-    fn lower_layer_messages_are_translated() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let known: std::collections::HashSet<&str> =
-            MESSAGES.iter().chain(EN).map(|(fr, _)| *fr).collect();
-        let mut missing = Vec::new();
-        for krate in [
-            "stellar-domain",
-            "stellar-application",
-            "stellar-persistence",
-            "stellar-engine-cpu",
-            "stellar-engine-gpu",
-        ] {
-            let mut dirs = vec![root.join(krate).join("src")];
-            while let Some(dir) = dirs.pop() {
-                for entry in std::fs::read_dir(&dir).unwrap() {
-                    let path = entry.unwrap().path();
-                    if path.is_dir() {
-                        dirs.push(path);
-                    } else if path.extension().is_some_and(|e| e == "rs") {
-                        let source = std::fs::read_to_string(&path).unwrap();
-                        let code = source.split("#[cfg(test)]").next().unwrap();
-                        for literal in literals(code) {
-                            let template = named_placeholders(&literal);
-                            if looks_french(&template) && !known.contains(template.as_str()) {
-                                missing.push(format!("{}: {template}", path.display()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(missing.is_empty(), "untranslated messages:\n{}", missing.join("\n"));
-    }
-
-    /// String literals of Rust code, outside comments (character literals
-    /// and lifetimes skipped).
-    fn literals(code: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut chars = code.chars().peekable();
-        while let Some(c) = chars.next() {
-            match c {
-                '/' if chars.peek() == Some(&'/') => {
-                    for c in chars.by_ref() {
-                        if c == '\n' {
-                            break;
-                        }
-                    }
-                }
-                '\'' => {
-                    // '"', '\"' or a lifetime: never the start of a string.
-                    if chars.peek() == Some(&'\\') {
-                        chars.next();
-                        chars.next();
-                    } else if chars.peek() == Some(&'"') {
-                        chars.next();
-                    }
-                }
-                '"' => {
-                    let mut s = String::new();
-                    while let Some(c) = chars.next() {
-                        match c {
-                            '\\' => {
-                                // Line continuation: skip the indentation.
-                                if chars.next() == Some('\n') {
-                                    while chars.peek().is_some_and(|c| c.is_whitespace()) {
-                                        chars.next();
-                                    }
-                                }
-                            }
-                            '"' => break,
-                            c => s.push(c),
-                        }
-                    }
-                    out.push(s);
-                }
-                _ => {}
-            }
-        }
-        out
-    }
-
-    /// `{name}` and `{0}` written `{}`.
-    fn named_placeholders(s: &str) -> String {
-        let mut out = String::new();
-        let mut rest = s;
-        while let Some(i) = rest.find('{') {
-            out.push_str(&rest[..i]);
-            match rest[i..].find('}') {
-                Some(j) if rest[i + 1..i + j].chars().all(|c| c.is_alphanumeric() || c == '_') => {
-                    out.push_str("{}");
-                    rest = &rest[i + j + 1..];
-                }
-                _ => {
-                    out.push('{');
-                    rest = &rest[i + 1..];
-                }
-            }
-        }
-        out.push_str(rest);
-        out
-    }
-
-    fn looks_french(s: &str) -> bool {
-        s.chars().any(|c| "éèêàùçôîâœ«»".contains(c))
-            || [" de ", " le ", " la ", " du ", " des ", " est ", "n'", "l'", "d'"]
-                .iter()
-                .any(|w| s.contains(w))
     }
 }

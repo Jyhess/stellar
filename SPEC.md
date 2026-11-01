@@ -7,11 +7,11 @@ The rules currently in force. This document is the reference when the code and t
 - **Rust + wgpu + egui**, Windows only (native executables `stellar.exe` and `stellar-cli.exe`).
 - Two engines: **GPU** (wgpu compute shaders, single precision; the default when a compatible card is present) and **CPU** (rayon, AVX2/FMA, double precision).
 - Target: **1 million particles and more**. GPU limit: 65,535 × 256 ≈ 16.7 M bodies. Creation limit: engine limit, 80 % of main memory, one billion.
-- Interface in French and English; documentation, code comments, command-line option names and commit messages in English; error messages of the lower layers written in French and translated by the interface; developer-facing text (panics, tests, examples, statistics) in English.
+- Interface in French and English; documentation, code comments, command-line option names and commit messages in English; errors of the lower layers typed (enums with an English `Display`), each variant translated by the interface; developer-facing text (panics, tests, examples, statistics) in English.
 
 ## Architecture
 - **Clean architecture** (domain / use cases / adapters / infrastructure), except inside the engines, which are freely optimized (SoA, SIMD, GPU).
-- Engines are reached only through the `PhysicsEngine` / `EngineFactory` traits. They are selected in the advanced parameters, `STELLAR_ENGINE` or `--engine`. `EngineFactory::create` returns a readable error rather than panicking.
+- Engines are reached only through the `PhysicsEngine` / `EngineFactory` traits. They are selected in the advanced parameters, `STELLAR_ENGINE` or `--engine`. `EngineFactory::create` returns an `EngineError` rather than panicking.
 - File formats are independent of the engine. The GPU engine is the default when the probe succeeds; a GPU save falls back to the CPU engine on load when no card is available.
 - Simulation runs on a **dedicated thread, decoupled** from the display, which reads the latest published snapshot (at most 120 frames/s). With the GPU engine, the display reads the engine's buffers directly, and the full state is read back only every one to two seconds.
 - The simulation thread always wraps the engine in a composite of **subsystems** (`MultiSystem`; usually a single one).

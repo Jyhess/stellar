@@ -37,7 +37,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use stellar_application::{RepositoryError, SaveData, SaveSummary, SimulationRepository};
+use stellar_application::{FormatError, RepositoryError, SaveData, SaveSummary, SimulationRepository};
 
 pub const EXTENSION: &str = "stellar";
 const MAGIC: &[u8; 8] = b"STELLAR\0";
@@ -91,8 +91,9 @@ fn io(e: std::io::Error) -> RepositoryError {
     RepositoryError::Io(e.to_string())
 }
 
+/// Decoding failure of the serializer.
 fn fmt(e: impl std::fmt::Display) -> RepositoryError {
-    RepositoryError::Format(e.to_string())
+    FormatError::Decode(e.to_string()).into()
 }
 
 fn now_unix() -> i64 {
@@ -106,11 +107,9 @@ fn now_unix() -> i64 {
 fn read_header(r: &mut impl Read) -> Result<(SaveSummary, u32), RepositoryError> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)
-        .map_err(|_| fmt("fichier tronqué"))?;
+        .map_err(|_| FormatError::Truncated)?;
     if &magic != MAGIC {
-        return Err(fmt(
-            "signature absente : ce n'est pas une sauvegarde Stellar",
-        ));
+        return Err(FormatError::NotASave.into());
     }
     let mut word = [0u8; 4];
     r.read_exact(&mut word).map_err(io)?;
@@ -121,7 +120,7 @@ fn read_header(r: &mut impl Read) -> Result<(SaveSummary, u32), RepositoryError>
     r.read_exact(&mut word).map_err(io)?;
     let len = u32::from_le_bytes(word);
     if len > MAX_HEADER {
-        return Err(fmt("en-tête démesuré"));
+        return Err(FormatError::OversizedHeader.into());
     }
     let mut buf = vec![0u8; len as usize];
     r.read_exact(&mut buf).map_err(io)?;
@@ -235,7 +234,7 @@ impl SimulationRepository for FileRepository {
             bincode::deserialize_from(dec).map_err(fmt)?
         };
         if !data.state.bodies.is_consistent() {
-            return Err(fmt("tableaux de corps incohérents"));
+            return Err(FormatError::InconsistentBodyArrays.into());
         }
         Ok(data)
     }

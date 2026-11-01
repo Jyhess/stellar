@@ -18,6 +18,7 @@ use std::thread::JoinHandle;
 use rayon::prelude::*;
 use stellar_domain::{ranking, BodyId, BodySet, SimulationState, Vec3};
 
+use crate::ports::RepositoryError;
 use crate::recording::{BodyFate, Keyframe, RecordingInfo, RecordingReader};
 
 /// Number of snapshots kept in memory.
@@ -202,7 +203,7 @@ struct Cache {
     frames: HashMap<usize, Arc<Keyframe>>,
     pending: HashSet<usize>,
     focus: usize,
-    error: Option<String>,
+    error: Option<RepositoryError>,
 }
 
 struct Loader {
@@ -245,7 +246,7 @@ impl Loader {
                                     g.frames.remove(&far);
                                 }
                             }
-                            Err(e) => g.error = Some(e.to_string()),
+                            Err(e) => g.error = Some(e),
                         }
                     }
                 }
@@ -280,7 +281,7 @@ impl Loader {
         self.cache.lock().expect("lock").focus = i;
     }
 
-    fn error(&self) -> Option<String> {
+    fn error(&self) -> Option<RepositoryError> {
         self.cache.lock().expect("lock").error.clone()
     }
 }
@@ -379,7 +380,7 @@ impl ReplayPlayer {
             .is_none_or(|s| (s - self.clock.position).abs() > 1e-9)
     }
 
-    pub fn error(&self) -> Option<String> {
+    pub fn error(&self) -> Option<RepositoryError> {
         self.loader.error()
     }
 
@@ -476,7 +477,7 @@ impl ReplayPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::RepositoryError;
+    use crate::ports::FormatError;
     use crate::recording::RecordingHeader;
     use stellar_domain::SimulationConfig;
 
@@ -593,7 +594,7 @@ mod tests {
             self.frames
                 .get(index)
                 .cloned()
-                .ok_or_else(|| RepositoryError::Format("out of range".into()))
+                .ok_or(RepositoryError::Format(FormatError::SnapshotOutOfRange))
         }
     }
 

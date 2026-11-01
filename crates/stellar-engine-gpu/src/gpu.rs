@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use stellar_domain::EngineError;
 use wgpu::util::DeviceExt;
 
 /// Workgroup size of every kernel.
@@ -69,7 +70,7 @@ pub struct SharedDevice {
     pub queue: wgpu::Queue,
 }
 
-fn check_adapter(adapter: &wgpu::Adapter) -> Result<(), String> {
+fn check_adapter(adapter: &wgpu::Adapter) -> Result<(), EngineError> {
     if adapter
         .get_downlevel_capabilities()
         .flags
@@ -77,7 +78,7 @@ fn check_adapter(adapter: &wgpu::Adapter) -> Result<(), String> {
     {
         Ok(())
     } else {
-        Err("la carte graphique ne gère pas les shaders de calcul".to_owned())
+        Err(EngineError::ComputeUnsupported)
     }
 }
 
@@ -124,7 +125,7 @@ pub struct Gpu {
 
 impl Gpu {
     /// Opens the most powerful graphics device available.
-    pub fn open() -> Result<Self, String> {
+    pub fn open() -> Result<Self, EngineError> {
         let backends =
             wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL);
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -136,7 +137,7 @@ impl Gpu {
             force_fallback_adapter: false,
             compatible_surface: None,
         }))
-        .ok_or_else(|| "aucune carte graphique compatible n'a été trouvée".to_owned())?;
+        .ok_or(EngineError::NoDevice)?;
         check_adapter(&adapter)?;
         let info = adapter.get_info();
         let limits = adapter.limits();
@@ -156,7 +157,7 @@ impl Gpu {
             },
             None,
         ))
-        .map_err(|e| format!("ouverture de la carte graphique impossible : {e}"))?;
+        .map_err(|e| EngineError::DeviceOpen(e.to_string()))?;
         let profiler = profile.then(|| {
             RefCell::new(Profiler {
                 queries: device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -187,7 +188,7 @@ impl Gpu {
 
     /// Uses a device that is already open (the interface's), so that its buffers
     /// can be displayed without copy.
-    pub fn shared(shared: &SharedDevice) -> Result<Self, String> {
+    pub fn shared(shared: &SharedDevice) -> Result<Self, EngineError> {
         check_adapter(&shared.adapter)?;
         let info = shared.adapter.get_info();
         Ok(Self {

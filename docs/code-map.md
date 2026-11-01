@@ -28,7 +28,8 @@ Layers and crate roles: README "Architecture". Dependencies point to the domain;
 | **Merger rule** | `merge`, `body_radius`, `swept_min_distance` (`domain/physics.rs`); CPU `find_contacts` (`engine-cpu/collisions.rs`), `CpuEngine::resolve_collisions`; GPU `collide.wgsl`, `GpuEngine::plan_merges`, `apply_merges.wgsl` |
 | **New method on engines** | `PhysicsEngine` (`domain/engine.rs`) → `CpuEngine`, `GpuEngine`, **and** `MultiSystem` (which forwards to its subsystems) |
 | **New engine** | README "Adding a computation engine": `EngineFactory` + registration in `app/lib.rs` (`run_gui`) and `--engine` mapping in `console.rs` |
-| **Translated text** | `tr` / `tr!` at the call site, entry in `EN` (interface) or `MESSAGES` (lower layers) of `app/i18n.rs`; numbers `app/format.rs` |
+| **Translated text** | `tr` / `tr!` at the call site, entry in `EN` of `app/i18n.rs`; numbers `app/format.rs` |
+| **New error case** | variant of the lower layer's enum (`EngineError` `domain/engine.rs`, `RepositoryError` / `FormatError` `application/ports.rs`, `AppError` / `ContinuationError` `application/service.rs`) with its English `Display` → its `Localized` arm (`app/errors.rs`, does not compile without it) and its `EN` entry |
 | **Environment variable** | read in `StellarApp::autostart` (`app/app.rs`; `STELLAR_LOAD`, `REPLAY`, `AUTOSTART`, `ENGINE`, `AUTODISK`, `AUTORECORD`), `i18n::init` (`STELLAR_LANG`), `present_mode` (`app/lib.rs`, `STELLAR_PRESENT`), `SimScreen::new` (`STELLAR_STATS`), `Gpu::open` (`engine-gpu/gpu.rs`, `STELLAR_GPU_PROFILE`); README "Environment variables" |
 | **Screen flow** (home → simulation → background) | `Screen`, `StellarApp::update` (`app/app.rs`); actions `HomeAction`, `SimAction`, `HeadlessAction` |
 | **Run without display** | `HeadlessRun`, `RunTarget` (`application/headless.rs`); UI `HeadlessScreen` (`app/headless.rs`); CLI `console::run` |
@@ -42,7 +43,7 @@ Layers and crate roles: README "Architecture". Dependencies point to the domain;
 | `lib.rs` | Module list, `Vec3 = DVec3` |
 | `body.rs` | `BodyId`, `BodySet` (structure of arrays: ids, positions, velocities, masses) |
 | `config.rs` | `InitialConditions` (`Distribution`, `DensityProfile`, `VelocityMode`, `DustMasses`, `Planets`), `PhysicsParams`, `SimulationConfig`, limits (`MAX_PLANETS`, `MAX_DUST_MASS`…) |
-| `engine.rs` | **`PhysicsEngine`**, **`EngineFactory`**, `EngineDescriptor`, `StepReport`, `Diagnostics` |
+| `engine.rs` | **`PhysicsEngine`**, **`EngineFactory`**, `EngineError`, `EngineDescriptor`, `StepReport`, `Diagnostics` |
 | `physics.rs` | `body_radius`, `swept_min_distance`, `merge` / `MergeInput` |
 | `ejection.rs` | Cleanup of ejected bodies: `Candidate`, `EjectionRules`, `sort_out`, `friends_of_friends`, `EjectedCluster`, `local_cluster` |
 | `ranking.rs` | Mass order: `rank_cmp`, `heaviest`, `neighbour`, `rank_of`, `top_k` |
@@ -56,12 +57,12 @@ Tests: `tests/ejection.rs` (cleanup rule).
 | File | Contents |
 |---|---|
 | `lib.rs` | Module list |
-| `ports.rs` | `SimulationRepository`, `SaveData`, `SaveSummary`, `ViewState`, `RepositoryError` |
+| `ports.rs` | `SimulationRepository`, `SaveData`, `SaveSummary`, `ViewState`, `RepositoryError`, `FormatError` |
 | `registry.rs` | `EngineRegistry` |
 | `generator.rs` | `generate_state`, `generate_bodies` (positions `sample_position`, masses `DustMassDraw` / `massive_masses`, velocities `assign_velocities`), `initial_total_mass` |
 | `runner.rs` | Simulation thread. `SimulationHandle` (public API: pause, step, traces, recording, `live_view`, `latest`), `Snapshot`, `Phase`, `Command`; `Worker` (`run_loop`, `step`, `apply_fates`, `refresh_full_state`, `publish`, recording methods) |
 | `systems.rs` | `MultiSystem` (composite `PhysicsEngine`): `step`, `apply_fields`, `try_split`, `try_merge`, `recenter`, `prune_negligible`, `locate`, `live_view` |
-| `service.rs` | `SimulatorService` facade: create / load / save / list / rename / delete, `start_loaded`, recordings and their links (`continuation_link`, `continuable_recordings`), `open_replay`; `name_from_file`, `AppError` |
+| `service.rs` | `SimulatorService` facade: create / load / save / list / rename / delete, `start_loaded`, recordings and their links (`continuation_link`, `continuable_recordings`), `open_replay`; `name_from_file`, `AppError`, `ContinuationError` |
 | `recording.rs` | `Keyframe`, `BodyFate`, `apply_dust_budget`, `RecordingHeader`, `RecordingLink`, ports `RecordingWriter` / `RecordingReader` / `RecordingRepository`, `Recorder` (writer thread) |
 | `replay.rs` | `ReplayPlayer` (cache, prefetch `Loader`), `PlaybackClock`, Hermite `interpolate`, `build_targets` |
 | `trace.rs` | `TraceSet`, `Trace`, `TraceReference`, `ClusterTrack`, `cluster_members`, `relative_to` |
@@ -131,7 +132,8 @@ Tests: `tests/continuation.rs`, `tests/files.rs`. Examples: `examples/inspect.rs
 | `picking.rs` | `pick`, `visible_top_k` |
 | `render/mod.rs` | `PointRenderer` (chunked instance buffers, follow buffer: `prepare_follow`), `Follow` (tracked body or barycenter), `PointsSource` (direct GPU view or copied instances), `PointsCallback`, `mass_color` |
 | `render/points.wgsl` | Billboard shader |
-| `i18n.rs` | `Lang`, `tr`, `tr!`, `tr_msg`, `EN` and `MESSAGES` tables, translation tests |
+| `i18n.rs` | `Lang`, `tr`, `tr!`, `EN` table, translation tests |
+| `errors.rs` | `Localized`: text of each lower-layer error variant in the interface's language |
 | `format.rs` | `count`, `real`, `percent`, `decimal_sep` |
 
 ### Inside `sim.rs` (`SimScreen`)

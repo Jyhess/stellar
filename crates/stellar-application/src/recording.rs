@@ -214,7 +214,7 @@ pub struct RecordingStatus {
     pub frames: AtomicU64,
     pub bytes: AtomicU64,
     pub interval: AtomicU64,
-    pub error: Mutex<Option<String>>,
+    pub error: Mutex<Option<RepositoryError>>,
     pub last_path: Mutex<Option<PathBuf>>,
     /// File of the running recording.
     pub current_path: Mutex<Option<PathBuf>>,
@@ -258,7 +258,7 @@ impl Recorder {
                             st.bytes.fetch_add(bytes, Ordering::Relaxed);
                         }
                         Err(e) => {
-                            *st.error.lock().expect("lock") = Some(e.to_string());
+                            *st.error.lock().expect("lock") = Some(e.clone());
                             return Err(e);
                         }
                     }
@@ -294,18 +294,16 @@ impl Recorder {
     fn close(&mut self) -> Result<PathBuf, RepositoryError> {
         self.tx.take();
         let result = match self.thread.take() {
-            Some(t) => t.join().unwrap_or_else(|_| {
-                Err(RepositoryError::Io(
-                    "thread d'enregistrement interrompu".into(),
-                ))
-            }),
-            None => Err(RepositoryError::Io("enregistrement déjà clos".into())),
+            Some(t) => t
+                .join()
+                .unwrap_or(Err(RepositoryError::RecorderInterrupted)),
+            None => Err(RepositoryError::RecordingClosed),
         };
         self.status.active.store(false, Ordering::Release);
         *self.status.current_path.lock().expect("lock") = None;
         match &result {
             Ok(p) => *self.status.last_path.lock().expect("lock") = Some(p.clone()),
-            Err(e) => *self.status.error.lock().expect("lock") = Some(e.to_string()),
+            Err(e) => *self.status.error.lock().expect("lock") = Some(e.clone()),
         }
         result
     }

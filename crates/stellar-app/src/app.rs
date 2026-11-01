@@ -8,6 +8,7 @@ use eframe::egui;
 use stellar_application::SimulatorService;
 use stellar_engine_gpu::{GpuEngineFactory, SharedDevice};
 
+use crate::errors::Localized;
 use crate::headless::{HeadlessAction, HeadlessScreen};
 use crate::home::{HomeAction, HomeScreen};
 use crate::render::PointRenderer;
@@ -142,7 +143,7 @@ impl StellarApp {
             Ok(path) => tr!("Enregistrement suspendu. Il reprendra en rechargeant la sauvegarde « {} ».", path.file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default()),
-            Err(e) => tr!("La suspension de l'enregistrement a échoué : {}", e),
+            Err(e) => tr!("La suspension de l'enregistrement a échoué : {}", e.localized()),
         })
     }
 
@@ -202,7 +203,7 @@ impl eframe::App for StellarApp {
                                 None,
                             )));
                         }
-                        Err(e) => home.message = Some(crate::i18n::tr_msg(&e.to_string())),
+                        Err(e) => home.message = Some(e.localized()),
                     }
                 }
                 // Paused, to arm the recording before the first step.
@@ -216,7 +217,7 @@ impl eframe::App for StellarApp {
                                 r.interval,
                                 r.dust_budget,
                             ) {
-                                home.message = Some(tr!("Enregistrement impossible : {}", e));
+                                home.message = Some(tr!("Enregistrement impossible : {}", e.localized()));
                             }
                         }
                         handle.resume();
@@ -226,7 +227,7 @@ impl eframe::App for StellarApp {
                             None,
                         ));
                     }
-                    Err(e) => home.message = Some(crate::i18n::tr_msg(&e.to_string())),
+                    Err(e) => home.message = Some(e.localized()),
                 },
                 a @ (HomeAction::Load(_) | HomeAction::LoadContinuing(..)) => match match a {
                     HomeAction::LoadContinuing(data, path, save_name) => {
@@ -245,12 +246,12 @@ impl eframe::App for StellarApp {
                         );
                         match loaded.recording {
                             Some(Ok(p)) => sim.notify(tr!("Enregistrement « {} » poursuivi : il reprend dès la relance du calcul (Espace).", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())),
-                            Some(Err(e)) => sim.notify(tr!("Reprise de l'enregistrement impossible : {}", e)),
+                            Some(Err(e)) => sim.notify(tr!("Reprise de l'enregistrement impossible : {}", e.localized())),
                             None => {}
                         }
                         self.screen = Screen::sim(sim);
                     }
-                    Err(e) => home.message = Some(tr!("Chargement impossible : {}", e)),
+                    Err(e) => home.message = Some(tr!("Chargement impossible : {}", e.localized())),
                 },
                 HomeAction::Replay(path) => match self.service.open_replay(&path) {
                     Ok(player) => {
@@ -258,7 +259,7 @@ impl eframe::App for StellarApp {
                         self.screen =
                             Screen::sim(SimScreen::new(source, self.service.clone(), None));
                     }
-                    Err(e) => home.message = Some(tr!("Relecture impossible : {}", e)),
+                    Err(e) => home.message = Some(tr!("Relecture impossible : {}", e.localized())),
                 },
             },
             Screen::Sim(sim) => match sim.show(ctx) {

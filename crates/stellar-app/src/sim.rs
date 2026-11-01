@@ -11,7 +11,9 @@ use glam::DVec3;
 use rayon::prelude::*;
 use stellar_application::recording::is_dust;
 use stellar_application::trace::{relative_to, MAX_TAIL};
-use stellar_application::{Phase, SimulationHandle, SimulatorService, Snapshot, TraceReference, ViewState};
+use stellar_application::{
+    AppError, Phase, SimulationHandle, SimulatorService, Snapshot, TraceReference, ViewState,
+};
 use stellar_domain::physics::body_radius;
 use stellar_domain::{ranking, BodyId, SystemSummary, SystemsView};
 
@@ -21,7 +23,8 @@ use crate::picking::{pick, visible_top_k};
 use crate::render::{mass_color, Follow, Instance, InstanceBatch, PointsCallback, PointsSource, Uniforms};
 use crate::source::{angular_momentum, weighted_barycenter, Source};
 
-use crate::i18n::{tr, tr_msg};
+use crate::errors::Localized;
+use crate::i18n::tr;
 
 /// Initial brightness: additive blending saturates when bodies overlap,
 /// hence an attenuation with their number (1 for a million).
@@ -295,7 +298,7 @@ impl SimScreen {
     }
 
     /// Suspends the running recording (with a linked resume save).
-    pub fn suspend_recording(&self) -> Option<Result<PathBuf, String>> {
+    pub fn suspend_recording(&self) -> Option<Result<PathBuf, AppError>> {
         let h = self.source.live()?;
         if !h.is_recording() {
             return None;
@@ -306,7 +309,7 @@ impl SimScreen {
         {
             Ok(Some(p)) => Some(Ok(p)),
             Ok(None) => None,
-            Err(e) => Some(Err(e.to_string())),
+            Err(e) => Some(Err(e)),
         }
     }
 
@@ -1016,7 +1019,7 @@ impl SimScreen {
             .start_recording(&name, h, self.record_interval, budget)
         {
             Ok(()) => self.notify(tr!("Enregistrement démarré : un instantané tous les {} pas.", self.record_interval)),
-            Err(e) => self.notify(tr!("Enregistrement impossible : {}", e)),
+            Err(e) => self.notify(tr!("Enregistrement impossible : {}", e.localized())),
         }
     }
 
@@ -1210,7 +1213,7 @@ impl SimScreen {
         std::thread::spawn(move || {
             let r = service
                 .save(&name, &config, &snapshot, Some(view), recording)
-                .map_err(|e| e.to_string());
+                .map_err(|e| e.localized());
             let _ = tx.send(r);
         });
         self.save_job = Some(rx);
@@ -1519,7 +1522,7 @@ impl SimScreen {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                tr!("Le moteur de calcul n'a pas pu démarrer :\n{}\n\nÉchap → Retour à l'accueil, puis choisir un autre moteur dans les paramètres avancés.", self.snapshot.error.as_deref().unwrap_or("erreur inconnue")),
+                tr!("Le moteur de calcul n'a pas pu démarrer :\n{}\n\nÉchap → Retour à l'accueil, puis choisir un autre moteur dans les paramètres avancés.", self.snapshot.error.as_ref().map_or_else(|| tr("erreur inconnue").to_owned(), |e| e.localized())),
                 egui::FontId::proportional(18.0),
                 Color32::from_rgb(255, 140, 120),
             );
@@ -2271,7 +2274,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                 );
             });
             if let Some(e) = st.error.lock().ok().and_then(|g| g.clone()) {
-                ui.colored_label(Color32::LIGHT_RED, tr_msg(&e));
+                ui.colored_label(Color32::LIGHT_RED, e.localized());
             } else if let Some(p) = st.last_path.lock().ok().and_then(|g| g.clone()) {
                 ui.label(
                     RichText::new(tr!("Dernier : {}", p.display()))
@@ -2354,7 +2357,7 @@ Vitesse : {}", format::real(c.half_mass_radius), format::real(c.velocity.length(
                 }
             });
         if let Some(e) = error {
-            ui.colored_label(Color32::LIGHT_RED, tr_msg(&e));
+            ui.colored_label(Color32::LIGHT_RED, e.localized());
         }
         let mut pos = c.position;
         let last = c.last();

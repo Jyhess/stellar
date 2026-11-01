@@ -14,7 +14,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 ## 2. Implementation rules
 
 - **Interface text**: source strings are in French. Any displayed text goes through `tr("…")` or `tr!("… {} …", x)` (only `{}` placeholders) and gets its English translation in the `EN` table of `crates/stellar-app/src/i18n.rs`. A test checks duplicates and placeholders.
-- **New error message in a lower crate**: written in French, with its English template (named placeholders written `{}`) in the `MESSAGES` table of `i18n.rs`; the test `lower_layer_messages_are_translated` fails otherwise. An error displayed without `tr!` goes through `tr_msg`.
+- **New error in a lower crate**: a variant of that layer's error enum (context as typed fields, English `Display`), never a `String`. Its French text goes in the `Localized` impl of `stellar-app/src/errors.rs` (the exhaustive `match` does not compile without it) with its `EN` entry; display it with `e.localized()`.
 - **Numbers**: use `format.rs` (`count`, `real`, `decimal_sep()`); never hard-code `.replace('.', ",")`.
 - **Symbols**: some characters are missing from egui's fonts (●, ✦, U+202F). Check that a symbol is displayed before using it.
 - **Layers**: no egui or wgpu in `stellar-domain` / `stellar-application`; engines are reached only through the domain traits.

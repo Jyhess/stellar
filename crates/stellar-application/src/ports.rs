@@ -56,14 +56,64 @@ pub struct SaveSummary {
     pub recording: Option<String>,
 }
 
-#[derive(Debug, thiserror::Error)]
+/// Failure of a repository. `Display` gives an English message (logs); the
+/// interface translates each variant.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum RepositoryError {
-    #[error("erreur d'entrée/sortie : {0}")]
+    /// Input/output failure (system message).
+    #[error("input/output error: {0}")]
     Io(String),
-    #[error("fichier invalide : {0}")]
-    Format(String),
-    #[error("version de format non prise en charge : {0}")]
+    #[error("file not found: {}", .0.display())]
+    NotFound(PathBuf),
+    #[error("the name “{0}” is already taken")]
+    NameTaken(String),
+    /// Deletion to the recycle bin refused or cancelled (system code).
+    #[error("deletion cancelled or impossible (code {0})")]
+    DeleteFailed(i32),
+    #[error("recording thread interrupted")]
+    RecorderInterrupted,
+    #[error("recording already closed")]
+    RecordingClosed,
+    #[error("invalid file: {0}")]
+    Format(#[from] FormatError),
+    #[error("unsupported format version: {0}")]
     UnsupportedVersion(u32),
+}
+
+/// Content of a file that cannot be read.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum FormatError {
+    #[error("truncated file")]
+    Truncated,
+    #[error("missing signature: this is not a Stellar save")]
+    NotASave,
+    #[error("this is not a Stellar recording")]
+    NotARecording,
+    #[error("oversized header")]
+    OversizedHeader,
+    #[error("inconsistent body arrays")]
+    InconsistentBodyArrays,
+    #[error("truncated snapshot")]
+    TruncatedSnapshot,
+    #[error("invalid varint")]
+    InvalidVarint,
+    #[error("inconsistent body count")]
+    InconsistentBodyCount,
+    #[error("invalid subsystem count")]
+    InvalidSubsystemCount,
+    #[error("unknown subsystem")]
+    UnknownSubsystem,
+    #[error("unknown fate")]
+    UnknownFate,
+    #[error("snapshot out of range")]
+    SnapshotOutOfRange,
+    #[error("the snapshot of step {0} is missing from the recording")]
+    MissingSnapshot(u64),
+    #[error("empty recording")]
+    EmptyRecording,
+    /// Decoding failure (serializer message).
+    #[error("{0}")]
+    Decode(String),
 }
 
 /// Persistence of simulations.

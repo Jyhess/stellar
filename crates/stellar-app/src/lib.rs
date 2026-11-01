@@ -9,6 +9,7 @@
 pub mod i18n;
 mod app;
 mod camera;
+mod errors;
 pub mod console;
 mod format;
 mod headless;
@@ -27,6 +28,7 @@ use stellar_engine_cpu::CpuEngineFactory;
 use stellar_engine_gpu::GpuEngineFactory;
 use stellar_persistence::{FileRecordingRepository, FileRepository};
 
+use crate::errors::Localized;
 use crate::i18n::tr;
 
 /// Folder of the saves, relative to the current directory.
@@ -83,7 +85,7 @@ pub fn run_gui() -> eframe::Result {
     let mut service = SimulatorService::new(registry, repository, recordings);
     service.set_engine_note(match gpu {
         Ok(name) => tr!("Carte graphique : {}", name),
-        Err(e) => tr!("Moteur GPU indisponible : {}", e),
+        Err(e) => tr!("Moteur GPU indisponible : {}", e.localized()),
     });
 
     let options = eframe::NativeOptions {

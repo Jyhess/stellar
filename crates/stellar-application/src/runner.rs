@@ -24,7 +24,7 @@ use crate::recording::{
 };
 use crate::trace::{cluster_members, TraceReference, TraceSet};
 use stellar_domain::{
-    ranking, PhysicsParams, BodyId, Diagnostics, EjectedCluster, EngineFactory, SystemSummary, PhysicsEngine, SimulationConfig, SimulationState,
+    ranking, PhysicsParams, BodyId, Diagnostics, EjectedCluster, EngineError, EngineFactory, SystemSummary, PhysicsEngine, SimulationConfig, SimulationState,
     Vec3,
 };
 
@@ -92,8 +92,8 @@ pub struct Snapshot {
     pub running: bool,
     /// Publication number, strictly increasing.
     pub sequence: u64,
-    /// Error message if the engine could not start.
-    pub error: Option<String>,
+    /// Why the engine could not start.
+    pub error: Option<EngineError>,
 }
 
 impl Snapshot {
@@ -253,10 +253,10 @@ impl SimulationHandle {
                 let step = state.step;
                 let engine = match crate::MultiSystem::new(factory, state, params).map(Box::new) {
                     Ok(e) => e,
-                    Err(message) => {
+                    Err(e) => {
                         let mut s = Snapshot::initialising(false);
                         s.phase = Phase::Failed;
-                        s.error = Some(message);
+                        s.error = Some(e);
                         s.sequence = 1;
                         *worker_shared.latest.lock().expect("poisoned lock") = Arc::new(s);
                         worker_shared.sequence.store(1, Ordering::Release);
@@ -1012,7 +1012,7 @@ mod tests {
             &self,
             state: SimulationState,
             _: PhysicsParams,
-        ) -> Result<Box<dyn PhysicsEngine>, String> {
+        ) -> Result<Box<dyn PhysicsEngine>, stellar_domain::EngineError> {
             Ok(Box::new(Drift { state }))
         }
     }
@@ -1051,7 +1051,7 @@ mod tests {
             &self,
             state: SimulationState,
             _: PhysicsParams,
-        ) -> Result<Box<dyn PhysicsEngine>, String> {
+        ) -> Result<Box<dyn PhysicsEngine>, stellar_domain::EngineError> {
             Ok(Box::new(DirectDrift(Drift { state })))
         }
     }

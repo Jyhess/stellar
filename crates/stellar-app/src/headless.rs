@@ -8,7 +8,8 @@ use eframe::egui::{self, RichText};
 use stellar_application::{HeadlessRun, RunOutcome, RunTarget, SimulatorService, ViewState};
 
 use crate::format;
-use crate::i18n::{tr, tr_msg};
+use crate::errors::Localized;
+use crate::i18n::tr;
 
 pub enum HeadlessAction {
     None,
@@ -74,7 +75,7 @@ impl HeadlessScreen {
             let (tx, rx) = mpsc::channel();
             let service = self.service.clone();
             std::thread::spawn(move || {
-                let _ = tx.send(run.finish(&service).map_err(|e| e.to_string()));
+                let _ = tx.send(run.finish(&service).map_err(|e| e.localized()));
             });
             self.state = Some(State::Finishing(rx));
         }
@@ -106,7 +107,7 @@ impl HeadlessScreen {
                     let p = run.poll();
                     let target = run.target();
                     if let Some(e) = &p.error {
-                        ui.colored_label(egui::Color32::LIGHT_RED, tr_msg(e));
+                        ui.colored_label(egui::Color32::LIGHT_RED, e.localized());
                     }
                     if let Some(f) = p.fraction {
                         let eta = (f > 0.0 && f < 1.0)
