@@ -1,6 +1,7 @@
 {
   "enabledPlugins": {
     "docs-folder@jyhess": true,
-    "tracking-github-issues@jyhess": true
+    "tracking-github-issues@jyhess": true,
+    "anthropic-skills@inline": false
   }
 }
