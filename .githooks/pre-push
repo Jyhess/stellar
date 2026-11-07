@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse the push if the verification fails. Never bypass it with --no-verify. Also run by CI, without stdin.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+cargo test --workspace --exclude stellar-engine-gpu && cargo clippy --workspace --all-targets -- -D warnings

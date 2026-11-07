@@ -1,0 +1,26 @@
+# Check the pull request description against .github/pull_request_template.md.
+# Rules: .github/scripts/pr_description.py. The auto-merge workflow runs the same check,
+# from the default branch, and never merges a pull request whose description fails.
+name: PR description
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-description-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      # The whole history: the check also reads the structural changes of the diff.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 .github/scripts/pr_description.py

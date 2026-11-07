@@ -1,0 +1,38 @@
+# Merge low-risk pull requests by itself, label the others "to review".
+# Rules: .github/scripts/auto_merge.py. pull_request_target runs the base branch's
+# workflow and script, so a pull request cannot change the check that judges it;
+# the pull request's code is only diffed, never checked out or run.
+# With a Verify workflow (.github/workflows/verify.yml), the merge waits for it to pass:
+# workflow_run runs this workflow again, from the default branch, when Verify completes.
+name: Auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+  workflow_run:
+    workflows: [Verify]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  decide:
+    if: >-
+      ${{ (github.event_name == 'pull_request_target' && !github.event.pull_request.draft)
+      || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 .github/scripts/auto_merge.py
+        env:
+          GH_TOKEN: ${{ github.token }}

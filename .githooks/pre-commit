@@ -1,8 +1,9 @@
 #!/bin/sh
-# Refuse the commit if the verification fails. Never bypass it with --no-verify.
-# GPU tests are left out (slow, and they hang when they share the card in
-# parallel); run them before handing over:
-#   cargo test -p stellar-engine-gpu -- --test-threads=1
-set -e
+# dev-kit warnings, never blocking: forbidden synonyms of the glossary on the added lines, Markdown size budgets.
+# The verification runs before each push (.githooks/pre-push).
 cd "$(git rev-parse --show-toplevel)"
-cargo test --workspace --exclude stellar-engine-gpu && cargo clippy --workspace --all-targets -- -D warnings
+DEV_KIT="$(python3 -c 'import json, pathlib; print(json.loads((pathlib.Path.home() / ".claude/plugins/known_marketplaces.json").read_text(encoding="utf-8"))["jyhess"]["installLocation"])' 2>/dev/null || true)"
+if [ -f "$DEV_KIT/plugins/core/scripts/doc_budget.py" ]; then
+  python3 "$DEV_KIT/plugins/core/scripts/vocabulary_check.py" --staged || true
+  python3 "$DEV_KIT/plugins/core/scripts/doc_budget.py" --staged || true
+fi
