@@ -87,7 +87,7 @@ The crate table is in the README. Rules:
 ## Verification
 
 1. **Before running tests**: check that no `stellar` / `stellar-cli` process is running (it shares the GPU and makes the GPU tests hang); if one is, ask the user to close it first.
-2. **Before each commit** (see "Git": every finished feature, fix or change is committed right away): the pre-commit hook (`.githooks/pre-commit`) runs `cargo test --workspace --exclude stellar-engine-gpu` and `cargo clippy --workspace --all-targets -- -D warnings`; fix before committing.
+2. **Before each commit** (see "Git": every finished feature, fix or change is committed right away): `cargo test --workspace --exclude stellar-engine-gpu` and `cargo clippy --workspace --all-targets -- -D warnings`; the pre-push hook (`.githooks/pre-push`) runs them again and refuses the push on failure. CI (`.github/workflows/verify.yml`) runs them on every pull request, GPU tests included on software OpenGL (`WGPU_BACKEND=gl` under `xvfb-run`).
 3. **Before handing over**: the GPU tests, one at a time (`cargo test -p stellar-engine-gpu -- --test-threads=1`; in parallel they hang on the shared card), then `cargo build --release` and copy `stellar.exe` and `stellar-cli.exe` from `target\release\` to the repository root, replacing the previous ones. No visual check on my side: the user tries it and validates; their adjustments then amend the commit concerned.
 
 Add unit or integration tests (`crates/*/tests/`) for any new logic, especially file formats and physics.
@@ -103,3 +103,18 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 - `*.exe`, `*.stellar`, `*.stellarec` are ignored.
 - Every branch starts from the default branch (`origin/<default branch>` after `git fetch`), never from another task's branch. Work that depends on an unmerged branch waits for it or, with Julien's go, starts from the default branch without that code and is rebased once it is merged.
 - Keep the branch current with the default branch: `git fetch`, then `git rebase --autostash origin/<default branch>`, when starting or resuming a task on a branch and before each push or PR (on the default branch itself: `git pull --rebase --autostash`). Resolve mechanical conflicts (imports, lists, neighbouring lines) and show them; on a conflict of substance, `git rebase --abort` and describe it. A branch already pushed goes back with `git push --force-with-lease`.
+
+## Tool results
+
+- Every tool result stays in the context for the rest of the session: ask only for what is needed. Read a file range rather than the whole file once its size is known; trim command outputs (`head`, `--stat`, `--name-only`, `grep` filters, a tool's own field or format options).
+
+## Session size
+
+- One ticket per session. When the context-size hook warns (past 400k, then 500k tokens, or on a resume after the cache expired), finish the current work, then ask Julien whether to hand over as it says.
+
+## Errors and messages
+
+- Lower layers (domain, application, infrastructure) never return display text. Each error is a typed value (enum variant, error class) whose kind is its identifier and whose typed fields carry the context to show (file path, name, limits).
+- The interface turns each kind into its translated message, with an exhaustive match where the language has one, so that a kind without a message does not compile.
+- A nested cause is a nested error; text coming from outside (operating system, libraries) stays an untranslated payload.
+- Lower layers describe their errors in English for logs (`Display`, `toString`…).
