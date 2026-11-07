@@ -87,7 +87,7 @@ The crate table is in the README. Rules:
 ## Verification
 
 1. **Before running tests**: check that no `stellar` / `stellar-cli` process is running (it shares the GPU and makes the GPU tests hang); if one is, ask the user to close it first.
-2. **Before each commit** (see "Git": every finished feature, fix or change is committed right away): the pre-commit hook (`.githooks/pre-commit`) runs `cargo test --workspace --exclude stellar-engine-gpu` and `cargo clippy --workspace --all-targets -- -D warnings`; fix before committing.
+2. **Before each commit** (see "Git": every finished feature, fix or change is committed right away): `cargo test --workspace --exclude stellar-engine-gpu` and `cargo clippy --workspace --all-targets -- -D warnings`; the pre-push hook (`.githooks/pre-push`) runs them again and refuses the push on failure. CI (`.github/workflows/verify.yml`) runs them on every pull request, GPU tests included on software OpenGL (`WGPU_BACKEND=gl` under `xvfb-run`).
 3. **Before handing over**: the GPU tests, one at a time (`cargo test -p stellar-engine-gpu -- --test-threads=1`; in parallel they hang on the shared card), then `cargo build --release` and copy `stellar.exe` and `stellar-cli.exe` from `target\release\` to the repository root, replacing the previous ones. No visual check on my side: the user tries it and validates; their adjustments then amend the commit concerned.
 
 Add unit or integration tests (`crates/*/tests/`) for any new logic, especially file formats and physics.

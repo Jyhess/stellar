@@ -280,6 +280,8 @@ cargo bench -p stellar-engine-cpu          # time per step for 10k / 100k / 1M b
 
 GPU tests also run without a graphics card, with software rendering: `$env:WGPU_BACKEND="gl"`.
 
+The pre-push hook (`.githooks/pre-push`) runs the tests without the GPU crate and clippy. On GitHub, `Verify` runs them on every pull request, GPU tests included under `xvfb-run` with `WGPU_BACKEND=gl`; a pull request without risk then merges by itself, the others get `to test`, `to acknowledge` or `to review` (rules: [dev-kit's auto-merge](https://github.com/Jyhess/dev-kit/blob/main/docs/auto-merge.md)).
+
 ### Measurement tools
 
 | Command | Measures |
