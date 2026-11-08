@@ -29,9 +29,14 @@ A file passes unless:
 
 - it is deleted (or changes type);
 - it is under .github/ or .githooks/, or it is an AGENTS.md or CLAUDE.md;
+- it is agent instructions or configuration: a SKILL.md, a hooks/hooks.json, a
+  .claude/settings*.json, or a file under a .claude-plugin/ folder;
 - it is a test file or a Markdown file and a line was removed or changed, except a
   whole comment line replaced by whole comment lines (`#`, `//`, `///`, lines of
-  `/* */`; `<!-- -->` in Markdown). Added lines are always allowed.
+  `/* */`; `<!-- -->` in Markdown);
+- it is an existing test file and an added line switches a test off (SKIP_MARKER:
+  unittest, pytest, NUnit, xUnit, JUnit, Rust and JavaScript skips, or a bare
+  `return`, which the diff cannot tell from any other). Other added lines are allowed.
 
 A pull request that already carries one of the three labels is never merged.
 
@@ -50,9 +55,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pr_description
@@ -63,6 +70,16 @@ from structure import CONFIG, git, load_config, matches, test_patterns
 VERIFY_WORKFLOW = ".github/workflows/verify.yml"
 ALWAYS_REVIEW_FOLDERS = (".github/", ".githooks/")
 ALWAYS_REVIEW_NAMES = {"AGENTS.md", "CLAUDE.md"}
+AGENT_CONFIG = ("SKILL.md", "*/SKILL.md", "hooks/hooks.json", "*/hooks/hooks.json",
+                ".claude/settings*.json", "*/.claude/settings*.json", ".claude-plugin/*", "*/.claude-plugin/*")
+SKIP_MARKER = re.compile(r"""
+    \bunittest\.skip | \bSkipTest\b | \.skipTest\( | \bpytest\.(mark\.)?skip   # Python
+  | \[\s*Ignore\b | \bSkip\s*=                                              # NUnit, xUnit
+  | @Disabled\b | @Ignore\b                                                 # JUnit
+  | \#\[ignore\b                                                             # Rust
+  | \b(it|test|describe|context)\.skip\b | \bx(it|test|describe|context)\s*\(  # JavaScript
+  | ^\s*return\s*;?\s*$                                                     # a test cut short
+""", re.VERBOSE)
 CODE_COMMENT = ("#", "//", "/*", "*")
 
 
@@ -120,6 +137,8 @@ def file_reasons(change: FileChange, patterns: list[str]) -> list[str]:
         return [f"{path}: CI, hooks or auto-merge configuration"]
     if name in ALWAYS_REVIEW_NAMES:
         return [f"{path}: agent instructions"]
+    if any(fnmatchcase(path, pattern) for pattern in AGENT_CONFIG):
+        return [f"{path}: agent instructions or configuration"]
     markdown = name.lower().endswith(".md")
     if not markdown and not is_test_file(path, patterns):
         return []
@@ -135,6 +154,10 @@ def file_reasons(change: FileChange, patterns: list[str]) -> list[str]:
         new_comments = sum(is_comment(line, markdown) for line in hunk.added)
         if not old_comments or new_comments < len(hunk.removed):
             return [f"{path}: existing lines of a {kind} removed or changed"]
+    if not markdown:
+        skips = [line.strip() for hunk in change.hunks for line in hunk.added if SKIP_MARKER.search(line)]
+        if skips:
+            return [f"{path}: test skip marker added: {skips[0]}"]
     return []
 
 
