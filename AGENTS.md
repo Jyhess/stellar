@@ -118,3 +118,8 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 - The interface turns each kind into its translated message, with an exhaustive match where the language has one, so that a kind without a message does not compile.
 - A nested cause is a nested error; text coming from outside (operating system, libraries) stays an untranslated payload.
 - Lower layers describe their errors in English for logs (`Display`, `toString`…).
+
+## Architecture
+
+- The components (each crate of the Cargo workspace) and their allowed dependencies are in `docs/architecture.puml`; a `<<restricted>>` crate may depend only on the external crates drawn. Checked by `.github/scripts/architecture.py` with the verification: `python3 .github/scripts/architecture.py`. `python3 .github/scripts/architecture.py --write` rewrites the crates and arrows from the code.
+- Changing the architecture file or these checks is an architecture change, approved by Julien before it is made (shared clarification workflow).
