@@ -1,0 +1,36 @@
+' stack: rust
+' Components of Stellar: one per crate of the Cargo workspace, one arrow per allowed dependency (normal and build, not dev).
+' A <<restricted>> crate may depend only on the external crates drawn (<<external>>); the others are free.
+' Checked by .github/scripts/architecture.py. Rewrite the crates and arrows from the code: python3 .github/scripts/architecture.py --write, then review.
+' exclude: 
+@startuml
+[stellar-app]
+[stellar-application] <<restricted>>
+[stellar-domain] <<restricted>>
+[stellar-engine-cpu]
+[stellar-engine-gpu]
+[stellar-persistence]
+[glam] <<external>>
+[rand] <<external>>
+[rand_pcg] <<external>>
+[rayon] <<external>>
+[serde] <<external>>
+[thiserror] <<external>>
+[stellar-app] --> [stellar-application]
+[stellar-app] --> [stellar-domain]
+[stellar-app] --> [stellar-engine-cpu]
+[stellar-app] --> [stellar-engine-gpu]
+[stellar-app] --> [stellar-persistence]
+[stellar-application] --> [rand]
+[stellar-application] --> [rand_pcg]
+[stellar-application] --> [rayon]
+[stellar-application] --> [serde]
+[stellar-application] --> [stellar-domain]
+[stellar-application] --> [thiserror]
+[stellar-domain] --> [glam]
+[stellar-domain] --> [serde]
+[stellar-engine-cpu] --> [stellar-domain]
+[stellar-engine-gpu] --> [stellar-domain]
+[stellar-persistence] --> [stellar-application]
+[stellar-persistence] --> [stellar-domain]
+@enduml
