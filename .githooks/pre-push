@@ -2,4 +2,11 @@
 # Refuse the push if the verification fails. Never bypass it with --no-verify. Also run by CI, without stdin.
 set -e
 cd "$(git rev-parse --show-toplevel)"
+# Private words (dev-journal/private-words, shared, and the git-ignored .private-words of the main clone) in the
+# pushed commits, checked by dev-kit; nothing to check without them, as in CI. Git passes the remote ($1) and
+# the pushed refs on stdin; by hand, no refs.
+DEV_KIT="$(python3 -c 'import json, pathlib; print(json.loads((pathlib.Path.home() / ".claude/plugins/known_marketplaces.json").read_text(encoding="utf-8"))["jyhess"]["installLocation"])' 2>/dev/null || true)"
+if [ -f "$DEV_KIT/plugins/core/scripts/private_words.py" ]; then
+  python3 "$DEV_KIT/plugins/core/scripts/private_words.py" ${1:+--stdin-refs}
+fi
 cargo test --workspace --exclude stellar-engine-gpu && cargo clippy --workspace --all-targets -- -D warnings && python3 .github/scripts/architecture.py
