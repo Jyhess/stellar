@@ -11,3 +11,7 @@ stellar-crash.log
 *.un~
 *.swp
 *.swo
+
+# Local values: Claude Code settings (connector ids), words the pre-push hook refuses
+.claude/settings.local.json
+/.private-words
