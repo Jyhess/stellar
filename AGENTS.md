@@ -9,14 +9,13 @@ Read before any substantial change: `SPEC.md` (rules in force), `README.md` (usa
 ## Communication and languages
 
 - Talk to the user in **elaborate French with a rich vocabulary**.
-- Do not try to prolong the discussion; ask a question only if it helps answer the request. Do ask every clarifying question **before** implementing a feature.
+- Do not try to prolong the discussion; ask a question only if it helps answer the request.
 - **Documentation** (`*.md`, skills) is in **English**.
 - **Code comments** (including doc comments and WGSL shaders), **CLI option names** and **commit messages** are in **English**.
-- **Errors of the lower layers** (domain, application, engines, persistence) are **typed enums**, never display text: each variant carries its context as fields, text from outside (`io::Error`, wgpu, bincode) stays an untranslated payload, and `Display` is in English (logs, `STELLAR_STATS`). The interface translates each variant in `errors.rs` (`Localized`, exhaustive `match`) through `tr` / `tr!`; pass `e.localized()`, not `e`, to `tr!`. The CLI help and messages are translated like the interface.
+- **Errors** (`docs/design/errors.md`; lower layers: domain, application, engines, persistence): the interface translates each variant in `errors.rs` (`Localized`, exhaustive `match`) through `tr` / `tr!`; pass `e.localized()`, not `e`, to `tr!`. The CLI help and messages are translated like the interface.
 - **Developer-facing text** (`expect` / `panic!` messages, test messages and data, examples, `STELLAR_STATS` output) is in **English**.
 - The **interface** has English source strings translated into French (`stellar-app/src/i18n.rs`): every displayed text goes through `tr("…")` or `tr!("… {} …", x)` and gets its entry in the `FR` table (a test fails otherwise; engine labels and descriptions included). Numbers are formatted by language (`format.rs`).
 - Update `README.md` and `SPEC.md` with every feature.
-- Before designing anything non-trivial, use the shared clarification workflow.
 
 ## Commands
 
@@ -38,20 +37,6 @@ Two executables share one library (`stellar_app`, `lib.rs`): `stellar.exe` (wind
 - Tasks are GitHub issues of this repository.
 - Time spent is recorded in the work journal (github.com/Jyhess/dev-journal).
 
-## Writing
-
-- Write what is needed to act, nothing else: no history (git keeps it), no paraphrase of the code, no copy of ticket content; a link rather than a copy; a decision is its choice and its reason in one line.
-
-## Provisional values
-
-- When a value the task does not give is needed (threshold, duration, limit…), pick a provisional one, keep it in a named constant or a config entry, and go on.
-- Before the PR, ask Julien about each one: confirm, change, or defer to a ticket. Confirmed or changed values are written into the ticket; a deferred value gets a ticket and is listed under "Values to validate" in the PR description, and that PR always goes to review.
-
-## Known limitations
-
-- A known limitation is anything deliberately left incomplete or simplified. Write it where it applies: README, documentation, comment or TODO; every TODO cites a ticket.
-- At the end of the task and in the PR description, list the limitations, then create their tickets with Julien's agreement; the documentation or comment then cites the ticket.
-
 ## Architecture (clean architecture)
 
 The crate table is in the README. Rules:
@@ -59,6 +44,8 @@ The crate table is in the README. Rules:
 - The rest of the application knows the engines only through the domain traits. A new engine is added through a factory registered in `stellar-app/src/lib.rs`. `EngineFactory::create` returns a readable error rather than panicking (no card, insufficient memory).
 - Dependencies point to the domain: no egui or wgpu in `stellar-domain` / `stellar-application`.
 - GPU engine by default if the probe succeeds; fall back to the CPU when loading a save otherwise.
+- The components (each crate of the Cargo workspace) and their allowed dependencies are in `docs/architecture.puml`; a `<<restricted>>` crate may depend only on the external crates drawn. Checked by `.github/scripts/architecture.py` with the verification: `python3 .github/scripts/architecture.py`. `python3 .github/scripts/architecture.py --write` rewrites the crates and arrows from the code.
+- Changing the architecture file or these checks is an architecture change, approved by Julien before it is made (shared clarification workflow).
 
 ## Delicate points
 
@@ -79,33 +66,24 @@ The crate table is in the README. Rules:
 ## Verification
 
 1. **Before running tests**: check that no `stellar` / `stellar-cli` process is running (it shares the GPU and makes the GPU tests hang); if one is, ask the user to close it first.
-2. **Before each commit** (see "Git": every finished feature, fix or change is committed right away): `cargo test --workspace --exclude stellar-engine-gpu` and `cargo clippy --workspace --all-targets -- -D warnings`; the pre-push hook (`.githooks/pre-push`) runs them again and refuses the push on failure. CI (`.github/workflows/verify.yml`) runs them on every pull request, GPU tests included on software OpenGL (`WGPU_BACKEND=gl` under `xvfb-run`).
+2. **Before each commit** (see "Commits": every finished feature, fix or change is committed right away): `cargo test --workspace --exclude stellar-engine-gpu` and `cargo clippy --workspace --all-targets -- -D warnings`; the pre-push hook (`.githooks/pre-push`) runs them again and refuses the push on failure. CI (`.github/workflows/verify.yml`) runs them on every pull request, GPU tests included on software OpenGL (`WGPU_BACKEND=gl` under `xvfb-run`).
 3. **Before handing over**: the GPU tests, one at a time (`cargo test -p stellar-engine-gpu -- --test-threads=1`; in parallel they hang on the shared card), then `cargo build --release` and copy `stellar.exe` and `stellar-cli.exe` from `target\release\` to the repository root, replacing the previous ones. No visual check on my side: the user tries it and validates; their adjustments then amend the commit concerned.
 
 Add unit or integration tests (`crates/*/tests/`) for any new logic, especially file formats and physics.
 
-## Git
+## Commits
 
-- Commit messages in English: a title, then a list of changes.
+- Commit messages: a title, then a list of changes.
 - Line endings: LF in the repository (`.gitattributes`, `eol=lf`). Files may be CRLF in the Windows working copy; Git normalizes them. Never commit a line-ending conversion mixed with a real change.
-- **Commit automatically**: every feature, fix or change gets its own commit as soon as it is finished (checks of "Verification" passed), without waiting to be asked or for the user's validation. Several subjects in one request give several commits. Push only when asked.
-- **One commit per feature, fix or change**: never mix two subjects (or a subject and unrelated changes) in one commit; stage only the hunks that belong to it. When splitting a file's hunks, check that each staged hunk landed in the right place (one line of context can match elsewhere) and that each commit builds on its own.
+- **Commit automatically**: every feature, fix or change gets its own commit as soon as it is finished (checks of "Verification" passed), without waiting to be asked or for the user's validation. Several subjects in one request give several commits.
+- Stage only the hunks of the commit's subject. When splitting a file's hunks, check that each staged hunk landed in the right place (one line of context can match elsewhere) and that each commit builds on its own.
 - **Adjustments** requested on a subject whose commit is not pushed yet: amend that commit instead of adding a new one — `git commit --amend` if it is the last commit, otherwise `git commit --fixup=<sha>` then `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <sha>~1` (non-interactive; `--autostash` if the working copy is dirty). A pushed commit is never amended: the adjustment gets a new commit.
 - **Before starting a new subject**, if the working copy has uncommitted changes that are not mine, say so and ask whether to commit them first.
-- `*.exe`, `*.stellar`, `*.stellarec` are ignored.
-- Every branch starts from the default branch (`origin/<default branch>` after `git fetch`), never from another task's branch. Work that depends on an unmerged branch waits for it or, with Julien's go, starts from the default branch without that code and is rebased once it is merged.
-- Keep the branch current with the default branch: `git fetch`, then `git rebase --autostash origin/<default branch>`, when starting or resuming a task on a branch and before each push or PR (on the default branch itself: `git pull --rebase --autostash`). Resolve mechanical conflicts (imports, lists, neighbouring lines) and show them; on a conflict of substance, `git rebase --abort` and describe it. A branch already pushed goes back with `git push --force-with-lease`.
-
-## Architecture
-
-- The components (each crate of the Cargo workspace) and their allowed dependencies are in `docs/architecture.puml`; a `<<restricted>>` crate may depend only on the external crates drawn. Checked by `.github/scripts/architecture.py` with the verification: `python3 .github/scripts/architecture.py`. `python3 .github/scripts/architecture.py --write` rewrites the crates and arrows from the code.
-- Changing the architecture file or these checks is an architecture change, approved by Julien before it is made (shared clarification workflow).
-
-## Context
-
-- Every tool result stays in the context: ask only for what is needed (file ranges, `head`, `--stat`, `grep`, a tool's own filters).
-- One ticket per session. When the context-size hook warns, finish the current work, then ask Julien whether to hand over as it says.
 
 ## Design
 
 - Before designing or changing code, read `docs/design/principles.md` (errors, robustness by design).
+
+## Shared rules
+
+- Shared rules: `~/.dev-kit/rules/shared-rules.md`; Claude Code gets them from the core plugin, other agents read the file at session start; a section of this file that contradicts them wins.
