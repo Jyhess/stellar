@@ -9,12 +9,15 @@ pull request's diff and description and:
   nothing: the "PR description" check is red, and editing the description runs the
   decision again; a structural change (structure.py) without an "Architecture changes"
   section fails it;
-- when every changed file passes and the description asks nothing of Julien,
-  rebase-merges the pull request and deletes its branch;
+- when the pull request was opened by the repository owner from a branch of the
+  repository itself, every changed file passes and the description asks nothing of
+  Julien, rebase-merges the pull request and deletes its branch;
 - otherwise adds the labels and lists the reasons in the job summary: "to review"
   for the files below, an "Architecture changes" section and the structural changes it
   declares, "to test" and
-  "to acknowledge" from the description (see pr_description.py). The informational
+  "to acknowledge" from the description (see pr_description.py). A pull request
+  opened by anyone else, or from a fork, gets "to review" whatever its files: on a
+  public repository anyone can open one, and the job holds a write token. The informational
   label "no ticket" never holds the merge.
 
 When the repository has a .github/workflows/verify.yml, a pull request whose files all
@@ -146,10 +149,24 @@ def review_reasons(files: list[FileChange], config: dict) -> list[str]:
     return reasons
 
 
-def decide(files: list[FileChange], description: pr_description.Description, config: dict) -> dict[str, list[str]]:
+def origin_reasons(pr: dict, repo: str) -> list[str]:
+    """Why the pull request's origin needs a review: an author other than the owner, or a fork."""
+    owner = repo.split("/", 1)[0]
+    author = (pr.get("user") or {}).get("login") or "unknown"
+    head_repo = (pr["head"].get("repo") or {}).get("full_name")
+    reasons = []
+    if author.lower() != owner.lower():
+        reasons.append(f"opened by {author}, not by the repository owner {owner}")
+    if head_repo is None or head_repo.lower() != repo.lower():
+        reasons.append(f"head branch in {head_repo or 'a deleted repository'}, not in {repo}")
+    return reasons
+
+
+def decide(pr: dict, repo: str, files: list[FileChange], description: pr_description.Description,
+           config: dict) -> dict[str, list[str]]:
     """Labels to add, with their reasons; none of HOLD_LABELS means the pull request can be merged."""
     labels = {name: list(reasons) for name, reasons in description.labels.items()}
-    reasons = review_reasons(files, config)
+    reasons = origin_reasons(pr, repo) + review_reasons(files, config)
     if reasons:
         labels.setdefault(TO_REVIEW, []).extend(reasons)
     return labels
@@ -250,7 +267,7 @@ def main() -> None:
         summary("## Not merged\n\nThe description fails the PR description check; editing it runs "
                 "the decision again.\n\n" + "".join(f"- {error}\n" for error in description.errors))
         return
-    labels = decide(changed_files(base, head), description, config)
+    labels = decide(pr, repo, changed_files(base, head), description, config)
     add_labels(repo, number, labels)
     if any(name in labels for name in HOLD_LABELS):
         return
