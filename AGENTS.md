@@ -42,14 +42,6 @@ Two executables share one library (`stellar_app`, `lib.rs`): `stellar.exe` (wind
 
 - Write what is needed to act, nothing else: no history (git keeps it), no paraphrase of the code, no copy of ticket content; a link rather than a copy; a decision is its choice and its reason in one line.
 
-## Robustness by design
-
-- A rule the code must follow is guaranteed by its structure (types, compiler, a single source of truth) or by a failing test; never by a comment or an instruction to remember ("remember to…", "every property is copied here").
-- Before choosing a design, picture its most likely change (one more property, case or type) and check what it would break. Prefer the design where that omission does not compile or cannot happen; otherwise, a test that finds new cases by itself (reflection, exhaustive `match`) and fails.
-- No computed state in a copyable object (`record`, `struct`, value type): the computation lives apart, keyed by the instance.
-- A regression test is proven by making it fail: reintroduce the defect it targets, see it fail, then remove the defect.
-- A ticket's implementation notes follow the same rules.
-
 ## Provisional values
 
 - When a value the task does not give is needed (threshold, duration, limit…), pick a provisional one, keep it in a named constant or a config entry, and go on.
@@ -104,22 +96,16 @@ Add unit or integration tests (`crates/*/tests/`) for any new logic, especially 
 - Every branch starts from the default branch (`origin/<default branch>` after `git fetch`), never from another task's branch. Work that depends on an unmerged branch waits for it or, with Julien's go, starts from the default branch without that code and is rebased once it is merged.
 - Keep the branch current with the default branch: `git fetch`, then `git rebase --autostash origin/<default branch>`, when starting or resuming a task on a branch and before each push or PR (on the default branch itself: `git pull --rebase --autostash`). Resolve mechanical conflicts (imports, lists, neighbouring lines) and show them; on a conflict of substance, `git rebase --abort` and describe it. A branch already pushed goes back with `git push --force-with-lease`.
 
-## Tool results
-
-- Every tool result stays in the context for the rest of the session: ask only for what is needed. Read a file range rather than the whole file once its size is known; trim command outputs (`head`, `--stat`, `--name-only`, `grep` filters, a tool's own field or format options).
-
-## Session size
-
-- One ticket per session. When the context-size hook warns (past 400k, then 500k tokens, or on a resume after the cache expired), finish the current work, then ask Julien whether to hand over as it says.
-
-## Errors and messages
-
-- Lower layers (domain, application, infrastructure) never return display text. Each error is a typed value (enum variant, error class) whose kind is its identifier and whose typed fields carry the context to show (file path, name, limits).
-- The interface turns each kind into its translated message, with an exhaustive match where the language has one, so that a kind without a message does not compile.
-- A nested cause is a nested error; text coming from outside (operating system, libraries) stays an untranslated payload.
-- Lower layers describe their errors in English for logs (`Display`, `toString`…).
-
 ## Architecture
 
 - The components (each crate of the Cargo workspace) and their allowed dependencies are in `docs/architecture.puml`; a `<<restricted>>` crate may depend only on the external crates drawn. Checked by `.github/scripts/architecture.py` with the verification: `python3 .github/scripts/architecture.py`. `python3 .github/scripts/architecture.py --write` rewrites the crates and arrows from the code.
 - Changing the architecture file or these checks is an architecture change, approved by Julien before it is made (shared clarification workflow).
+
+## Context
+
+- Every tool result stays in the context: ask only for what is needed (file ranges, `head`, `--stat`, `grep`, a tool's own filters).
+- One ticket per session. When the context-size hook warns, finish the current work, then ask Julien whether to hand over as it says.
+
+## Design
+
+- Before designing or changing code, read `docs/design/principles.md` (errors, robustness by design).
