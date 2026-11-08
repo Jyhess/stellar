@@ -30,7 +30,7 @@ Rules:
 
 - Name symbols (`Type::method`, `fn`), not line numbers; keep each cell to the essentials: what a reader needs to choose the file.
 - Paths in a crate's table are relative to that crate's `src/`; shaders may be listed by name in backticks (`` `forces` ``).
-- Do not duplicate `docs/gpu-engine.md`, `docs/formats.md`, `docs/subsystems.md` or the README: link to them.
+- Do not duplicate the other pages of `docs/` or the README: link to them.
 - English, like all documentation.
 
 ## Check

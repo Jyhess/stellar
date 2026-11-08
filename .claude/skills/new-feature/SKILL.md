@@ -7,7 +7,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 
 ## 1. Before coding
 
-- Run `git status`: if there are uncommitted changes, say so and ask whether to commit them first (one commit per feature, see `CLAUDE.md` "Git").
+- Run `git status`: if there are uncommitted changes, say so and ask whether to commit them first (one commit per feature, see `AGENTS.md`).
 - Read the relevant parts of `SPEC.md` and `README.md`, and the matching "Where to change…" row of `docs/code-map.md`.
 - Ask **all** the clarifying questions at once, before implementing (ranges, defaults, keys, behaviour in playback / without display / with sub-simulations, compatibility of old saves). Ask in French.
 
@@ -28,7 +28,7 @@ description: End-to-end checklist for adding or changing a user-visible feature 
 | New key | `sim.rs` (input handling and the key help list of the Esc menu), README "Controls" table |
 | New panel / button / option | `home.rs` or `sim.rs`, `?` help badge if it is a creation parameter |
 | New command-line option | `console.rs` (parser, `--help` text in `i18n.rs`, its tests), README "Simulation without display" |
-| New environment variable | where it is read, README "Environment variables" table, `CLAUDE.md` if it is a testing shortcut |
+| New environment variable | where it is read, `docs/testing.md` "Environment variables" table |
 | New engine | registration in `crates/stellar-app/src/lib.rs`, `--engine` mapping in `console.rs` |
 | Any feature | `SPEC.md` (rules in force), a line in the current or a new entry of `docs/history.md`, README sections concerned |
 | New file, type, panel or change path | `docs/code-map.md` (`code-map` skill) |
@@ -43,4 +43,4 @@ Documentation, code comments and CLI option names are written in **English**; in
 
 ## 5. Commit (automatic)
 
-As soon as the feature is finished and checked, commit it without being asked: one commit per feature, fix or change, containing only its hunks (several subjects in one request give several commits). Adjustments to a subject whose commit is not pushed yet amend that commit (`--amend` for the last one, otherwise `--fixup` + autosquash rebase, see `CLAUDE.md` "Git"); a pushed commit is never amended. English message: a title, then a list of changes, ending with the attribution line. Never mix a line-ending conversion with a real change. Push only when asked.
+As soon as the feature is finished and checked, commit it without being asked: one commit per feature, fix or change, containing only its hunks (several subjects in one request give several commits). Adjustments to a subject whose commit is not pushed yet amend that commit (`--amend` for the last one, otherwise `--fixup` + autosquash rebase, see `AGENTS.md`); a pushed commit is never amended. English message: a title, then a list of changes, ending with the attribution line. Never mix a line-ending conversion with a real change. Push only when asked.
