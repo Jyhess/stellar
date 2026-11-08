@@ -12,7 +12,7 @@ and the sections present decide the labels (rules: dev-kit's docs/pr-description
 
 A description passes when, once its <!-- comments --> are removed:
 
-- it has a ticket reference (`Fixes #12`, `Closes KAT-12`, `Refs owner/repo#12`, an
+- it has a ticket reference (`Fixes #12`, `Closes ABC-12`, `Refs owner/repo#12`, an
   issue URL…) or a `No ticket: <reason>` line (at least two words; label "no ticket");
 - it has the sections `## What was done` and `## Test results`, not empty; only Test
   results may say `N/A: <reason>` (at least two words);
@@ -116,7 +116,7 @@ def check(body: str, structural: list[structure.Signal] = ()) -> Description:
         else:
             result.label(NO_TICKET, "no ticket: " + no_ticket.group(1).strip())
     elif not TICKET.search(text):
-        result.errors.append("no ticket reference (`Fixes #12`, `Fixes KAT-12`, `Refs #12`) "
+        result.errors.append("no ticket reference (`Fixes #12`, `Fixes ABC-12`, `Refs #12`) "
                              "nor `No ticket: <reason>`")
     found = sections(text)
     for name in REQUIRED:

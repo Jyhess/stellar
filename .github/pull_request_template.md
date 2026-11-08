@@ -1,5 +1,5 @@
 Fixes #
-<!-- The ticket: "Fixes #12", "Fixes KAT-12", "Refs #12" (partial work), or "No ticket: <reason>" (label "no ticket").
+<!-- The ticket: "Fixes #12", "Fixes ABC-12", "Refs #12" (partial work), or "No ticket: <reason>" (label "no ticket").
 Checked by the "PR description" workflow: comments like this one are ignored, the sections below are required,
 and an optional section that does not apply is deleted, heading included. -->
 
