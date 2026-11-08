@@ -59,11 +59,13 @@ Then on the CPU:
 
 The 128 consecutive bodies of a workgroup are neighbours in Morton order, and they walk down the tree together. A node is treated as a point when it is far enough from the **box of the whole group**, which is stricter than the per-body criterion. Accepted nodes and the bodies of nearby leaves go into a list in shared memory. Each thread then evaluates that list for its own body, in an unrolled loop. The stack and the list are sized from `max_compute_workgroup_storage_size`, a prefix of the `forces` module.
 
+The traversal's stack and list are sized from `max_compute_workgroup_storage_size` (prefix of the `forces` module).
+
 ## Live view
 
-When it is built on the UI device (`GpuEngineFactory::attach`), the engine exposes its body buffers (`BodiesView`: current buffer, count, `STRIDE`, `POSITION_OFFSET`, `MASS_OFFSET`). The renderer reads them with no copy. Compute and rendering share the same queue, so a draw submitted after the read always sees a complete set of bodies; at worst a step that removes bodies shows a few duplicates for one frame. The full state is read back only every one to two seconds. Under OpenGL, the engine opens its own device and the display goes back to copies.
+When it is built on the UI device (`GpuEngineFactory::attach`), the engine exposes its body buffers (`BodiesView`: current buffer, count, `STRIDE`, `POSITION_OFFSET`, `MASS_OFFSET`). The renderer reads them with no copy. Compute and rendering share the same queue, so a draw submitted after the read always sees a complete set of bodies; at worst a step that removes bodies shows a few duplicates for one frame. The full state (`Snapshot::state`, shared as `Arc`) is read back only every one to two seconds, so it may lag behind `Snapshot::step`: data taken from `snapshot.state` stays consistent with `state.step`, not with `snapshot.step`. Under OpenGL, the engine opens its own device and the display goes back to copies.
 
-Under wgpu 24, `Surface::get_current_texture` holds the device fence while it waits for the screen, and `queue.submit` needs that fence. In Fifo mode, every submission of the engine therefore waited up to one frame. The UI uses Mailbox where available (`present_mode` in `stellar-app/src/main.rs`; `STELLAR_PRESENT` forces a mode).
+Under wgpu 24, `Surface::get_current_texture` holds the device fence while it waits for the screen, and `queue.submit` needs that fence. In Fifo mode, every submission of the engine therefore waited up to one frame. The UI uses Mailbox where available (`present_mode` in `stellar-app/src/lib.rs`; `STELLAR_PRESENT` forces a mode).
 
 ## Profiling
 

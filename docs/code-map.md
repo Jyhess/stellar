@@ -4,7 +4,7 @@ Where things live, to find the place to change without searching. Symbols are na
 
 Kept up to date with the `code-map` skill. The test `code_map_lists_every_source_file` (`crates/stellar-app/tests/code_map.rs`) fails if a source file under `crates/*/src` is missing from this map.
 
-Layers and crate roles: README "Architecture". Dependencies point to the domain; `stellar-app` is the composition root.
+Layers and crate roles: [`architecture.md`](architecture.md). Dependencies point to the domain; `stellar-app` is the composition root.
 
 ## Where to change… (common paths)
 
@@ -27,10 +27,10 @@ Layers and crate roles: README "Architecture". Dependencies point to the domain;
 | **Sub-simulations** | rules and field: `domain/systems.rs`; engine: `MultiSystem` (`application/systems.rs`: `step`, `try_split`, `try_merge`, `recenter`, `prune_negligible`); docs `subsystems.md` |
 | **Merger rule** | `merge`, `body_radius`, `swept_min_distance` (`domain/physics.rs`); CPU `find_contacts` (`engine-cpu/collisions.rs`), `CpuEngine::resolve_collisions`; GPU `collide.wgsl`, `GpuEngine::plan_merges`, `apply_merges.wgsl` |
 | **New method on engines** | `PhysicsEngine` (`domain/engine.rs`) → `CpuEngine`, `GpuEngine`, **and** `MultiSystem` (which forwards to its subsystems) |
-| **New engine** | README "Adding a computation engine": `EngineFactory` + registration in `app/lib.rs` (`run_gui`) and `--engine` mapping in `console.rs` |
+| **New engine** | [`architecture.md`](architecture.md) "Adding a computation engine": `EngineFactory` + registration in `app/lib.rs` (`run_gui`) and `--engine` mapping in `console.rs` |
 | **Translated text** | `tr` / `tr!` at the call site, entry in `FR` of `app/i18n.rs` (English source, French translation); numbers `app/format.rs` |
 | **New error case** | variant of the lower layer's enum (`EngineError` `domain/engine.rs`, `RepositoryError` / `FormatError` `application/ports.rs`, `AppError` / `ContinuationError` `application/service.rs`) with its English `Display` → its `Localized` arm (`app/errors.rs`, does not compile without it) and its `FR` entry |
-| **Environment variable** | read in `StellarApp::autostart` (`app/app.rs`; `STELLAR_LOAD`, `REPLAY`, `AUTOSTART`, `ENGINE`, `AUTODISK`, `AUTORECORD`), `i18n::init` (`STELLAR_LANG`), `present_mode` (`app/lib.rs`, `STELLAR_PRESENT`), `SimScreen::new` (`STELLAR_STATS`), `Gpu::open` (`engine-gpu/gpu.rs`, `STELLAR_GPU_PROFILE`); README "Environment variables" |
+| **Environment variable** | read in `StellarApp::autostart` (`app/app.rs`; `STELLAR_LOAD`, `REPLAY`, `AUTOSTART`, `ENGINE`, `AUTODISK`, `AUTORECORD`), `i18n::init` (`STELLAR_LANG`), `present_mode` (`app/lib.rs`, `STELLAR_PRESENT`), `SimScreen::new` (`STELLAR_STATS`), `Gpu::open` (`engine-gpu/gpu.rs`, `STELLAR_GPU_PROFILE`); [`testing.md`](testing.md) "Environment variables" |
 | **Screen flow** (home → simulation → background) | `Screen`, `StellarApp::update` (`app/app.rs`); actions `HomeAction`, `SimAction`, `HeadlessAction` |
 | **Run without display** | `HeadlessRun`, `RunTarget` (`application/headless.rs`); UI `HeadlessScreen` (`app/headless.rs`); CLI `console::run` |
 | **Playback** | `ReplayPlayer`, `PlaybackClock`, `interpolate` (`application/replay.rs`); `Replay::tick` (`app/source.rs`); UI `SimScreen::replay_panel` |

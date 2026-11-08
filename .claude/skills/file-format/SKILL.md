@@ -41,4 +41,3 @@ Check nesting with a search (`grep -rn "pub struct\|pub enum" crates/stellar-dom
 
 - `docs/formats.md`: version tables and, if needed, the layout.
 - `SPEC.md` ("Files") and a line in the feature's entry in `docs/history.md`.
-- `CLAUDE.md`: current version numbers in "File formats".
