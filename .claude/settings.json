@@ -5,6 +5,9 @@
     "anthropic-skills@inline": false
   },
   "permissions": {
+    "allow": [
+      "mcp__ccd_pr__set_monitor"
+    ],
     "deny": [
       "Artifact",
       "mcp__Claude_Browser",
